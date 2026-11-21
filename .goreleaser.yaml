@@ -3,10 +3,12 @@
 #
 # Release configuration for goreleaser v2 (pinned in the Makefile and in
 # release.yml). A v* tag runs it from .github/workflows/release.yml and
-# publishes ghcr.io/ianglennon/tierplan:X.Y.Z and :X.Y and the agent image
-# ghcr.io/ianglennon/tierplan-agent with the same tags, built from the agent/
-# module at the same version. Pushes to main publish :edge of both from ci.yml. No floating catch-all tag is ever published while TierPlan
-# is 0.x (D-75), and no release is cut in Phase 1.
+# publishes three images with the same tags: ghcr.io/ianglennon/tierplan:X.Y.Z
+# and :X.Y, the agent image ghcr.io/ianglennon/tierplan-agent (built from the
+# agent/ module) and the ingress image ghcr.io/ianglennon/tierplan-ingress (built
+# from the ingress/ module), each at the server's version. Pushes to main publish
+# :edge of all three from ci.yml. No floating catch-all tag is ever published
+# while TierPlan is 0.x (D-75), and no release is cut in Phase 1.
 #
 # Validate with `make release-check`; build the image locally with `make image`.
 version: 2
@@ -17,6 +19,10 @@ before:
   hooks:
     # The SPA is embedded in the binary, so it is built first.
     - make web
+    # The web interface's SPDX SBOM (D-25), checked against pnpm licenses here, so
+    # the release workflow runs the D-27 completeness check too. The archives and
+    # the server image carry it.
+    - make web-sbom
 
 builds:
   - id: tierplan
@@ -53,6 +59,25 @@ builds:
       - -s -w
       - -X github.com/ianglennon/tierplan/agent/internal/version.Version=v{{ .Version }}
 
+  # The ingress supervisor: its own Go module (ingress/), the same flags and
+  # platforms, and the same version as the server, so the deployer names the
+  # image by the server's version. It has no archive: the supervisor is useless
+  # without the Traefik that only the image holds.
+  - id: tierplan-ingress
+    dir: ingress
+    main: ./cmd/tierplan-ingress
+    binary: tierplan-ingress
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64] # D-18
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X github.com/ianglennon/tierplan/ingress/internal/version.Version=v{{ .Version }}
+
 archives:
   - id: tierplan
     ids: [tierplan]
@@ -61,17 +86,33 @@ archives:
     files:
       - LICENSE
       - README*
+      # Merged into the archive's SBOM by syft's SBOM cataloger (scripts/sbom-archive.sh).
+      - src: build/sbom/tierplan-web.spdx.json
+        dst: sbom/web.spdx.json
 
 checksum:
   name_template: checksums.txt
 
-# SPDX SBOMs of the archives, made by syft (installed by the release workflow).
-# The container image carries its own SPDX attestation from buildx (dockers_v2 sbom).
+# SPDX SBOMs of the archives. scripts/sbom-archive.sh runs syft (installed and
+# pinned by the release workflow) with the SBOM cataloger, so the web interface's
+# npm packages from sbom/web.spdx.json are merged in, and then gates the merged
+# document on holding every npm package of the web SBOM (D-27). goreleaser runs this
+# step before it signs or publishes anything, so a failing gate stops the release. The cmd runs with dist/
+# as its working directory and is not templated, hence the relative path. The
+# default SYFT_FILE_METADATA_CATALOGER_ENABLED=true is added by goreleaser only
+# when the cmd is syft itself, so it is set here to keep the file entries.
+# The container images carry their own SPDX attestation from buildx (dockers_v2
+# sbom): the server image's holds the web SBOM too (it is copied in, and BuildKit's
+# scanner merges it); the agent and ingress images have no web interface, so their
+# SBOMs are Go only (D-26): the ingress image's lists Traefik's modules too, read
+# from the build info of the copied binary.
 sboms:
   - id: archives
     artifacts: archive
-    cmd: syft
-    args: ["$artifact", "--output", "spdx-json=$document"]
+    cmd: ../scripts/sbom-archive.sh
+    args: ["$artifact", "$document"]
+    env:
+      - SYFT_FILE_METADATA_CATALOGER_ENABLED=true
     documents: ["${artifact}.spdx.json"]
 
 # The multi-arch image. goreleaser lays the binaries out as
@@ -90,6 +131,9 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+    # The web SBOM is copied into the image by the Dockerfile (D-25, D-40).
+    extra_files:
+      - build/sbom/tierplan-web.spdx.json
     labels:
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
@@ -119,6 +163,30 @@ dockers_v2:
       org.opencontainers.image.created: "{{ .Date }}"
     sbom: true
 
+  # The ingress image: Traefik, pinned by digest, and the supervisor on distroless.
+  # extra_files puts ingress/image/state and ingress/image/doc at the same relative
+  # paths in the build context, which the Dockerfile reads. The same tag rules as the
+  # other images. Its SBOM attestation lists Go modules only, Traefik's included (D-26).
+  - id: tierplan-ingress
+    ids: [tierplan-ingress]
+    dockerfile: ingress/Dockerfile
+    images:
+      - ghcr.io/ianglennon/tierplan-ingress
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    extra_files:
+      - ingress/image/state
+      - ingress/image/doc
+    labels:
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+    sbom: true
+
 # Keyless cosign signatures: the identity is the GitHub Actions OIDC token of
 # the release workflow, so there is no key to leak or rotate.
 signs:
@@ -129,7 +197,7 @@ signs:
     args: ["sign-blob", "--yes", "--bundle=${signature}", "${artifact}"]
     output: true
 
-# artifacts: all signs the digest of every image above, the agent's included.
+# artifacts: all signs the digest of every image above: server, agent and ingress.
 docker_signs:
   - id: images
     cmd: cosign

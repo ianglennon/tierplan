@@ -3,10 +3,10 @@
 
 PKG := github.com/ianglennon/tierplan/internal/buildinfo
 
-# The three Go modules: the server (the root), the agent and the shared wire
-# protocol they both import. Every Go gate (test, lint, tidy-check) loops over
+# The four Go modules: the server (the root), the agent, the ingress supervisor
+# and the shared wire protocol they import. Every Go gate (test, lint, tidy-check) loops over
 # them, so a new module is covered the day it is added to this list.
-GO_MODULES := . agent proto
+GO_MODULES := . agent proto ingress
 
 # Set VERSION (and optionally COMMIT) for a release build, for example
 #   make build VERSION=v0.1.0
@@ -21,12 +21,21 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke ingress-image ingress-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
 	pnpm -C web build
 	touch web/dist/.gitkeep  # Vite empties outDir
+
+# The web interface's SPDX SBOM (D-25, D-27): written by scripts/web-sbom.sh and checked as an
+# exact name@version set against pnpm licenses. The file goes into the server archive and image
+# (23-10), so it must exist before goreleaser, `make e2e-image` and `make edge-context` build the
+# server image.
+WEB_SBOM := build/sbom/tierplan-web.spdx.json
+
+web-sbom:
+	scripts/web-sbom.sh $(WEB_SBOM)
 
 build: web
 	CGO_ENABLED=0 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o bin/tierplan ./cmd/tierplan
@@ -79,6 +88,9 @@ test: test-go test-web
 # per-binary caveat.
 TEST_GO_BUDGET := 40m
 
+# The ingress no-new-privileges test (D-06) needs AllThreadsSyscall, which a cgo build refuses, and -race
+# forces cgo, so under -race it skips. The step after the module loop runs that one test once with cgo off
+# and fails unless it passes, so the hardening is proved by a unit test and not only by the image smoke.
 # gotestsum cannot wrap `go -C dir test`, so each module runs from a subshell. A
 # failing module does not stop the next one, so one red run reports them all. A
 # module that finds no time left in the budget fails, it is never skipped quietly.
@@ -92,6 +104,12 @@ test-go:
 	  echo "test-go: $$m ($${left}s left of the $$TEST_BUDGET budget)"; \
 	  (cd $$m && $(GOTESTSUM) --format pkgname --jsonfile $(CURDIR)/$(TEST_RESULTS)/go-$$name.json -- ./... -race -count=1 -shuffle=on -timeout $${left}s) || rc=1; \
 	done; \
+	left=$$(( end - $$(date +%s) )); \
+	if [ "$$left" -le 0 ]; then echo "test-go: the $$TEST_BUDGET budget (TEST_GO_BUDGET) was used up before the ingress no-new-privileges test" >&2; rc=1; else \
+	  echo "test-go: ingress no-new-privileges test, cgo off and without -race ($${left}s left of the $$TEST_BUDGET budget)"; \
+	  out=$$(cd ingress && CGO_ENABLED=0 go test ./internal/traefikproc -run '^TestSetNoNewPrivs$$' -count=1 -v -timeout $${left}s 2>&1) || { printf '%s\n' "$$out"; rc=1; }; \
+	  printf '%s\n' "$$out" | grep -q -e '--- PASS: TestSetNoNewPrivs ' || { echo "test-go: TestSetNoNewPrivs did not pass (it was skipped or did not run); the prctl must run for real once" >&2; printf '%s\n' "$$out" >&2; rc=1; }; \
+	fi; \
 	exit $$rc
 
 # The web unit suite, shuffled with a printed seed: WEB_SEED=<n> reproduces a run
@@ -139,14 +157,15 @@ test-summary:
 # run starts docker:<N>-dind (N is TIERPLAN_TEST_ENGINE, default 29) with testcontainers, so the
 # machine needs a Docker it can reach. The agent tests always start their own
 # dind (they need a network the in-process TierPlan is reachable on) and load the
-# agent image into it, so the image is built first.
+# agent image into it, so the image is built first. The ingress node tests run the
+# real tierplan-ingress image the same way (23-16), so that is built first too.
 #
 # Only the packages whose tests change under the tag run (D-05 shuffles them):
 # scripts/tagged-packages.sh derives the list, so a newly tagged package is never
 # missed, and an empty list fails the target. Every other internal package is the
 # unit suite, which `make test` already ran. $(shell) expands inside the recipe
 # only, so no other target pays for `go list`.
-test-int: agent-image
+test-int: agent-image ingress-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh integration)"; \
 	if [ -z "$$pkgs" ]; then echo "test-int: no package has integration-tagged tests" >&2; exit 1; fi; \
 	echo "test-int: $$pkgs"; \
@@ -297,7 +316,9 @@ lint:
 	@if (cd agent && go list -deps ./... | grep -q go-acme); then \
 	  echo "lint: the agent module depends on go-acme; ACME belongs to the server only (D-11)" >&2; exit 1; \
 	fi
+	scripts/ingress-deps-check.sh
 	scripts/insecure-tls-check.sh
+	scripts/ingress-pin-check.sh
 	scripts/timeouts-check.sh
 	scripts/no-retries-check.sh
 	scripts/poll-check.sh
@@ -315,8 +336,9 @@ actionlint:
 GORELEASER_VERSION := v2.18.2
 GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
-# Validates .goreleaser.yaml, builds this machine's server and agent binaries the
-# way a release does (SPA, ldflags, trimpath) and runs each one's version output.
+# Validates .goreleaser.yaml, builds this machine's server, agent and ingress
+# binaries the way a release does (SPA, ldflags, trimpath) and runs each one's
+# version output.
 # Needs no Docker.
 release-check:
 	$(GORELEASER) check
@@ -332,6 +354,12 @@ release-check:
 	case "$$v" in \
 	  v[0-9]*) ;; \
 	  *) echo "release-check: the release agent reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
+	esac
+	$(GORELEASER) build --snapshot --clean --single-target --id tierplan-ingress --output bin/tierplan-ingress-release
+	@v="$$(bin/tierplan-ingress-release --version)"; echo "$$v"; \
+	case "$$v" in \
+	  v[0-9]*) ;; \
+	  *) echo "release-check: the release ingress binary reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
 	esac
 
 # The release image for this machine's engine, built exactly as a release builds
@@ -370,22 +398,63 @@ agent-image:
 agent-image-smoke:
 	scripts/agent-image-smoke.sh
 
-# The build contexts for the :edge images: the binaries laid out as
-# $TARGETPLATFORM/tierplan (server) and $TARGETPLATFORM/tierplan-agent (agent)
-# next to their Dockerfiles, as goreleaser does it. CI pushes them with buildx
+# The ingress image for this machine's architecture, tagged INGRESS_TAG (default
+# tierplan-ingress:dev) and loaded into the local engine. The context is laid out as
+# goreleaser lays it out: $TARGETPLATFORM/tierplan-ingress plus ingress/image/state/
+# and ingress/image/doc/. Traefik comes from the digest-pinned official image inside
+# the Dockerfile, so building needs the network. The supervisor is a plain build
+# (version "dev"); set INGRESS_VERSION=v0.1.0 to stamp one. INGRESS_CTX is overridable
+# (a relative path or an absolute one) so two builds on one runner can use separate
+# contexts. Needs Docker with buildx.
+INGRESS_ARCH ?= $(shell go env GOARCH)
+INGRESS_CTX ?= .devdata/ingress-image
+INGRESS_VERSION_PKG := github.com/ianglennon/tierplan/ingress/internal/version
+INGRESS_TAG ?= tierplan-ingress:dev
+ingress-image:
+	rm -rf $(INGRESS_CTX)
+	mkdir -p $(INGRESS_CTX)/linux/$(INGRESS_ARCH) $(INGRESS_CTX)/ingress/image
+	cp -R ingress/image/state $(INGRESS_CTX)/ingress/image/state
+	cp -R ingress/image/doc $(INGRESS_CTX)/ingress/image/doc
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(INGRESS_ARCH) go -C ingress build -trimpath \
+		-ldflags "-s -w $(if $(INGRESS_VERSION),-X $(INGRESS_VERSION_PKG).Version=$(INGRESS_VERSION))" \
+		-o $(abspath $(INGRESS_CTX))/linux/$(INGRESS_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
+	docker buildx build --platform linux/$(INGRESS_ARCH) -f ingress/Dockerfile -t $(INGRESS_TAG) --load $(INGRESS_CTX)
+
+# Runs tierplan-ingress:dev as a node runs it, with and without the hardening
+# flags: UID and GID 1000, no capability, no-new-privileges set by the binary, no
+# Docker socket, a new volume owned by 1000, and with no cache and no TierPlan an
+# unready node (503, empty body) that serves nothing on 8080 and 8443. Needs Docker,
+# curl and tar.
+ingress-image-smoke:
+	scripts/ingress-image-smoke.sh
+
+# The three build contexts for the :edge images: the binaries laid out as
+# $TARGETPLATFORM/tierplan (server), $TARGETPLATFORM/tierplan-agent (agent) and
+# $TARGETPLATFORM/tierplan-ingress (ingress) next to their Dockerfiles, as goreleaser
+# does it, plus the web SBOM the server Dockerfile copies (build/sbom/, which
+# goreleaser's before hook has just written) and the ingress image's state and doc
+# directories. The ingress image gets no SBOM file (D-26). CI pushes them with buildx
 # from the main branch.
 edge-context:
 	$(GORELEASER) build --snapshot --clean
-	rm -rf dist/edge dist/edge-agent
+	rm -rf dist/edge dist/edge-agent dist/edge-ingress
 	mkdir -p dist/edge/linux/amd64 dist/edge/linux/arm64
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/tierplan
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/tierplan
 	cp Dockerfile dist/edge/Dockerfile
+	mkdir -p dist/edge/build/sbom
+	cp $(WEB_SBOM) dist/edge/build/sbom/tierplan-web.spdx.json
 	mkdir -p dist/edge-agent/linux/amd64 dist/edge-agent/linux/arm64 dist/edge-agent/agent/image
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-agent -path '*linux_amd64*' -print | head -n 1)" dist/edge-agent/linux/amd64/tierplan-agent
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-agent -path '*linux_arm64*' -print | head -n 1)" dist/edge-agent/linux/arm64/tierplan-agent
 	cp -R agent/image/state dist/edge-agent/agent/image/state
 	cp agent/Dockerfile dist/edge-agent/Dockerfile
+	mkdir -p dist/edge-ingress/linux/amd64 dist/edge-ingress/linux/arm64 dist/edge-ingress/ingress/image
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-ingress -path '*linux_amd64*' -print | head -n 1)" dist/edge-ingress/linux/amd64/tierplan-ingress
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-ingress -path '*linux_arm64*' -print | head -n 1)" dist/edge-ingress/linux/arm64/tierplan-ingress
+	cp -R ingress/image/state dist/edge-ingress/ingress/image/state
+	cp -R ingress/image/doc dist/edge-ingress/ingress/image/doc
+	cp ingress/Dockerfile dist/edge-ingress/Dockerfile
 
 # --- End-to-end (D-80, D-59, RESEARCH Pattern 11) ---
 # The built image behind Caddy at https://127.0.0.1:8443/tierplan with a generated
@@ -408,9 +477,12 @@ E2E_ARGS ?=
 
 # The image under test: a linux/amd64 binary with the SPA embedded, wrapped by
 # the release Dockerfile the way goreleaser does it ($TARGETPLATFORM/tierplan in
-# the build context), tagged tierplan:e2e and loaded into the local engine.
-e2e-image: web
+# the build context), tagged tierplan:e2e and loaded into the local engine. The
+# Dockerfile also copies the web SBOM, so it is generated and put into the context
+# at build/sbom/ (D-25, D-40).
+e2e-image: web web-sbom
 	mkdir -p $(E2E_DIST)/linux/amd64
+	mkdir -p $(E2E_DIST)/build/sbom && cp $(WEB_SBOM) $(E2E_DIST)/build/sbom/tierplan-web.spdx.json
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o $(E2E_DIST)/linux/amd64/tierplan ./cmd/tierplan
 	docker buildx build --platform linux/amd64 -f Dockerfile -t tierplan:e2e --load $(E2E_DIST)
 
@@ -448,7 +520,8 @@ ci-preflight:
 #
 # The baseline is UPGRADE_BASE_REF, a commit (CI passes the pull request's base, or the
 # previous commit on a push). It is BUILT here from a detached git worktree with the
-# same recipe as e2e-image, not pulled: there is no released image before v0.1.0 and
+# same recipe as e2e-image (including the web SBOM, when that revision's Dockerfile
+# copies one), not pulled: there is no released image before v0.1.0 and
 # the repository is private, so a registry has nothing to offer and a commit is the
 # only baseline that is both available and honest. The worktree and the build context
 # are removed on exit, even when the smoke fails. Needs Docker with buildx, pnpm, curl
@@ -468,6 +541,9 @@ upgrade-smoke: e2e-image agent-image
 	touch $(UPGRADE_BASE_DIR)/web/dist/.gitkeep; \
 	mkdir -p $(UPGRADE_BASE_CTX)/linux/amd64; \
 	(cd $(UPGRADE_BASE_DIR) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o $(CURDIR)/$(UPGRADE_BASE_CTX)/linux/amd64/tierplan ./cmd/tierplan); \
+	if grep -q 'build/sbom/' $(UPGRADE_BASE_DIR)/Dockerfile; then \
+		(cd $(UPGRADE_BASE_DIR) && scripts/web-sbom.sh $(CURDIR)/$(UPGRADE_BASE_CTX)/build/sbom/tierplan-web.spdx.json); \
+	fi; \
 	docker buildx build --platform linux/amd64 -f $(UPGRADE_BASE_DIR)/Dockerfile -t tierplan:base --load $(UPGRADE_BASE_CTX); \
 	BASE_IMAGE=tierplan:base HEAD_IMAGE=tierplan:e2e AGENT_IMAGE=tierplan-agent:dev scripts/upgrade-smoke.sh
 

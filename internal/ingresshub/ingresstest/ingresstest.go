@@ -13,6 +13,7 @@ package ingresstest
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
 	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/authn"
 )
 
 // Clock is a clock a test can move. It is the server's clock: the service stamps rows with it and the hub's
@@ -77,6 +79,10 @@ type Options struct {
 	WatchTicks   <-chan time.Time
 	OfflineAfter time.Duration
 	FirstFrame   time.Duration
+	// Host is the address a container in a dind node reaches this machine on (a dockertest node's Gateway). When
+	// it is set the TLS listener binds Host:0 instead of 127.0.0.1, so the hub is reachable from the node and
+	// the audience a node signs is Host:port. It must be an IP address. Empty keeps the loopback listener.
+	Host string
 	// Hold is called with the node ID after a handshake was verified and the node welcomed, and before its
 	// session is registered, so a test can revoke the node or finish another connection in that window. A
 	// test that blocks in it must release it before the test ends.
@@ -99,6 +105,8 @@ type Server struct {
 	Nodes   *NodeLists
 
 	pushes *PushRecorder
+	stop   sync.Once
+	stopFn func()
 }
 
 // Pushes records what the hub decided each time it looked at an environment's current bundle for a session.
@@ -131,6 +139,18 @@ func Start(t *testing.T, o Options) *Server {
 	s.Service = ingresshub.NewService(st, aud, clock.Now).WithNodeLists(s.Nodes)
 
 	ts := httptest.NewUnstartedServer(nil)
+	if o.Host != "" {
+		ip := net.ParseIP(o.Host)
+		if ip == nil {
+			t.Fatalf("ingresstest: Host %q is not an IP address", o.Host)
+		}
+		ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			t.Fatalf("ingresstest: listen on %s: %v", o.Host, err)
+		}
+		_ = ts.Listener.Close()
+		ts.Listener = ln
+	}
 	hubLog := log
 	if o.Log != nil {
 		hubLog = o.Log
@@ -169,16 +189,25 @@ func Start(t *testing.T, o Options) *Server {
 		defer close(runDone)
 		hub.Run(runCtx)
 	}()
-	t.Cleanup(func() {
+	s.stopFn = func() {
 		hub.Close()
 		stopRun()
 		<-runDone
 		ts.CloseClientConnections()
 		ts.Close()
-	})
+	}
+	t.Cleanup(s.Stop)
 	s.Hub, s.HTTP = hub, ts
 	return s
 }
+
+// Stop ends the hub and its listener, as TierPlan stopping does: sessions are closed and the address answers
+// nothing. It is safe to call more than once, and the cleanup of Start calls it too.
+func (s *Server) Stop() { s.stop.Do(s.stopFn) }
+
+// Pin is the pin of the test server's certificate ("sha256/" and the SPKI hash), what a node is given as
+// TIERPLAN_INGRESS_PIN to trust this self-signed server.
+func (s *Server) Pin() string { return authn.SPKIPin(s.HTTP.Certificate()) }
 
 // URL is the address a node dials.
 func (s *Server) URL() string {

@@ -56,6 +56,17 @@ func TestStaticConfig(t *testing.T) {
 			t.Errorf("entryPoints.%s.http sets forwardedHeaders: the edge trusts no peer (D-14)", name)
 		}
 		expect(t, "entryPoints."+name+".http.aliasHeadersStrategy", httpSec["aliasHeadersStrategy"], "delete")
+
+		// The 10 s graceful shutdown is explicit on the two public entrypoints (D-11) and equals the
+		// constant the supervisor's stop budget is built on; ping is liveness only and has none.
+		if name == "ping" {
+			if _, ok := ep["transport"]; ok {
+				t.Errorf("entryPoints.ping sets transport: only web and websecure carry a graceful shutdown")
+			}
+			continue
+		}
+		lifeCycle := section(t, section(t, ep, "transport"), "lifeCycle")
+		expect(t, "entryPoints."+name+".transport.lifeCycle.graceTimeOut", lifeCycle["graceTimeOut"], ingressbundle.TraefikGraceTimeout.String())
 	}
 	redirect := section(t, section(t, section(t, section(t, eps, "web"), "http"), "redirections"), "entryPoint")
 	if got := sortedKeys(redirect); !slices.Equal(got, []string{"permanent", "scheme", "to"}) {

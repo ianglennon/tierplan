@@ -112,6 +112,96 @@ expect fail "licence-exception-wrong-licence" env LICENCE_EXCEPTIONS="${scratch}
 expect fail "licence-exception-lookalike" env LICENCE_EXCEPTIONS="${scratch}/exc-lookalike.txt" \
   node scripts/licence-check.mjs --format pnpm-json <scripts/testdata/licences/pnpm-gpl2.json
 
+# S11 (plan 23-01): the four rows of Traefik's dependency tree that fail the allowlist
+# fail on their own and pass only with the three reviewed lines in licence-exceptions.txt.
+: >"${scratch}/empty-exceptions.txt"
+expect fail "licence-s11-without-exceptions" env LICENCE_EXCEPTIONS="${scratch}/empty-exceptions.txt" \
+  node scripts/licence-check.mjs --format go-csv <scripts/testdata/licences/go-traefik-s11.csv
+expect_out "licence-s11-without-exceptions names vegadns" "github.com/nrdcg/vegadns"
+expect pass "licence-s11-with-exceptions" \
+  node scripts/licence-check.mjs --format go-csv <scripts/testdata/licences/go-traefik-s11.csv
+
+# --- Web SBOM set check (D-27) ---
+# Minimal SPDX documents and pnpm licence lists. The root DESCRIBES from the document;
+# b has two versions, so two distinct pairs, listed in the opposite order to the SBOM.
+sbom_doc() {
+  # sbom_doc <out> [name@version | go:name@version]...: the root plus one package per argument.
+  local out="$1"
+  shift
+  node -e '
+    const [out, ...pkgs] = process.argv.slice(1);
+    const purl = (loc) => [{ referenceCategory: "PACKAGE-MANAGER", referenceType: "purl", referenceLocator: loc }];
+    const packages = [{ SPDXID: "SPDXRef-RootPackage", name: "tierplan-web", versionInfo: "0.0.0", externalRefs: purl("pkg:npm/tierplan-web@0.0.0") }];
+    pkgs.forEach((p, i) => {
+      const at = p.lastIndexOf("@");
+      const name = p.slice(0, at), versionInfo = p.slice(at + 1);
+      const golang = name.startsWith("go:");
+      packages.push({
+        SPDXID: `SPDXRef-Package-${i}`,
+        name: golang ? name.slice(3) : name,
+        versionInfo,
+        externalRefs: purl(golang ? `pkg:golang/${name.slice(3)}@${versionInfo}` : `pkg:npm/${name}@${versionInfo}`),
+      });
+    });
+    const doc = {
+      spdxVersion: "SPDX-2.3", SPDXID: "SPDXRef-DOCUMENT", packages,
+      relationships: [{ spdxElementId: "SPDXRef-DOCUMENT", relatedSpdxElement: "SPDXRef-RootPackage", relationshipType: "DESCRIBES" }],
+    };
+    require("node:fs").writeFileSync(out, JSON.stringify(doc));
+  ' "${out}" "$@"
+}
+lic_doc() {
+  # lic_doc <out> <licence>=<name>:<version,version>...: pnpm licenses list --json shape.
+  local out="$1"
+  shift
+  node -e '
+    const [out, ...specs] = process.argv.slice(1);
+    const data = {};
+    for (const s of specs) {
+      const eq = s.indexOf("="), colon = s.lastIndexOf(":");
+      const lic = s.slice(0, eq), name = s.slice(eq + 1, colon), versions = s.slice(colon + 1).split(",");
+      (data[lic] ??= []).push({ name, versions, license: lic });
+    }
+    require("node:fs").writeFileSync(out, JSON.stringify(data));
+  ' "${out}" "$@"
+}
+sbom_doc "${scratch}/sbom-ok.json" a@1.0.0 b@2.0.0 b@3.0.0
+lic_doc "${scratch}/lic-ok.json" MIT=b:3.0.0,2.0.0 ISC=a:1.0.0
+lic_doc "${scratch}/lic-extra.json" MIT=b:3.0.0,2.0.0 ISC=a:1.0.0 ISC=c:1.0.0
+lic_doc "${scratch}/lic-missing.json" MIT=b:3.0.0,2.0.0
+lic_doc "${scratch}/lic-version.json" MIT=b:3.0.0,2.0.0 ISC=a:1.0.1
+printf '{}\n' >"${scratch}/lic-empty.json"
+sbom_doc "${scratch}/sbom-rootonly.json"
+sbom_doc "${scratch}/merged-ok.json" a@1.0.0 b@2.0.0 b@3.0.0 go:example.invalid/mod@v1.0.0
+sbom_doc "${scratch}/merged-short.json" a@1.0.0 go:example.invalid/mod@v1.0.0
+# WR-B-01: the merged document drops exactly one real package (b@3.0.0) and still has the
+# root's npm purl, so it holds as many npm purls as the web SBOM has packages; a count passes it.
+sbom_doc "${scratch}/merged-lost-one.json" a@1.0.0 b@2.0.0 go:example.invalid/mod@v1.0.0
+# A duplicate of a@1.0.0 covers the missing b@3.0.0 for a count; a set comparison does not.
+sbom_doc "${scratch}/merged-dup.json" a@1.0.0 a@1.0.0 b@2.0.0 go:example.invalid/mod@v1.0.0
+sbom_pairs() { node scripts/sbom-check.mjs pairs --sbom "$1" --licences "$2"; }
+
+expect pass "sbom-pairs-match" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-ok.json"
+expect_out "sbom-pairs-match prints the count" "sbom-check: 3 npm packages match pnpm licenses (root tierplan-web@0.0.0 excluded)"
+expect fail "sbom-pairs-only-in-licences" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-extra.json"
+expect_out "sbom-pairs-only-in-licences names the pair" "only in pnpm licenses: c@1.0.0"
+expect fail "sbom-pairs-only-in-sbom" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-missing.json"
+expect_out "sbom-pairs-only-in-sbom names the pair" "only in the SBOM: a@1.0.0"
+expect fail "sbom-pairs-version-differs" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-version.json"
+expect_out "sbom-pairs-version-differs names the SBOM side" "only in the SBOM: a@1.0.0"
+expect_out "sbom-pairs-version-differs names the licences side" "only in pnpm licenses: a@1.0.1"
+expect fail "sbom-pairs-empty-licences" sbom_pairs "${scratch}/sbom-ok.json" "${scratch}/lic-empty.json"
+expect_out "sbom-pairs-empty-licences says so" "the licences list is empty"
+expect fail "sbom-pairs-root-only" sbom_pairs "${scratch}/sbom-rootonly.json" "${scratch}/lic-ok.json"
+expect_out "sbom-pairs-root-only says so" "the SBOM lists no npm package"
+expect pass "sbom-count-ok" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-ok.json"
+expect fail "sbom-count-short" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-short.json"
+expect_out "sbom-count-short says so" "the merged SBOM is missing 2 of the 3 npm packages of the web SBOM"
+expect fail "sbom-count-lost-one" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-lost-one.json"
+expect_out "sbom-count-lost-one names the package" "missing from the merged SBOM: b@3.0.0"
+expect fail "sbom-count-duplicate-masks-missing" node scripts/sbom-check.mjs count --web "${scratch}/sbom-ok.json" --merged "${scratch}/merged-dup.json"
+expect_out "sbom-count-duplicate names the package" "missing from the merged SBOM: b@3.0.0"
+
 # --- DCO gate: a throwaway repo with one signed and one unsigned commit ---
 repo="${scratch}/dco-repo"
 mkdir "${repo}"
@@ -142,7 +232,7 @@ if [ "$(grep -c '^Signed-off-by: Test Author <test@example.invalid>$' "${msg}")"
   failures=$((failures + 1))
 fi
 
-# --- TLS confinement gate: the setting may appear only in the agent's tls.go ---
+# --- TLS confinement gate: the setting may appear only in the agent's and the ingress supervisor's tls.go ---
 tls_setting="Insecure""SkipVerify"
 tlsfix="${scratch}/tls-fixture"
 mkdir -p "${tlsfix}/agent/internal/connect" "${tlsfix}/internal/server" "${tlsfix}/web/node_modules/p"
@@ -156,6 +246,15 @@ printf 'package p\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/web/node_modules
 expect pass "tls-gate-skips-dependencies" scripts/insecure-tls-check.sh "${tlsfix}"
 printf 'package server\n// mentions %s\n' "${tls_setting}" >"${tlsfix}/internal/server/x_test.go"
 expect fail "tls-gate-test-file-comment" scripts/insecure-tls-check.sh "${tlsfix}"
+# The ingress supervisor's tls.go is the second file allowed to name it (D-32); any other ingress file is not.
+mkdir -p "${tlsfix}/ingress/internal/channel"
+printf 'package channel\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/ingress/internal/channel/tls.go"
+rm -f "${tlsfix}/internal/server/x_test.go"
+expect pass "tls-gate-ingress-allowed-file" scripts/insecure-tls-check.sh "${tlsfix}"
+printf 'package channel\n\nvar _ = %s\n' "${tls_setting}" >"${tlsfix}/ingress/internal/channel/dial.go"
+expect fail "tls-gate-ingress-other-file" scripts/insecure-tls-check.sh "${tlsfix}"
+expect_out "tls-gate-ingress-other-file names the file" "ingress/internal/channel/dial.go"
+rm -f "${tlsfix}/ingress/internal/channel/dial.go"
 
 # The same gate over everything that is not Go (D-10, TLS-12): e2e, Vite, scripts and
 # the shipped proxy configs. Every spelling is built from halves so this file does not
@@ -205,10 +304,127 @@ printf 'o = { secure: fal''se }\n' >"${nofix}/web/node_modules/p/vite.config.ts"
 expect pass "tls-gate-nongo-skips-dependencies" scripts/insecure-tls-check.sh "${nofix}"
 expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
 
+# --- Ingress pins (D-08, Pitfall 9): one Traefik reference and one distroless digest ---
+pinfix="${scratch}/pin-fixture"
+pin_ref="traefik:v9.9.9@sha256:$(printf 'a%.0s' $(seq 1 64))"
+pin_ref_other_digest="traefik:v9.9.9@sha256:$(printf 'b%.0s' $(seq 1 64))"
+pin_base="gcr.io/distroless/static-debian13@sha256:$(printf 'c%.0s' $(seq 1 64))"
+pin_base_other="gcr.io/distroless/static-debian13@sha256:$(printf 'd%.0s' $(seq 1 64))"
+pin_notice_commit="$(printf '1%.0s' $(seq 1 40))"
+# pin_fixture <traefik ref in the harness> <distroless in agent/Dockerfile>: rewrites the four files.
+pin_fixture() {
+  rm -rf "${pinfix}"
+  mkdir -p "${pinfix}/agent" "${pinfix}/ingress/image/doc" "${pinfix}/internal/ingressrender/traefiktest"
+  # The licence evidence the image ships: it names the pinned tag, and records a commit (WR-B-02).
+  printf '| Program | Traefik v9.9.9 |\n| Source | https://example.invalid/tree/v9.9.9 |\n| Commit | %s |\n\nThree exceptions were needed for Traefik v9.9.9.\n' \
+    "${pin_notice_commit}" >"${pinfix}/ingress/image/doc/NOTICE.md"
+  printf 'MIT licence text\n' >"${pinfix}/ingress/image/doc/LICENSE.md"
+  printf 'FROM %s\nCOPY a /a\n' "${pin_base}" >"${pinfix}/Dockerfile"
+  printf 'FROM %s\nCOPY a /a\n' "$2" >"${pinfix}/agent/Dockerfile"
+  printf 'FROM %s AS traefik\n\nFROM %s\nCOPY a /a\n' "${pin_ref}" "${pin_base}" >"${pinfix}/ingress/Dockerfile"
+  printf 'package traefiktest\n\nconst (\n\tTraefikImage = "%s"\n)\n' "$1" >"${pinfix}/internal/ingressrender/traefiktest/traefiktest.go"
+}
+pin_fixture "${pin_ref}" "${pin_base}"
+expect pass "pin-check-match" scripts/ingress-pin-check.sh "${pinfix}"
+expect pass "pin-check-print-tag" scripts/ingress-pin-check.sh --print-tag "${pinfix}"
+expect_out "pin-check-print-tag prints the tag" "v9.9.9"
+pin_fixture "traefik:v9.9.8@sha256:$(printf 'a%.0s' $(seq 1 64))" "${pin_base}"
+expect fail "pin-check-tag-differs" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-tag-differs names the Dockerfile" "ingress/Dockerfile pins ${pin_ref}"
+expect_out "pin-check-tag-differs names the harness" "internal/ingressrender/traefiktest/traefiktest.go pins traefik:v9.9.8@sha256:"
+pin_fixture "${pin_ref_other_digest}" "${pin_base}"
+expect fail "pin-check-digest-differs" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-digest-differs names the harness" "internal/ingressrender/traefiktest/traefiktest.go pins ${pin_ref_other_digest}"
+pin_fixture "${pin_ref}" "${pin_base_other}"
+expect fail "pin-check-distroless-differs" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-distroless-differs names agent/Dockerfile" "agent/Dockerfile uses ${pin_base_other}"
+# --print-tag prints nothing when a check failed.
+expect fail "pin-check-print-tag-after-failure" scripts/ingress-pin-check.sh --print-tag "${pinfix}"
+if grep -q '^v9\.9\.9$' <<<"${LAST_OUT}"; then
+  echo "SCRIPT TEST FAIL: pin-check-print-tag-after-failure (a tag was printed after a failed check)"
+  failures=$((failures + 1))
+fi
+# WR-B-02: the notice and the licence text must follow the pin.
+pin_fixture "${pin_ref}" "${pin_base}"
+sed -i 's/v9\.9\.9/v9.9.8/g' "${pinfix}/ingress/image/doc/NOTICE.md"
+expect fail "pin-check-notice-names-other-version" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-notice-names-other-version says so" "ingress/image/doc/NOTICE.md names Traefik v9.9.8 but ingress/Dockerfile pins v9.9.9"
+pin_fixture "${pin_ref}" "${pin_base}"
+sed -i 's#^Three exceptions.*#Three exceptions were needed for Traefik v9.9.8.#' "${pinfix}/ingress/image/doc/NOTICE.md"
+expect fail "pin-check-notice-prose-other-version" scripts/ingress-pin-check.sh "${pinfix}"
+pin_fixture "${pin_ref}" "${pin_base}"
+rm -f "${pinfix}/ingress/image/doc/NOTICE.md"
+expect fail "pin-check-notice-missing" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-notice-missing says so" "ingress/image/doc/NOTICE.md is missing"
+pin_fixture "${pin_ref}" "${pin_base}"
+sed -i '/^| Commit/d' "${pinfix}/ingress/image/doc/NOTICE.md"
+expect fail "pin-check-notice-no-commit" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-notice-no-commit says so" "records no 40-character Commit row"
+pin_fixture "${pin_ref}" "${pin_base}"
+rm -f "${pinfix}/ingress/image/doc/LICENSE.md"
+expect fail "pin-check-licence-missing" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-licence-missing says so" "ingress/image/doc/LICENSE.md is missing or empty"
+# --check-clone: the checked-out tag against the notice's commit and the shipped LICENSE.md.
+clonefix="${scratch}/pin-clone"
+rm -rf "${clonefix}"
+mkdir -p "${clonefix}"
+printf 'MIT licence text\n' >"${clonefix}/LICENSE.md"
+clone_git() { git -C "${clonefix}" -c user.name="Test" -c user.email="test@example.invalid" -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+clone_git init -q
+clone_git add LICENSE.md
+clone_git commit -q -m "tag"
+pin_notice_commit="$(clone_git rev-parse HEAD)"
+pin_fixture "${pin_ref}" "${pin_base}"
+expect pass "pin-check-clone-match" scripts/ingress-pin-check.sh --check-clone "${clonefix}" "${pinfix}"
+pin_notice_commit="$(printf '2%.0s' $(seq 1 40))"
+pin_fixture "${pin_ref}" "${pin_base}"
+expect fail "pin-check-clone-commit-differs" scripts/ingress-pin-check.sh --check-clone "${clonefix}" "${pinfix}"
+expect_out "pin-check-clone-commit-differs says so" "the tag moved or the notice is stale"
+pin_notice_commit="$(clone_git rev-parse HEAD)"
+pin_fixture "${pin_ref}" "${pin_base}"
+printf 'another licence text\n' >"${pinfix}/ingress/image/doc/LICENSE.md"
+expect fail "pin-check-clone-licence-differs" scripts/ingress-pin-check.sh --check-clone "${clonefix}" "${pinfix}"
+expect_out "pin-check-clone-licence-differs says so" "differs from LICENSE.md of the pinned Traefik tag"
+pin_notice_commit="$(printf '1%.0s' $(seq 1 40))"
+pin_fixture "no reference here" "${pin_base}"
+expect fail "pin-check-no-reference" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-no-reference says so" "PIN CHECK: internal/ingressrender/traefiktest/traefiktest.go holds no Traefik reference"
+expect pass "pin-check-repository" scripts/ingress-pin-check.sh
+
+# --- Ingress dependency gate (D-42): the module imports a short list only ---
+ingress_deps() { printf '%s\n' "$@" | scripts/ingress-deps-check.sh --stdin; }
+expect pass "ingress-deps-allowed" ingress_deps \
+  github.com/ianglennon/tierplan/ingress/internal/cache \
+  github.com/ianglennon/tierplan/proto/ingressbundle \
+  github.com/coder/websocket \
+  github.com/coder/websocket/internal/util \
+  go.yaml.in/yaml/v3
+expect fail "ingress-deps-moby" ingress_deps \
+  github.com/ianglennon/tierplan/proto/ingressbundle \
+  github.com/moby/moby/client
+expect_out "ingress-deps-moby names the import" "INGRESS DEPS: github.com/moby/moby/client"
+expect fail "ingress-deps-lookalike" ingress_deps github.com/coder/websocketx
+expect fail "ingress-deps-yamux" ingress_deps github.com/hashicorp/yamux
+expect pass "ingress-deps-repository" scripts/ingress-deps-check.sh
+# CR-B-01: a `go list` that fails, or lists nothing, is not a pass. A bad GOFLAGS makes
+# go list exit non-zero with no output; the gate used to read that as "nothing disallowed".
+expect fail "ingress-deps-go-list-fails" env GOFLAGS=-mod=bogus scripts/ingress-deps-check.sh
+expect fail "ingress-deps-empty-list" ingress_deps ""
+expect_out "ingress-deps-empty-list says so" "INGRESS DEPS: no packages listed"
+
 # --- Dev loop (G-02-1b): make dev takes a public URL and a Vite host ---
 # MAKEFLAGS and MAKELEVEL are removed so an outer `make test-scripts` cannot leak
 # variables or the -n flag state into the make under test.
 mk() { env -u MAKEFLAGS -u MAKELEVEL make -n "$@"; }
+# WR-B-03: INGRESS_CTX is overridable, so an absolute value must reach the Go output path
+# as itself, not as $(CURDIR)//abs/..., and a relative one still resolves under the repository.
+expect pass "ingress-image-ctx-default" mk ingress-image
+expect_out "ingress-image-ctx-default builds into the repository" "-o ${ROOT}/.devdata/ingress-image/linux/"
+expect pass "ingress-image-ctx-absolute" mk ingress-image INGRESS_CTX="${scratch}/ingress-ctx"
+expect_out "ingress-image-ctx-absolute builds into the given context" "-o ${scratch}/ingress-ctx/linux/"
+expect_out "ingress-image-ctx-absolute hands the same context to docker" "--load ${scratch}/ingress-ctx"
+expect pass "ingress-image-ctx-relative" mk ingress-image INGRESS_CTX=.devdata/other-ctx
+expect_out "ingress-image-ctx-relative resolves under the repository" "-o ${ROOT}/.devdata/other-ctx/linux/"
 expect pass "dev-go-default-public-url" mk dev-go
 expect_out "dev-go-default-public-url" "TIERPLAN_PUBLIC_URL='https://localhost:5173'"
 expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=https://dev.example.test:5173
@@ -490,6 +706,8 @@ expect pass "test-go-gotestsum" mk test-go
 expect_out "test-go uses the pinned gotestsum" "gotest.tools/gotestsum@v1.13.0"
 expect_out "test-go keeps race, shuffle and a timeout from the budget" "-race -count=1 -shuffle=on -timeout \${left}s"
 expect_out "test-go shows its one budget" "TEST_BUDGET=40m"
+# 23-review WR-C-02: the ingress no-new-privileges test skips under -race (cgo), so make test-go runs it once with cgo off.
+expect_out "test-go runs the ingress no-new-privileges test without cgo" "CGO_ENABLED=0 go test ./internal/traefikproc -run '^TestSetNoNewPrivs\$' -count=1 -v"
 # 06.1-46: the modules share one budget; a module with no time left fails, it is not skipped.
 expect fail "test-go-budget-used-up" env -u MAKEFLAGS -u MAKELEVEL make test-go GOTESTSUM=echo TEST_GO_BUDGET=0m TEST_RESULTS="${scratch}/go-results"
 expect_out "test-go-budget-used-up names the budget" "test-go: the 0m budget (TEST_GO_BUDGET) was used up before ."

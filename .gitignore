@@ -4,6 +4,7 @@
 CLAUDE.md
 .gsd/
 /bin/
+/build/
 /web/node_modules/
 /e2e/node_modules/
 /web/dist/*

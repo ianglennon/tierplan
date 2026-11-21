@@ -5,6 +5,12 @@
 # each platform at $TARGETPLATFORM/tierplan in the build context. To build it by
 # hand, put linux/amd64/tierplan or linux/arm64/tierplan next to this file.
 #
+# The build context must also hold build/sbom/tierplan-web.spdx.json (`make web-sbom`
+# writes it; goreleaser copies it in through extra_files). The image carries it at
+# /usr/share/tierplan/sbom/web.spdx.json, so BuildKit's SBOM scanner lists the web
+# interface's npm packages in the image attestation (D-25). A hand build lays it out
+# next to linux/<arch>/tierplan.
+#
 # The base is distroless "static" (no shell, no package manager, no libc), the
 # root-capable variant and not :nonroot. TierPlan starts as root only to fix the
 # ownership of /data and to join the Docker socket's group, then drops itself to
@@ -24,6 +30,7 @@ LABEL org.opencontainers.image.title="TierPlan" \
       org.opencontainers.image.vendor="The TierPlan Authors"
 
 COPY $TARGETPLATFORM/tierplan /usr/local/bin/tierplan
+COPY build/sbom/tierplan-web.spdx.json /usr/share/tierplan/sbom/web.spdx.json
 
 ENV TIERPLAN_DATA_DIR=/data
 # /data is created root-owned when the volume is new; privdrop hands it to 1000

@@ -5,10 +5,13 @@
 # Keeps certificate verification on everywhere (D-06, D-10, T-02-32, TLS-12).
 #
 # 1. Go: the switch that turns off Go's built-in TLS certificate verification is
-#    confined to one reviewed file, agent/internal/connect/tls.go. Any other Go
-#    file that names the setting, in code, a test or a comment, fails the gate:
-#    the setting is dangerous enough that every use must be in the one place that
-#    replaces verification with a check.
+#    confined to two reviewed files: agent/internal/connect/tls.go (the agent) and
+#    ingress/internal/channel/tls.go (the ingress supervisor, D-32). Each one turns
+#    the built-in check off only to put a mandatory, stricter one in its place
+#    (VerifyConnection: an SPKI pin, a pinned authority verified for the host, or
+#    the system roots). Any other Go file that names the setting, in code, a test
+#    or a comment, fails the gate: the setting is dangerous enough that every use
+#    must be in a place that replaces verification with a check.
 # 2. Everything else that talks TLS: no file under e2e/, scripts/ or docs/proxy/,
 #    and no Vite config (web/vite*.ts), may switch verification off. Clients trust
 #    the server's own certificate, a generated CA or an SPKI pin instead. The
@@ -24,7 +27,8 @@
 set -euo pipefail
 
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
-ALLOWED="agent/internal/connect/tls.go"
+# A space-separated list of the files allowed to name the setting.
+ALLOWED="agent/internal/connect/tls.go ingress/internal/channel/tls.go"
 # Spelled in two halves so this file does not trip the gate it implements.
 SETTING="Insecure""SkipVerify"
 
@@ -33,13 +37,15 @@ cd "${ROOT}"
 bad=()
 while IFS= read -r file; do
   file="${file#./}"
-  [ "${file}" = "${ALLOWED}" ] && continue
+  case " ${ALLOWED} " in
+    *" ${file} "*) continue ;;
+  esac
   bad+=("${file}")
 done < <(grep -rl --include='*.go' --exclude-dir=.git --exclude-dir=.claude --exclude-dir=node_modules --exclude-dir=vendor -e "${SETTING}" . 2>/dev/null | sort || true)
 
 if [ "${#bad[@]}" -gt 0 ]; then
   for f in "${bad[@]}"; do
-    echo "INSECURE TLS: ${f} names ${SETTING}; only ${ALLOWED} may" >&2
+    echo "INSECURE TLS: ${f} names ${SETTING}; only ${ALLOWED// /, } may" >&2
   done
   exit 1
 fi

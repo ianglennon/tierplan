@@ -193,7 +193,8 @@ func writeSynced(t testing.TB, name string, data []byte, mode os.FileMode) {
 
 // TraefikOptions configure StartTraefik.
 type TraefikOptions struct {
-	// Static is the static configuration, normally ingressrender.Static().
+	// Static is the static configuration, normally ingressrender.Static(), which returns
+	// ingressbundle.StaticTraefik().
 	Static []byte
 }
 

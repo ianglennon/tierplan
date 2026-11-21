@@ -1,6 +1,6 @@
 # Release checklist
 
-Work through this in order for every release. No release has been cut yet; the first one is v0.1.0, never "v1". TierPlan follows Semantic Versioning, and breaking changes are allowed between 0.x minors.
+Work through this in order for every release. TierPlan follows Semantic Versioning, and breaking changes are allowed between 0.x minors. The first release was v0.1.0, never "v1"; v0.1.1 followed it, and every release since runs through this list.
 
 ## Before the first public image (once)
 
@@ -14,8 +14,9 @@ Work through this in order for every release. No release has been cut yet; the f
 - [ ] The branch to release from is `main`, and CI is **green**, including `make lint`, `make test`, `make gen-check`, `make licences`, `make spdx`, `make dco`, the Docker engine matrix (`make test-int`), `make release-check` and the end-to-end job (`make e2e`) and the proxy job (`make proxy-smoke`).
 - [ ] `docs/` and the README still match the code: every `TIERPLAN_*` setting in `internal/config/config.go` is in the README table, and the README's `docker run` command matches `web/src/features/environments/docker-run-snippet.ts`.
 - [ ] Dependencies changed? Run `make gen` and commit `web/public/third-party-notices.json`, and look at `make licences` output for new licences.
-- [ ] The distroless base image digest in `Dockerfile` was bumped deliberately if you want newer base-image fixes (bump the digest, never the tag), and `make image image-smoke` passes with it.
-- [ ] **Both images are built and released together.** The release workflow publishes `ghcr.io/ianglennon/tierplan` and `ghcr.io/ianglennon/tierplan-agent` from the same tag, each as `X.Y.Z` and `X.Y` for `linux/amd64` and `linux/arm64`, with no `:latest`. The agent image is the second signed image: verify it the way the server image is verified, with the same identity and issuer, and check its SBOM too:
+- [ ] The distroless base image digest was bumped deliberately if you want newer base-image fixes (bump the digest, never the tag). `Dockerfile`, `agent/Dockerfile` and `ingress/Dockerfile` share one digest and it is bumped in all three together; `scripts/ingress-pin-check.sh`, part of `make lint`, fails when they differ. Run `make image image-smoke ingress-image ingress-image-smoke` with it.
+- [ ] **The Traefik pin was checked.** Look at the Traefik 3.7.x line (its releases and its security advisories) for a newer patch than the one in `ingress/Dockerfile`. A bump changes `ingress/Dockerfile` and `internal/ingressrender/traefiktest.TraefikImage` together, tag and index digest. It also updates the licence evidence the image ships: `ingress/image/doc/NOTICE.md` (the version, the source URL, the commit the tag points at, and the count and wording of the reviewed exceptions) and `ingress/image/doc/LICENSE.md` (copy `LICENSE.md` from the new tag), and re-reviews `licence-exceptions.txt`, whose Traefik entries are tied to the version they were reviewed against. Then `scripts/ingress-pin-check.sh` (it fails when the notice names another version), the Traefik test harness (`go test -tags=integration ./internal/ingressrender/...`) and `make licences` (it fails when the tag's commit differs from the notice or its `LICENSE.md` from the shipped one) must pass. There is no bot that does this for you. A Traefik security release means a TierPlan patch release, so cut one rather than waiting for the next minor.
+- [ ] **All three images are built and released together.** The release workflow publishes `ghcr.io/ianglennon/tierplan`, `ghcr.io/ianglennon/tierplan-agent` and `ghcr.io/ianglennon/tierplan-ingress` from the same tag, each as `X.Y.Z` and `X.Y` for `linux/amd64` and `linux/arm64`, with no `:latest`. The agent and ingress images are the second and third signed images: verify each the way the server image is verified, with the same identity and issuer, and check its SBOM too. For the agent:
 
   ```sh
   cosign verify ghcr.io/ianglennon/tierplan-agent:X.Y.Z \
@@ -25,7 +26,17 @@ Work through this in order for every release. No release has been cut yet; the f
   docker buildx imagetools inspect ghcr.io/ianglennon/tierplan-agent:latest   # must fail
   ```
 
-  Install commands and automatic updates name the agent image by the server's own version, `ghcr.io/ianglennon/tierplan-agent:X.Y.Z`, so an unpublished or unsigned agent image breaks every new install and every update at once.
+  And the same three lines for the ingress image:
+
+  ```sh
+  cosign verify ghcr.io/ianglennon/tierplan-ingress:X.Y.Z \
+    --certificate-identity-regexp '^https://github.com/ianglennon/tierplan/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  docker buildx imagetools inspect ghcr.io/ianglennon/tierplan-ingress:X.Y.Z --format '{{ json .SBOM }}'
+  docker buildx imagetools inspect ghcr.io/ianglennon/tierplan-ingress:latest   # must fail
+  ```
+
+  Install commands and automatic updates name the agent image by the server's own version, `ghcr.io/ianglennon/tierplan-agent:X.Y.Z`, so an unpublished or unsigned agent image breaks every new install and every update at once. The ingress deployer of Phase 24 names the ingress image by the server's version in the same way, so an unpublished or unsigned ingress image breaks every ingress switch-on.
 - [ ] **Agent and server versions match.** `ghcr.io/ianglennon/tierplan-agent:X.Y.Z` reports `vX.Y.Z` (start it once and read `starting tierplan-agent version=vX.Y.Z` in its log), the server reports the same in `/api/version`, and the compatibility window in `internal/tunnel/versionwindow.go` still accepts the previous minor: an agent of the previous release connects to this server and is offered the update.
 - [ ] **The agent protocol is unchanged, or the change is deliberate.** The update and uninstall messages are frozen for all of 0.x so that any older agent that can connect can be updated out of its version. The golden files under `proto/wire/testdata` (`update`, `update_digest`, `update_result`, `update_result_error`, `uninstall` and `uninstall_service`) must be **unchanged** by the release (`git diff vPREVIOUS -- proto/wire/testdata` prints nothing); a diff there needs a decision recorded in the release notes, not a regenerated file.
 - [ ] **The end-to-end run through a proxy passed on the release commit**, including the agent project: `make e2e` brings up TierPlan behind Caddy at `/tierplan`, runs the install command on a second Docker host, switches to it and revokes it. Look at the agent spec's trace in `.devdata/playwright-report` once: the waiting panel moves to "is online" without a reload, and the revoked page says "This environment was revoked". `make proxy-smoke` passed too.
@@ -53,8 +64,8 @@ Work through this in order for every release. No release has been cut yet; the f
 
   Last run: 2026-11-13 | build c9dde2b70f0f254a512d959ab394f67f090088e2 | pass: Let's Encrypt certificate issued and served, agents re-enrolled by themselves after a guarded reinstall, stayed connected through the swap and reconnected after a server restart
 - [ ] Tag `vX.Y.Z` (for example `v0.1.0`) on the release commit and push the tag. Only a `v*` tag runs the release workflow.
-- [ ] The release workflow finished: archives for `linux/amd64` and `linux/arm64`, `checksums.txt`, the image, and the signatures and SBOMs below.
-- [ ] **Verify the signatures.** The workflow signs with keyless cosign, so the identity is the release workflow of this repository. Look at what `cosign verify` prints and confirm the identity and issuer are what you expect:
+- [ ] The release workflow finished: archives for `linux/amd64` and `linux/arm64`, `checksums.txt`, the three images (server, agent and ingress), and the signatures and SBOMs below.
+- [ ] **Verify the signatures.** The workflow signs with keyless cosign, so the identity is the release workflow of this repository. Verifying needs **cosign v3** (`cosign version` must report v3). The release workflow installs cosign with `sigstore/cosign-installer` v4.1.2, whose default cosign is v3, and `sign-blob --bundle` writes the `.sigstore.json` bundle format that v3 reads: signed with v3, verify with v3. An older cosign can fail on the bundle or on the image signature for that reason alone. Look at what `cosign verify` prints and confirm the identity and issuer are what you expect. The commands below are for the server image and the archive checksums; the agent and ingress images are verified above:
 
   ```sh
   cosign verify ghcr.io/ianglennon/tierplan:X.Y.Z \
@@ -66,14 +77,31 @@ Work through this in order for every release. No release has been cut yet; the f
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
 
-  These commands have not been run against a real release yet. If they fail, fix the command from the identity the certificate actually carries; do not loosen the pattern to match anything.
+  If a command fails, fix the command from the identity the certificate actually carries; do not loosen the pattern to match anything.
 - [ ] **Check the SBOMs.** Each archive has a `.spdx.json` file next to it in the release. The image carries its own SPDX attestation:
 
   ```sh
   docker buildx imagetools inspect ghcr.io/ianglennon/tierplan:X.Y.Z --format '{{ json .SBOM }}'
   ```
 
-  It must be present and list the Go and npm components.
+  It must be present and list the Go and npm components, and the npm count is checked, not assumed:
+  - Run `make web-sbom`. It prints how many npm packages the web interface has and fails when that list and `pnpm licenses` differ.
+  - The server archive's `.spdx.json` (each archive also holds the web interface's own `sbom/web.spdx.json`) must list at least that many packages with a `pkg:npm/` locator. The release already stops before anything is signed or published when any one npm package of the web SBOM is absent from it (`scripts/sbom-archive.sh`, a set comparison, not a count), so a short list here means the gate was bypassed.
+  - The server image attestation must list at least as many. Count the distinct `pkg:npm/` locators in its packages' `externalRefs` (the output is keyed by platform on a multi-platform image, so the filter walks the whole document) and compare the number with `make web-sbom`:
+
+    ```sh
+    docker buildx imagetools inspect ghcr.io/ianglennon/tierplan:X.Y.Z --format '{{ json .SBOM }}' \
+      | jq '[.. | .packages? // empty | .[] | .externalRefs[]? | .referenceLocator | select(startswith("pkg:npm/"))] | unique | length'
+    ```
+
+  - The agent and ingress images contain no web interface, so their SBOMs list Go modules only. That is correct: npm packages listed there would make them false.
+  - The ingress image SBOM must list `github.com/traefik/traefik/v3`, taken from the Traefik binary's build information. Its licences show NOASSERTION because Go build information carries none; the licence evidence for Traefik is the Traefik leg of `make licences`. Run the filter below. It must print one line, `pkg:golang/github.com/traefik/traefik/v3@` followed by the tag that `scripts/ingress-pin-check.sh --print-tag` prints, and it exits non-zero with no output when Traefik is absent:
+
+    ```sh
+    docker buildx imagetools inspect ghcr.io/ianglennon/tierplan-ingress:X.Y.Z --format '{{ json .SBOM }}' \
+      | jq -e -r '[.. | .packages? // empty | .[] | .externalRefs[]? | .referenceLocator | select(startswith("pkg:golang/github.com/traefik/traefik/v3@"))] | unique | .[]'
+    ```
+
 - [ ] **Confirm the image tags.** `X.Y.Z` and `X.Y` exist (a pre-release gets only `X.Y.Z`), both for `linux/amd64` and `linux/arm64`, and **there is no `:latest` or other floating catch-all tag** while TierPlan is 0.x. `docker buildx imagetools inspect ghcr.io/ianglennon/tierplan:latest` must fail.
 - [ ] Pull the released image on a clean machine and run the README's install command. It must be healthy, show the setup wizard, and report the right version in Settings > About.
 - [ ] **Update the README's image tag from `:edge` to `:X.Y`** (and the upgrade example), in the same release, so the documented command pins the line it was written for.
