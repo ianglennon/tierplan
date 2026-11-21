@@ -178,6 +178,8 @@ function refusalOf(
         message: t("services.scale.errors.no_manager_connected", { environment }),
         agentPolicy: false,
       };
+    case "ingress_owned":
+      return { message: t("ingress.owned.refused"), agentPolicy: false };
     case "host_read_only":
       return { message: t("actions.refusal.host_read_only"), agentPolicy: false };
     case "agent_host_policy":
