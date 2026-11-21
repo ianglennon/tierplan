@@ -13,6 +13,8 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/auth"
 	"github.com/ianglennon/tierplan/internal/buildinfo"
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingressrecon"
 	"github.com/ianglennon/tierplan/internal/instance"
@@ -30,6 +32,10 @@ type ingressHubDeps struct {
 	Pins func() []string
 	// Recon is the reconciler whose current bundle the hub delivers.
 	Recon *ingressrecon.Reconciler
+	// Ingress is the store whose switch decides whether an environment's nodes are sent bundles, and Changes the notifier
+	// it tells when the switch moves, so the sessions of that environment look at the current bundle again (D-12).
+	Ingress *ingressstore.Store
+	Changes *ingress.Notifier
 	// Nodes is the swarm node list an enrolment into a swarm environment is checked against.
 	Nodes agents.NodeLists
 	// Refusals records the refused handshakes. It is the hub's own throttle, apart from the agent hub's.
@@ -54,9 +60,24 @@ func wireIngressHub(ctx context.Context, d ingressHubDeps) (*ingresshub.Service,
 		WithInstanceID(func(ctx context.Context) (string, error) { return instance.InstanceID(ctx, d.Store) }).
 		WithServerVersion(buildinfo.Get().Version).
 		WithRefusalAudit(d.Refusals).
-		OnUpgradeFailure(d.UpgradeFailure)
+		OnUpgradeFailure(d.UpgradeFailure).
+		WithDeliveryGate(deliveryGate(d.Log, d.Ingress)).
+		WithEnvChanges(d.Changes)
 	svc.WithKicker(hub)
 	return svc, hub, nil
+}
+
+// deliveryGate says whether an environment's nodes are sent bundles: only when its ingress is switched on. A switch that
+// cannot be read answers false and is logged, so a failure sends nothing (D-12).
+func deliveryGate(log *slog.Logger, store *ingressstore.Store) func(context.Context, string) bool {
+	return func(ctx context.Context, envID string) bool {
+		set, err := store.Settings(ctx, envID)
+		if err != nil {
+			log.Warn("could not read an environment's ingress switch; no bundle is sent to its nodes", "environment_id", envID, "error", err)
+			return false
+		}
+		return set.Enabled
+	}
 }
 
 // joinDialHosts is the dial hosts of every source together, in order. A nil source is skipped, and a source that has
