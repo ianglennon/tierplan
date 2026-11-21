@@ -125,6 +125,10 @@ type ReviewInput struct {
 	DraftVersion int64
 	Mode         string
 	Services     []string
+	// IngressOff says the environment's ingress is switched off, so the routes of a swarm stack are claimed but not
+	// served until it is on and the stack is redeployed (D-13): the review warns of it. False when ingress is on and
+	// when it could not be read.
+	IngressOff bool
 	// Rendering is the masked rendering stored with the stack's last good revision, which the
 	// Rendered YAML tab compares the draft's rendering with. Empty means none: the draft is
 	// compared with an empty document.

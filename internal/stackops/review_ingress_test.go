@@ -6,11 +6,14 @@ package stackops_test
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/testsupport"
@@ -215,5 +218,217 @@ func TestReviewIngressEmpty(t *testing.T) {
 	rv = reviewWith(t, &fakeIngress{heldErr: errors.New("db busy")}, "shop", routedTwo)
 	if rv.Ingress != nil {
 		t.Errorf("ingress = %+v, want none when the held routes cannot be read", rv.Ingress)
+	}
+}
+
+func TestReviewIngressCertificates(t *testing.T) {
+	t.Parallel()
+	states := map[string]stackops.CertState{
+		"a.example.com": {State: stackops.CertReused},
+		"b.example.com": {State: stackops.CertWillIssue},
+	}
+	// A third hostname waits, with the reason the certificate store gave.
+	compose := routedTwo + `        tierplan.ingress.w.host: w.example.com
+        tierplan.ingress.w.port: "80"
+`
+	states["w.example.com"] = stackops.CertState{State: stackops.CertWaiting, Reason: "The certificate authority did not find the challenge record in DNS."}
+	want := []stackops.IngressCertRow{
+		{Hostname: "a.example.com", State: stackops.CertReused},
+		{Hostname: "b.example.com", State: stackops.CertWillIssue},
+		{Hostname: "w.example.com", State: stackops.CertWaiting, Reason: "The certificate authority did not find the challenge record in DNS."},
+	}
+	for name, off := range map[string]bool{"ingress on": false, "ingress off": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// Certificates are queued for claims whether ingress is on or off (D-40): the rows read the same.
+			r := newSwarmRig(t, nil)
+			r.deps.Ingress = &fakeIngress{states: states}
+			in := r.reviewInput(t, "shop", compose, nil)
+			in.IngressOff = off
+			rv, err := r.deps.Review(testsupport.Context(t), in)
+			if err != nil {
+				t.Fatalf("review: %v", err)
+			}
+			if rv.Ingress == nil || !slices.Equal(rv.Ingress.Certificates, want) {
+				t.Errorf("certificates = %+v, want %+v", rv.Ingress, want)
+			}
+		})
+	}
+	// The reason is only for a hostname that waits.
+	rv := reviewWith(t, &fakeIngress{states: map[string]stackops.CertState{"a.example.com": {State: stackops.CertReused, Reason: "x"}}}, "shop", routedTwo)
+	if rv.Ingress == nil || len(rv.Ingress.Certificates) != 1 || rv.Ingress.Certificates[0].Reason != "" {
+		t.Errorf("certificates = %+v, want one reused row with no reason", rv.Ingress)
+	}
+}
+
+// attachedStackInput is checkedStackInput for a conversion that attaches the routed services to the ingress network.
+func attachedStackInput(t *testing.T, name, compose string) stackops.SwarmDeployInput {
+	t.Helper()
+	files := []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}
+	loaded, err := stacks.Deployable(testsupport.Context(t), stacks.CheckInput{
+		Name: name, Target: stacks.TargetSwarm, Copy: stacks.WorkingCopy{Files: files}, Ingress: attachedBy(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := stackops.Stack{ID: "stack-" + name, Name: name, Target: stacks.TargetSwarm}
+	return stackops.SwarmDeployInput{
+		Stack: st, Project: loaded.Project, Files: stacks.NewFileSet(files), Vars: map[string]string{}, Copy: stacks.WorkingCopy{Files: files},
+	}
+}
+
+const plainWeb = `services:
+  web:
+    image: nginx:1.27
+`
+
+const routedWeb = `services:
+  web:
+    image: nginx:1.27
+    deploy:
+      labels:
+        tierplan.ingress.host: app.example.com
+        tierplan.ingress.port: "80"
+`
+
+func TestReviewIngressNetwork(t *testing.T) {
+	t.Parallel()
+	withNetwork := func(c *dockertest.FakeConfig) {
+		c.Networks = append(c.Networks, dockertest.FakeNetwork{
+			ID: "net-tierplan-ingress", Name: ingress.NetworkName, Driver: "overlay", Scope: "swarm",
+			Labels: map[string]string{ingress.LabelComponent: "network"},
+		})
+	}
+	reviewOf := func(t *testing.T, r *swarmRig, compose string) stackops.Review {
+		t.Helper()
+		r.deps.Ingress = &fakeIngress{attach: attachedBy()}
+		rv, err := r.deps.Review(testsupport.Context(t), r.reviewInput(t, "shop", compose, nil))
+		if err != nil {
+			t.Fatalf("review: %v", err)
+		}
+		return rv
+	}
+
+	t.Run("a running service that gains a route joins and its tasks are replaced", func(t *testing.T) {
+		t.Parallel()
+		r := newSwarmRig(t, withNetwork)
+		r.deployedStack(t, "shop", plainWeb, nil)
+		rv := reviewOf(t, r, routedWeb)
+		want := []stackops.IngressAttachRow{{Service: "web", Change: stackops.IngressAttachJoins, ReplacesTasks: true}}
+		if rv.Ingress == nil || !slices.Equal(rv.Ingress.Network, want) {
+			t.Errorf("network = %+v, want %+v", rv.Ingress, want)
+		}
+	})
+
+	t.Run("a service that loses its last route leaves", func(t *testing.T) {
+		t.Parallel()
+		r := newSwarmRig(t, withNetwork)
+		if res, job := r.deploy(t, attachedStackInput(t, "shop", routedWeb)); !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v %v, want it done", res, itemStates(job))
+		}
+		rv := reviewOf(t, r, plainWeb)
+		want := []stackops.IngressAttachRow{{Service: "web", Change: stackops.IngressAttachLeaves, ReplacesTasks: true}}
+		if rv.Ingress == nil || !slices.Equal(rv.Ingress.Network, want) {
+			t.Errorf("network = %+v, want %+v", rv.Ingress, want)
+		}
+	})
+
+	t.Run("no row when the live and the desired spec agree", func(t *testing.T) {
+		t.Parallel()
+		r := newSwarmRig(t, withNetwork)
+		if res, job := r.deploy(t, attachedStackInput(t, "shop", routedWeb)); !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v %v, want it done", res, itemStates(job))
+		}
+		rv := reviewOf(t, r, routedWeb)
+		if rv.Ingress != nil && len(rv.Ingress.Network) != 0 {
+			t.Errorf("network = %+v, want none", rv.Ingress.Network)
+		}
+	})
+
+	t.Run("a service made new joins with nothing to replace", func(t *testing.T) {
+		t.Parallel()
+		r := newSwarmRig(t, withNetwork)
+		rv := reviewOf(t, r, routedWeb)
+		want := []stackops.IngressAttachRow{{Service: "web", Change: stackops.IngressAttachJoins}}
+		if rv.Ingress == nil || !slices.Equal(rv.Ingress.Network, want) {
+			t.Errorf("network = %+v, want %+v", rv.Ingress, want)
+		}
+	})
+}
+
+func TestReviewIngressWarnings(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  bare:
+    image: nginx:1.27
+    healthcheck:
+      disable: true
+    deploy:
+      labels:
+        tierplan.ingress.host: bare.example.com
+        tierplan.ingress.port: "80"
+  rr:
+    image: nginx:1.27
+    healthcheck:
+      test: ["CMD", "true"]
+    deploy:
+      endpoint_mode: dnsrr
+      labels:
+        tierplan.ingress.host: rr.example.com
+        tierplan.ingress.port: "80"
+  idle:
+    image: nginx:1.27
+    healthcheck:
+      test: ["CMD", "true"]
+    deploy:
+      replicas: 0
+      labels:
+        tierplan.ingress.host: idle.example.com
+        tierplan.ingress.port: "80"
+  plain:
+    image: nginx:1.27
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: 0
+`
+	r := newSwarmRig(t, nil)
+	r.deps.Ingress = &fakeIngress{}
+	in := r.reviewInput(t, "shop", compose, nil)
+	in.IngressOff = true
+	rv, err := r.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	got := map[string]string{}
+	for _, p := range rv.Problems {
+		if !strings.HasPrefix(p.Code, "ingress_") {
+			continue
+		}
+		if p.Severity != stacks.SeverityWarning {
+			t.Errorf("problem %+v, want a warning and never an error", p)
+		}
+		got[p.Code+" "+strings.TrimPrefix(p.Key, "services.")] = p.Message
+	}
+	want := map[string]string{
+		"ingress_disabled bare":       "Ingress is off for this environment. The routes will serve once it is switched on and the stack is redeployed.",
+		"ingress_no_healthcheck bare": "bare has no health check, so a starting task can get traffic before it is ready.",
+		"ingress_dnsrr rr":            "rr uses endpoint_mode: dnsrr, so its name resolves to task addresses and not one stable address. The proxy can keep sending traffic to a replaced task until it reconnects.",
+		"ingress_no_replicas idle":    "idle has no replicas, so its route will show Backend not running.",
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("warnings = %q, want %q", got, want)
+	}
+
+	// With ingress on there is no ingress_disabled, and the service warnings stay.
+	in.IngressOff = false
+	rv, err = r.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if hasCode(rv.Problems, "ingress_disabled") {
+		t.Errorf("problems = %+v, want no ingress_disabled with ingress on", rv.Problems)
+	}
+	if !hasCode(rv.Problems, "ingress_dnsrr") {
+		t.Errorf("problems = %+v, want ingress_dnsrr to stay", rv.Problems)
 	}
 }
