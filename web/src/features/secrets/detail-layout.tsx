@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { LockKeyhole } from "lucide-react";
+import { Lock, LockKeyhole } from "lucide-react";
 import { useState } from "react";
 
 import { isSecretGone, isSecretNotASwarm, secretDetailQuery } from "@/api/secrets";
@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UsedByList } from "@/components/used-by-list";
+import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { DeleteSecretDialog, secretDeleteReason } from "@/features/secrets/delete-secret-dialog";
 import { RotateDialog } from "@/features/secrets/rotate-dialog";
@@ -163,7 +164,11 @@ export function SecretDetailLayout({ envId, secretId }: SecretDetailLayoutProps)
     );
   }
 
-  const reason = data ? secretDeleteReason(t, manage.reason, data.usedBy, true) : undefined;
+  const reason = data
+    ? secretDeleteReason(t, manage.reason, data.usedBy, true, data.ingress)
+    : undefined;
+  // The join token's secret is TierPlan's: a new version of it is refused as well.
+  const rotateWhy = rotateReason ?? (data?.ingress ? t("ingress.owned.reason") : undefined);
   const rows = data?.usedByRows ?? [];
   return (
     <div className="flex flex-col gap-6">
@@ -172,14 +177,17 @@ export function SecretDetailLayout({ envId, secretId }: SecretDetailLayoutProps)
         {data ? (
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex min-w-0 flex-col gap-1">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <h2 className="max-w-full min-w-0 truncate font-mono text-2xl font-semibold">
-                    {data.name}
-                  </h2>
-                </TooltipTrigger>
-                <TooltipContent className="break-all font-mono">{data.name}</TooltipContent>
-              </Tooltip>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <h2 className="max-w-full min-w-0 truncate font-mono text-2xl font-semibold">
+                      {data.name}
+                    </h2>
+                  </TooltipTrigger>
+                  <TooltipContent className="break-all font-mono">{data.name}</TooltipContent>
+                </Tooltip>
+                {data.ingress ? <SelfContainerBadge kind="ingress" /> : null}
+              </div>
               <p className="text-sm text-muted-foreground">
                 {data.usedBy > 0
                   ? t("secrets.detail.usedBy", { count: data.usedBy })
@@ -187,13 +195,13 @@ export function SecretDetailLayout({ envId, secretId }: SecretDetailLayoutProps)
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <NeedsTooltip reason={rotateReason}>
+              <NeedsTooltip reason={rotateWhy}>
                 <Button
                   type="button"
                   variant="outline"
                   className="max-md:h-11"
                   aria-label={t("secrets.rotate.label", { name: data.name })}
-                  onClick={rotateReason ? undefined : () => setRotating(true)}
+                  onClick={rotateWhy ? undefined : () => setRotating(true)}
                 >
                   {t("secrets.rotate.action")}
                 </Button>
@@ -215,7 +223,17 @@ export function SecretDetailLayout({ envId, secretId }: SecretDetailLayoutProps)
           <Skeleton className="h-8 w-64" />
         )}
       </header>
-      {data && data.usedBy > 0 ? (
+      {data?.ingress ? (
+        // Plain status, not a warning and not announced as an alert: an object TierPlan
+        // manages is expected, not a fault (U-03). It replaces the in-use callout: the proxy
+        // using the secret is not why it cannot be removed.
+        <Alert role="status">
+          <Lock aria-hidden="true" />
+          <AlertTitle>{t("ingress.owned.alertTitle")}</AlertTitle>
+          <AlertDescription>{t("ingress.owned.objectBody")}</AlertDescription>
+        </Alert>
+      ) : null}
+      {data && data.usedBy > 0 && !data.ingress ? (
         <Alert variant="warning">
           <AlertTitle>{t("secrets.detail.inUse.title", { name: data.name })}</AlertTitle>
           <AlertDescription className="flex flex-col gap-2">

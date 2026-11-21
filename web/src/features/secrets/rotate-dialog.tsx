@@ -815,6 +815,8 @@ function createReason(
       return t("configs.errors.templating");
     case "host_read_only":
       return t(`${ns}.errors.hostReadOnly`);
+    case "ingress_owned":
+      return t("ingress.owned.refused");
     case "no_manager_connected":
       return t(`${ns}.errors.noManager`);
     case "not_a_swarm":

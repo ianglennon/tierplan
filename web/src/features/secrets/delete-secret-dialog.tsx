@@ -26,7 +26,8 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 // secretDeleteReason is why Delete… is unavailable on a secret, or undefined when it is
-// available: who may comes first, then whether any service spec still mentions it (a service
+// available: who may comes first, then whether the secret is TierPlan's ingress join token (not
+// the person's to remove, D-29), then whether any service spec still mentions it (a service
 // scaled to 0 counts). On the secret's own page the words do not send the reader to the page they
 // are on.
 export function secretDeleteReason(
@@ -34,8 +35,10 @@ export function secretDeleteReason(
   needsReason: string | undefined,
   usedBy: number,
   onOwnPage = false,
+  ingress = false,
 ): string | undefined {
   if (needsReason) return needsReason;
+  if (ingress) return t("ingress.owned.reason");
   if (usedBy <= 0) return undefined;
   return onOwnPage
     ? t("secrets.delete.reason", { count: usedBy })
@@ -72,6 +75,8 @@ export function DeleteSecretDialog({ envId, secret, onClose, onDeleted }: Delete
         return t("secrets.delete.inUse", { name });
       case "host_read_only":
         return t("secrets.errors.hostReadOnly");
+      case "ingress_owned":
+        return t("ingress.owned.refused");
       case "no_manager_connected":
         return t("secrets.errors.noManager");
       case "not_a_swarm":
