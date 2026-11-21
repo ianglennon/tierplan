@@ -698,6 +698,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
             <TruncatedText>{s.name}</TruncatedText>
           </Link>
           {s.agent ? <SelfContainerBadge kind="agent-service" /> : null}
+          {s.ingress ? <SelfContainerBadge kind="ingress" /> : null}
           {s.restartLoop ? <RestartLoopBadge loop={s.restartLoop} /> : null}
         </span>
       ),
