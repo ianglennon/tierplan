@@ -318,13 +318,16 @@ const (
 	HolderRollback  = "rollback"
 	HolderJanitor   = "janitor"
 	HolderUpdate    = "update"
+	HolderIngress   = "ingress"
 )
 
-// HolderKind says which of the five kinds of operation holds the lock with that holder: a janitor run, a roll back (or the
+// HolderKind says which of the six kinds of operation holds the lock with that holder: an ingress job, a janitor run, a roll back (or the
 // restore that is one), an image update (a plain one, or a stack's Update images), an automatic deploy from git (a deploy that a
 // system principal of git started) and, for every other stack operation (a deploy, a stop, a start, a removal, an adoption), deploy.
 func HolderKind(h stackops.Holder) string {
 	switch {
+	case h.Kind == stackops.HolderKindIngress:
+		return HolderIngress
 	case h.Kind == stackops.HolderKindJanitor:
 		return HolderJanitor
 	case h.Kind == "rollback", h.Kind == "restore":

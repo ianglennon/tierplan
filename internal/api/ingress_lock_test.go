@@ -56,7 +56,10 @@ func TestOperationLockedByIngress(t *testing.T) {
 	if got := len(f.fake.Writes()); got != writes {
 		t.Errorf("the refused deploy wrote %d times", got-writes)
 	}
-	if got := updates.HolderKind(h); got != "ingress" {
+	if updates.HolderIngress != "ingress" {
+		t.Errorf("HolderIngress = %q, want ingress: it is what the API enum and the badge name", updates.HolderIngress)
+	}
+	if got := updates.HolderKind(h); got != updates.HolderIngress {
 		t.Errorf("HolderKind of an ingress hold = %q, want ingress", got)
 	}
 }

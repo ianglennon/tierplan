@@ -16917,10 +16917,10 @@ export interface components {
             /** @description Who started it, as a name; for an automatic deploy a system name */
             by: string;
             /**
-             * @description What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, or update (an image update, or a stack's Update images)
+             * @description What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, update (an image update, or a stack's Update images), or ingress (TierPlan is switching an environment's ingress on or changing it)
              * @enum {string}
              */
-            kind: "git_deploy" | "deploy" | "rollback" | "janitor" | "update";
+            kind: "git_deploy" | "deploy" | "rollback" | "janitor" | "update" | "ingress";
             /** @description Left out unless set: the stack a stack operation is on */
             stack?: string;
             /**

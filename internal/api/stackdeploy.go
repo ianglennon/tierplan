@@ -1291,14 +1291,17 @@ func servicesProblem(e *stackops.ServicesInvalidError) error {
 }
 
 // holderSentence says what holds an environment's operation lock, without a stop: a stack operation
-// names its stack, and the janitor's clean-up (which names none) says the janitor is cleaning the
-// environment.
+// names its stack, the janitor's clean-up (which names none) says the janitor is cleaning the
+// environment, and an ingress job says TierPlan is changing ingress there.
 func holderSentence(envName string, h stackops.Holder) string {
 	if h.Kind == stackops.HolderKindJanitor {
 		return "The janitor is cleaning " + envName
 	}
 	if h.Kind == stackops.HolderKindImageUpdate {
 		return "An image update of " + h.Workload + " is running on " + envName
+	}
+	if h.Kind == stackops.HolderKindIngress {
+		return "TierPlan is changing ingress on " + envName
 	}
 	return "Another stack operation is running on " + envName + ": " + h.StackName
 }
@@ -1319,6 +1322,13 @@ func operationLocked(envName string, h stackops.Holder) error {
 		details = []*huma.ErrorDetail{
 			{Location: "kind", Message: h.Kind},
 			{Location: "runId", Message: h.RunID},
+			{Location: "job", Message: h.JobID},
+			{Location: "started", Message: started},
+		}
+	}
+	if h.Kind == stackops.HolderKindIngress {
+		details = []*huma.ErrorDetail{
+			{Location: "kind", Message: h.Kind},
 			{Location: "job", Message: h.JobID},
 			{Location: "started", Message: started},
 		}
