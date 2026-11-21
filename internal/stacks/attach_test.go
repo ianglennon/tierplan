@@ -274,3 +274,144 @@ configs:
 		t.Errorf("a plain file gave %+v, want none", got)
 	}
 }
+
+// The network name is TierPlan's (WR-09): a file may only point at the shared network, as an external one.
+func TestIngressNetworkNameIsReserved(t *testing.T) {
+	t.Parallel()
+	reserved := func(compose string, target stacks.Target) []stacks.Problem {
+		in := stacks.CheckInput{Name: "shop", Target: target, Copy: copyOf(compose)}
+		if target == stacks.TargetSwarm {
+			in.Ingress = &stacks.IngressAttach{Network: ingress.NetworkName}
+		}
+		var out []stacks.Problem
+		for _, p := range stacks.Check(context.Background(), in).Problems {
+			if p.Code == stacks.CodeIngressNetworkReserved {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	cases := []struct {
+		name, compose string
+		want          int
+		key           string
+	}{
+		{"own network under the reserved key", `services:
+  web:
+    image: nginx:1.27
+    networks: [tierplan-ingress]
+    deploy:
+      labels:
+        tierplan.ingress.host: app.example.com
+        tierplan.ingress.port: "80"
+networks:
+  tierplan-ingress:
+    driver: overlay
+`, 1, "networks.tierplan-ingress"},
+		{"own network under another key with the reserved name", `services:
+  web:
+    image: nginx:1.27
+    networks: [edge]
+networks:
+  edge:
+    name: tierplan-ingress
+`, 1, "networks.edge"},
+		{"external network under the reserved key with another name", `services:
+  web:
+    image: nginx:1.27
+    networks: [tierplan-ingress]
+networks:
+  tierplan-ingress:
+    external: true
+    name: somewhere-else
+`, 1, "networks.tierplan-ingress"},
+		{"external by key", `services:
+  web:
+    image: nginx:1.27
+    networks: [tierplan-ingress]
+networks:
+  tierplan-ingress:
+    external: true
+`, 0, ""},
+		{"external by name under another key", `services:
+  web:
+    image: nginx:1.27
+    networks: [edge]
+networks:
+  edge:
+    external: true
+    name: tierplan-ingress
+`, 0, ""},
+		{"no mention", routedCompose, 0, ""},
+	}
+	for _, c := range cases {
+		got := reserved(c.compose, stacks.TargetSwarm)
+		if len(got) != c.want {
+			t.Errorf("%s: %d reserved-name problems (%+v), want %d", c.name, len(got), got, c.want)
+			continue
+		}
+		if c.want == 1 && (got[0].Severity != stacks.SeverityError || got[0].Key != c.key || got[0].Line == 0) {
+			t.Errorf("%s: problem = %+v, want an error located at %s", c.name, got[0], c.key)
+		}
+	}
+	// The name is reserved for every target, not only the swarm one.
+	if got := reserved(cases[0].compose, stacks.TargetStandalone); len(got) != 1 {
+		t.Errorf("standalone: %d reserved-name problems, want one", len(got))
+	}
+}
+
+// checkedWith is the loaded project of a file Deployable refuses (it has an error), with the ingress attachment tried.
+func checkedWith(t *testing.T, compose string) *stacks.Loaded {
+	t.Helper()
+	res := stacks.Check(context.Background(), stacks.CheckInput{
+		Name: "shop", Target: stacks.TargetSwarm, Copy: copyOf(compose), Ingress: &stacks.IngressAttach{Network: ingress.NetworkName},
+	})
+	if res.Loaded == nil {
+		t.Fatalf("Check gave no project: %+v", res.Problems)
+	}
+	return res.Loaded
+}
+
+func TestAttachReusesOnlyAnExternalDeclaration(t *testing.T) {
+	t.Parallel()
+	const own = `services:
+  web:
+    image: nginx:1.27
+    networks: [tierplan-ingress]
+    deploy:
+      labels:
+        tierplan.ingress.host: app.example.com
+        tierplan.ingress.port: "80"
+networks:
+  tierplan-ingress:
+    driver: overlay
+`
+	l := checkedWith(t, own)
+	decl := l.Project.Networks[ingress.NetworkName]
+	if bool(decl.External) {
+		t.Fatal("the stack's own network was turned into the shared one")
+	}
+	if l.Ingress != nil {
+		t.Errorf("Loaded.Ingress = %+v, want nil: nothing is attached to a network the file declares as its own", l.Ingress)
+	}
+
+	// A non-external declaration under another key with the reserved name is not the shared network either.
+	const byName = `services:
+  web:
+    image: nginx:1.27
+    deploy:
+      labels:
+        tierplan.ingress.host: app.example.com
+        tierplan.ingress.port: "80"
+networks:
+  edge:
+    name: tierplan-ingress
+`
+	n := checkedWith(t, byName)
+	if n.Project.Networks["edge"].External {
+		t.Error("edge, a network the stack creates, was reused as the shared one")
+	}
+	if n.Ingress != nil || !reflect.DeepEqual(networkKeys(n, "web"), []string{"default"}) {
+		t.Errorf("Loaded.Ingress = %+v, web networks = %v, want nothing attached to a network the stack creates", n.Ingress, networkKeys(n, "web"))
+	}
+}

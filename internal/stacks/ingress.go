@@ -151,15 +151,15 @@ func attachIngress(project *types.Project, routed []string, network string) *Inj
 	if len(routed) == 0 || network == "" {
 		return nil
 	}
-	key := ""
-	for k, n := range project.Networks {
-		if k == network || n.Name == network {
-			key = k
-			break
-		}
+	key, found := sharedNetworkKey(project, network)
+	if !found && networkNameTaken(project, network) {
+		// The file declares something else under the name or the key (a network of its own, or an
+		// external one with another name). Check refuses that (ingress_network_reserved); nothing is
+		// attached, and the declaration is never overwritten.
+		return nil
 	}
 	inj := &InjectedIngress{Network: network}
-	if key == "" {
+	if !found {
 		key = network
 		if project.Networks == nil {
 			project.Networks = types.Networks{}
@@ -238,12 +238,66 @@ func undoIngress(project *types.Project, inj *InjectedIngress) *types.Project {
 
 // injectedKey is the key the network has in project.
 func (inj *InjectedIngress) injectedKey(project *types.Project) string {
-	for k, n := range project.Networks {
-		if k == inj.Network || n.Name == inj.Network {
-			return k
-		}
+	if k, ok := sharedNetworkKey(project, inj.Network); ok {
+		return k
 	}
 	return inj.Network
+}
+
+// sharedNetworkKey is the key under which project declares the shared network, found by its resolved
+// name: only an external declaration of that name is the shared network (compose-go gives an external
+// network without a name its key as the name). A network the stack would create itself is not.
+func sharedNetworkKey(project *types.Project, network string) (string, bool) {
+	keys := make([]string, 0, len(project.Networks))
+	for k := range project.Networks {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if n := project.Networks[k]; bool(n.External) && n.Name == network {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// networkNameTaken is true when project declares a network whose key or name is the shared network's.
+func networkNameTaken(project *types.Project, network string) bool {
+	for k, n := range project.Networks {
+		if k == network || n.Name == network {
+			return true
+		}
+	}
+	return false
+}
+
+// CodeIngressNetworkReserved is a compose file that declares the shared ingress network's name as a
+// network of its own: the name belongs to TierPlan (WR-09), so a stack may only point at that network
+// as an external one.
+const CodeIngressNetworkReserved = "ingress_network_reserved"
+
+// networkReservedProblems reports each top-level network whose key or resolved name is the shared
+// ingress network's, unless it is the external declaration of that network. The error is at the
+// network's key, for every target.
+func networkReservedProblems(project *types.Project, idx *PositionIndex) Problems {
+	var out Problems
+	for _, key := range sortedKeys(project.Networks) {
+		n := project.Networks[key]
+		if key != ingress.NetworkName && n.Name != ingress.NetworkName {
+			continue
+		}
+		if bool(n.External) && n.Name == ingress.NetworkName {
+			continue
+		}
+		node, file := idx.locateAny("networks."+key+".name", "networks."+key)
+		line, col, endLine, endCol := at(node)
+		out = append(out, Problem{
+			Severity: SeverityError, Code: CodeIngressNetworkReserved, File: file, Key: "networks." + key,
+			Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+			Message: "The network name " + ingress.NetworkName + " is TierPlan's own for the network ingress routes use. To reach it, declare it with external: true; for a network of your own, use another name.",
+		})
+	}
+	return out
 }
 
 // CodeIngressComponentLabel is a compose file that sets TierPlan's own component label on a service
