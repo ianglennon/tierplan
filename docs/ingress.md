@@ -146,7 +146,7 @@ When nothing refuses, the job:
 
 1. switches delivery off and closes the proxies' sessions, so no proxy is still being served;
 2. removes the proxy service and waits, for up to two minutes, until its tasks are gone;
-3. removes the certificate cache volume on each node through that node's agent;
+3. removes the certificate cache volume on each node of the swarm through that node's agent (the swarm's own node list is read, so a node that has no agent is included);
 4. removes the network and the join token secrets;
 5. disables the join token and removes the proxy nodes from the list. A node you revoked stays in the list as revoked, so that switching ingress off and on again does not let that host back in.
 
@@ -156,8 +156,10 @@ hostnames, not to the proxies.
 ## Nodes that were away
 
 The cache volume holds the private key of every certificate the proxy served, so switching off must not leave it behind
-on a node that was down. A node whose agent is not connected when you switch off is named in the job and its volume
-is kept as a **pending wipe**. The volume is removed as soon as that node's agent connects again, and the entry is
+on a node that was down or that has no agent. A node whose agent is not connected when you switch off, and a node of the
+swarm that has no agent at all, is named in the preview and in the job and its volume is kept as a **pending wipe**. If
+the swarm's node list cannot be read the step fails, so no node is left out unseen. The volume is removed as soon as that
+node's agent connects (or is installed and connects), and the entry is
 cleared and audited (`ingress.wipe_queued`, `ingress.wipe_done`). The status counts the pending wipes. Switching off
 again retries the ones that remain.
 

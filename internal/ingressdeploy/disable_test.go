@@ -179,6 +179,9 @@ type disableOpts struct {
 	workerAway bool
 	// tasks leaves a running proxy task in the swarm until a test removes it.
 	tasks bool
+	// config adjusts the fake manager's swarm and deps the deployer's dependencies, after the fixture has set its own.
+	config func(*dockertest.FakeConfig)
+	deps   func(*ingressdeploy.Deps)
 }
 
 func newDisableFix(t *testing.T, o disableOpts) *disableFix {
@@ -194,6 +197,9 @@ func newDisableFix(t *testing.T, o disableOpts) *disableFix {
 			if o.tasks {
 				c.Tasks = []swarm.Task{proxyTask()}
 			}
+			if o.config != nil {
+				o.config(c)
+			}
 			f.base = *c
 		},
 		deps: func(d *ingressdeploy.Deps) {
@@ -205,9 +211,13 @@ func newDisableFix(t *testing.T, o disableOpts) *disableFix {
 				t.Fatalf("the tokens are %T, want the hub service", d.Tokens)
 			}
 			d.NodeRows = rows
+			d.Nodes = rows
 			d.Clock = f.mux
 			d.Events = func(ctx context.Context) (<-chan envs.HealthEvent, func()) {
 				return f.events, func() {}
+			}
+			if o.deps != nil {
+				o.deps(d)
 			}
 		},
 	})

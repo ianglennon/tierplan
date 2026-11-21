@@ -249,24 +249,15 @@ func (r ClusterRead) ListsAnswerer(answeringNodeID string) bool {
 	return false
 }
 
-// Cluster reads the nodes, the services with their task counts and the tasks of
-// the agent service (found by its label, see isAgentService) from a swarm manager. It is read-only and has no
-// variant that changes anything. A worker, and a manager that has lost quorum,
-// answer with errors whose text carries the daemon's own message, which
-// envs.ReasonFor maps to not_a_manager and no_quorum.
-//
-// Nodes are sorted by hostname then ID and services by name then ID. The agent
-// tasks are reduced to the newest task of each node, which is its current one;
-// the rows are sorted by node ID.
-func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
-	cli := c.cur()
-	var out ClusterRead
-
-	ns, err := cli.NodeList(ctx, client.NodeListOptions{})
+// SwarmNodes lists the swarm's nodes from a manager, sorted by hostname then ID. It is the node half of Cluster and
+// reads nothing else, for a caller that needs only who is in the swarm. A worker, and a manager that has lost quorum,
+// answer with errors, as Cluster does.
+func (c *Client) SwarmNodes(ctx context.Context) ([]NodeRow, error) {
+	ns, err := c.cur().NodeList(ctx, client.NodeListOptions{})
 	if err != nil {
-		return ClusterRead{}, fmt.Errorf("list swarm nodes on %s: %w", c.t.Describe(), err)
+		return nil, fmt.Errorf("list swarm nodes on %s: %w", c.t.Describe(), err)
 	}
-	out.Nodes = make([]NodeRow, 0, len(ns.Items))
+	out := make([]NodeRow, 0, len(ns.Items))
 	for _, n := range ns.Items {
 		row := NodeRow{
 			ID: n.ID, Hostname: n.Description.Hostname, Role: string(n.Spec.Role),
@@ -281,11 +272,32 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 			row.Reachability = string(n.ManagerStatus.Reachability)
 			row.ManagerAddr = n.ManagerStatus.Addr
 		}
-		out.Nodes = append(out.Nodes, row)
+		out = append(out, row)
 	}
-	slices.SortFunc(out.Nodes, func(a, b NodeRow) int {
+	slices.SortFunc(out, func(a, b NodeRow) int {
 		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.ID, b.ID))
 	})
+	return out, nil
+}
+
+// Cluster reads the nodes, the services with their task counts and the tasks of
+// the agent service (found by its label, see isAgentService) from a swarm manager. It is read-only and has no
+// variant that changes anything. A worker, and a manager that has lost quorum,
+// answer with errors whose text carries the daemon's own message, which
+// envs.ReasonFor maps to not_a_manager and no_quorum.
+//
+// Nodes are sorted by hostname then ID and services by name then ID. The agent
+// tasks are reduced to the newest task of each node, which is its current one;
+// the rows are sorted by node ID.
+func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
+	cli := c.cur()
+	var out ClusterRead
+
+	nodes, err := c.SwarmNodes(ctx)
+	if err != nil {
+		return ClusterRead{}, err
+	}
+	out.Nodes = nodes
 
 	ss, err := cli.ServiceList(ctx, client.ServiceListOptions{Status: true})
 	if err != nil {

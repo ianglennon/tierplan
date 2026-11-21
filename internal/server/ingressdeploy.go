@@ -147,7 +147,7 @@ func (r ingressEnvReader) Info(ctx context.Context, envID string) (ingressdeploy
 		info.Swarm = in.Local.Probe.Type == dockerx.TypeSwarmManager
 		info.ManagerConnected = info.Swarm
 		if info.Swarm {
-			info.Nodes = []ingressdeploy.NodeInfo{{AgentID: envID, Name: in.Local.Probe.Hostname, Role: "manager", Connected: true}}
+			info.Nodes = []ingressdeploy.NodeInfo{{SwarmNodeID: in.Local.Probe.SwarmNodeID, AgentID: envID, Name: in.Local.Probe.Hostname, Role: "manager", Connected: true}}
 		}
 		return info, nil
 	}

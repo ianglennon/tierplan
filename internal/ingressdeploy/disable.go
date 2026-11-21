@@ -92,7 +92,8 @@ type DisableRemoves struct {
 	Service, Network string
 	// Secrets are the names of the join token secrets the swarm holds.
 	Secrets []string
-	// Volumes are the nodes whose certificate cache volume is wiped: every node of the environment.
+	// Volumes are the nodes whose certificate cache volume is wiped: every node of the swarm. A node no agent covers has an
+	// empty ID.
 	Volumes []NodeName
 }
 
@@ -165,6 +166,53 @@ func (s *Service) checkDisable(ctx context.Context, info EnvInfo, canView func(e
 	}}, nil
 }
 
+// wipeTargets is every node a switch-off must see to the certificate cache volume of: the nodes the environment's agents know,
+// then every node of the swarm's own node list that none of them covers, then every enrolled proxy node whose row is about to
+// be removed and that neither names (a node that left the swarm still holds the volume). A node that has no agent has an empty
+// AgentID, so wipeNode reports it unreachable and the caller queues it, keyed by its swarm node ID, until an agent for it
+// connects (WR-04). The swarm is read through a manager; when that read fails the nodes are not known and the error is returned.
+func (s *Service) wipeTargets(ctx context.Context, envID string, info EnvInfo) ([]NodeInfo, error) {
+	targets := slices.Clone(info.Nodes)
+	var rows []dockerx.NodeRow
+	if err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
+		rows, err = c.SwarmNodes(ctx)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	covered := func(id, hostname string) bool {
+		for _, n := range targets {
+			if n.SwarmNodeID == id || (n.SwarmNodeID == "" && hostname != "" && n.Name == hostname) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, r := range rows {
+		if covered(r.ID, r.Hostname) {
+			continue
+		}
+		name := r.Hostname
+		if name == "" {
+			name = r.ID
+		}
+		targets = append(targets, NodeInfo{SwarmNodeID: r.ID, Name: name, Role: r.Role})
+	}
+	if s.d.Nodes != nil {
+		enrolled, err := s.d.Nodes.ListNodes(ctx, envID)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range enrolled {
+			if n.Status != nodeActive || n.SwarmNodeID == "" || covered(n.SwarmNodeID, "") {
+				continue
+			}
+			targets = append(targets, NodeInfo{SwarmNodeID: n.SwarmNodeID, Name: n.Name})
+		}
+	}
+	return targets, nil
+}
+
 // PreviewDisable says what a switch-off would remove and what would stop it, and writes nothing. A standalone environment is
 // ErrStandaloneUnavailable. The swarm is read when a manager is connected; otherwise the preview lists the names it would try.
 func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func(envID string) bool) (DisablePreview, error) {
@@ -189,6 +237,15 @@ func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func
 	res.Removes.Service, res.Removes.Network = ingress.ServiceName, ingress.NetworkName
 	if !info.ManagerConnected {
 		return res, nil
+	}
+	// The swarm's own node list adds the nodes no agent covers; they are named as unreachable, as the job will queue them.
+	if targets, err := s.wipeTargets(ctx, envID, info); err != nil {
+		s.log().Warn("could not read the swarm's nodes for a switch-off preview", "environment", envID, "error", err)
+	} else {
+		for _, n := range targets[len(info.Nodes):] {
+			res.Removes.Volumes = append(res.Removes.Volumes, NodeName{ID: n.AgentID, Name: n.Name})
+			res.Unreachable = append(res.Unreachable, n.Name)
+		}
 	}
 	var l live
 	if err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
@@ -456,9 +513,9 @@ func (e *disableRun) service(ctx context.Context) error {
 	return nil
 }
 
-// volumes wipes the certificate cache volume on every node of the environment through that node's agent. A node whose
-// agent is not connected, or whose volume could not be removed, is queued as a pending wipe and named in the item's result
-// (D-27); a wipe queued by an earlier run that now succeeds is cleared.
+// volumes wipes the certificate cache volume on every node of the swarm through that node's agent. A node whose agent is not
+// connected, that has no agent, or whose volume could not be removed, is queued as a pending wipe and named in the item's
+// result (D-27); a wipe queued by an earlier run that now succeeds is cleared.
 func (e *disableRun) volumes(ctx context.Context) error {
 	s := e.s
 	pending, err := s.d.Store.PendingWipes(ctx, e.envID)
@@ -474,8 +531,18 @@ func (e *disableRun) volumes(ctx context.Context) error {
 	if err != nil {
 		return fail(CodeDisableVolumesFailed, err)
 	}
+	// The swarm's own node list too: a node no agent covers holds the volume all the same (WR-04). When the list cannot be read
+	// the nodes to wipe are not known, and the step fails rather than leave one out; the call is run again.
+	targets, err := s.wipeTargets(ctx, e.envID, info)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fail(CodeDisableVolumesFailed, err,
+			"The swarm's node list could not be read, so the nodes to wipe are not known. Switch ingress off again to continue.")
+	}
 	wiped, unreached := 0, []string{}
-	for _, n := range info.Nodes {
+	for _, n := range targets {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
