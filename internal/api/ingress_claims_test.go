@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -177,6 +178,28 @@ func TestIngressClaimsOnManualDeploy(t *testing.T) {
 		}
 	})
 
+	t.Run("a good deploy that declares no route releases the claims the stack held", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := newStack(t, admin, "claims-dropped")
+		f.deployGood(t, admin, st.ID, ingressCompose("dropped.apps.example.com"))
+		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"dropped.apps.example.com"}) {
+			t.Fatalf("claims = %v, want the host of the first revision", got)
+		}
+		released := claimAudits(t, f, "ingress.claim_replaced") + claimAudits(t, f, "ingress.claim_released")
+
+		f.deployGood(t, admin, st.ID, "services:\n  web:\n    image: nginx:1.27\n")
+
+		if got := claimsOf(t, f, e.ID, st.ID); len(got) != 0 {
+			t.Errorf("claims = %v, want none: the revision that runs declares no route", got)
+		}
+		if n := claimAudits(t, f, "ingress.claim_replaced") + claimAudits(t, f, "ingress.claim_released"); n != released+1 {
+			t.Errorf("claim audit rows = %d, want %d (the release is audited)", n, released+1)
+		}
+	})
+
 	t.Run("a name another stack took since the gate refuses the job", func(t *testing.T) {
 		t.Parallel()
 		const host = "race.apps.example.com"
@@ -232,6 +255,81 @@ func TestIngressClaimsOnManualDeploy(t *testing.T) {
 		}
 		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"stand.apps.example.com"}) {
 			t.Errorf("claims = %v, want the host of the deployed revision", got)
+		}
+	})
+}
+
+// brokenGoodStack is a stack that holds host and whose newest good revision no longer loads (a file compose-go now
+// rejects), so its last good routes cannot be read.
+func brokenGoodStack(t *testing.T, f *envFix, e envBody, admin *roleCaller, name, host string) stackAnswer {
+	t.Helper()
+	st := newStack(t, admin, name)
+	saveCompose(t, admin, st.ID, "services: [this is not a compose file", "[]")
+	ctx := testsupport.Context(t)
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+	rev, err := repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	decl := ingress.Declaration{Service: "web", Host: host, Label: "tierplan.ingress.host", Port: 80}
+	if _, err := f.stackDeps.Ingress.ReplaceStackRoutes(ctx, ingressstore.ReplaceInput{EnvID: e.ID, StackID: st.ID, Actor: "ada", Decls: []ingress.Declaration{decl}}); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// deployOverGood deploys compose over the stack's good revision, acknowledging that someone deployed since the draft was
+// started, and waits for the job to end.
+func deployOverGood(t *testing.T, f *envFix, c *roleCaller, stackID, compose string) jobAnswer {
+	t.Helper()
+	v := saveCompose(t, c, stackID, compose, "[]")
+	rec := c.deploy(stackID, `{"draftVersion":`+itoaT(v)+`,"acknowledgeConcurrent":true}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("deploy: %d %.300s", rec.Code, rec.Body)
+	}
+	return f.awaitDeploy(t, answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID)
+}
+
+// A last good revision that cannot be loaded must not decide what a deploy does with the claims the stack holds: a
+// failed deploy puts back what was held, and a good deploy that declares no route lets go of it (WR-10).
+func TestIngressClaimsWhenTheLastGoodRevisionDoesNotLoad(t *testing.T) {
+	t.Parallel()
+	const host = "running.apps.example.com"
+
+	t.Run("a failed deploy keeps the claims of the running stack", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the swarm rejected the service" })
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := brokenGoodStack(t, f, e, admin, "claims-broken-fails", host)
+
+		if job := deployOverGood(t, f, admin, st.ID, ingressCompose("other.apps.example.com")); job.State == "done" {
+			t.Fatalf("job = %+v, want it failed", job)
+		}
+
+		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{host}) {
+			t.Errorf("claims = %v, want the host the stack held before the deploy", got)
+		}
+	})
+
+	t.Run("a good deploy with no route releases the old claims", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := brokenGoodStack(t, f, e, admin, "claims-broken-drops", host)
+
+		if job := deployOverGood(t, f, admin, st.ID, "services:\n  web:\n    image: nginx:1.27\n"); job.State != "done" {
+			t.Fatalf("deploy = %+v, want it done", job)
+		}
+
+		if got := claimsOf(t, f, e.ID, st.ID); len(got) != 0 {
+			t.Errorf("claims = %v, want none: the revision that runs declares no route", got)
 		}
 	})
 }

@@ -207,6 +207,9 @@ type DeployResult struct {
 	// each local image.
 	Pins     map[string]Pin
 	Problems stacks.Problems
+	// ClaimsRevertFailed says the deploy failed and the hostname claims it had stored could not be put back, so they
+	// are still held (WR-11). It is not a failure code: the deploy's own Code stands.
+	ClaimsRevertFailed bool
 }
 
 // PinStore keeps the digests a stack ran with. Repo is the one implementation.
@@ -255,13 +258,16 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	// detail is the engine's own words about the failure, set by the step that has them before it
 	// fails; failWith puts them on the item that failed and in the output.
 	var detail string
-	// claimsWritten says this deploy stored the stack's claims, so a deploy that does not end well puts them back.
-	var claimsWritten bool
+	// claims says whether this deploy stored the stack's claims (and what the stack held before), so a deploy that does not
+	// end well puts them back.
+	var claims claimWrite
 	defer func() {
 		// The claims go back first, with the operation lock still held: a hostname only the failed revision asked for
 		// is free for the next deploy the moment the lock is let go (D-16, D-45).
-		if claimsWritten && !res.OK() {
-			d.revertClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
+		if claims.Written && !res.OK() {
+			if err := d.revertClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress.Actor, in.Ingress.CanView, claims.Prior); err != nil {
+				noteClaimsRevertFailed(&res, prog, &final)
+			}
 		}
 		if in.OnDone != nil {
 			in.OnDone(res)
@@ -428,15 +434,15 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	if ctx.Err() != nil {
 		return fail(ItemCheck, CodeCancelled, "")
 	}
-	written, refusal, cerr := d.writeClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
+	written, cerr := d.writeClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
 	switch {
 	case cerr != nil:
 		d.log().Error("a stack's hostname claims could not be stored before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", cerr)
 		return failWith(ItemCheck, CodePolicyUnavailable, "", "The hostnames of the stack could not be checked, so nothing was deployed.")
-	case refusal != "":
-		return failWith(ItemCheck, CodeIngressRefused, "", in.Masker.Mask(CodeMessage(CodeIngressRefused)+" "+refusal))
+	case written.Refused:
+		return failWith(ItemCheck, CodeIngressRefused, "", in.Masker.Mask(CodeMessage(CodeIngressRefused)+" "+written.Reason))
 	}
-	claimsWritten = written
+	claims = written
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
 	// 2. Look up images: decide which image each service is sent with. A service that runs the

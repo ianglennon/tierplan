@@ -1308,6 +1308,10 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	if resultWord == "cancelled" && cancelledBy != "" {
 		details["cancelledBy"] = cancelledBy
 	}
+	// A failed deploy whose hostname claims could not be put back says so: the names stay held (WR-11).
+	if res.ClaimsRevertFailed {
+		details["claimsRevert"] = "failed"
+	}
 	if rev.RestoredFrom > 0 {
 		details["restoredFrom"] = itoa(rev.RestoredFrom)
 	}

@@ -68,43 +68,57 @@ func ingressCanView(ctx context.Context, checker *rbac.Checker, p *rbac.Principa
 
 // claimWriteFor is the claim write a deploy of stack st carries (D-15, D-16, D-17): the routes of the revision it
 // deploys (project, loaded for that revision; nil means the routes are unchanged, as an Update images is, and the last
-// good revision's stand) and, for a deploy that fails, the routes of the last good revision to put back. p is who
-// acts; viewer is who a refusal may be worded for (nil for an automatic deploy, whose refusal is read by every viewer
-// of the environment, so it names only the stack's own environment, D-20). The answer is nil when the server has no
-// ingress store, and also when neither the deployed revision nor the last good one declares a route (the stack holds no
-// claim, so there is nothing to write or put back). It must be called holding the environment's operation lock and before the new revision exists, so
-// the last good revision it reads is the one that runs.
+// good revision's stand). What a failed deploy puts back is not decided here: the deploy reads what the stack holds
+// just before it writes and restores exactly that. p is who acts; viewer is who a refusal may be worded for (nil for an
+// automatic deploy, whose refusal is read by every viewer of the environment, so it names only the stack's own
+// environment, D-20). The answer is nil when the server has no ingress store, and also when the stack declares no route
+// and holds no claim (so there is nothing to write or put back). A revision that declares no route still carries a write
+// when the stack holds claims: a good deploy then releases them. It must be called holding the environment's operation
+// lock and before the new revision exists.
 //
-// A last good revision that cannot be read or loaded is treated as none (a failed deploy then releases every claim)
-// and logged: it must never stop the deploy that would replace it.
+// An Update images keeps the last good revision's routes; when that revision cannot be read or loaded the claims are left
+// as they are and the problem is logged, because a deploy must never be stopped by it, nor release names it cannot judge.
 func claimWriteFor(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal, st stackops.Stack, project *types.Project) (*stackops.ClaimWrite, error) {
 	if d.Ingress == nil {
 		return nil, nil
 	}
-	restore, hasGood, err := stackops.LastGoodDeclarations(ctx, d.repo(), st)
-	if err != nil {
-		lg := d.Log
-		if lg == nil {
-			lg = slog.Default()
-		}
-		lg.WarnContext(ctx, "the hostname claims of a stack's last good revision could not be read; a failed deploy releases them all",
-			"env", st.EnvID, "stack", st.ID, "error", err)
-		restore, hasGood = nil, false
+	lg := d.Log
+	if lg == nil {
+		lg = slog.Default()
 	}
-	decls := restore
+	var decls []ingress.Declaration
 	if project != nil {
 		decls = stacks.IngressDeclarations(project, st.Target)
+	} else {
+		good, _, err := stackops.LastGoodDeclarations(ctx, d.repo(), st)
+		if err != nil {
+			lg.WarnContext(ctx, "the hostname claims of a stack's last good revision could not be read; its claims are left as they are",
+				"env", st.EnvID, "stack", st.ID, "error", err)
+			return nil, nil
+		}
+		decls = good
 	}
-	// A stack that declares no route and whose last good revision declared none holds no claim, so its deploy has nothing to
-	// write and never needs the ingress store: a stack with no ingress label is not refused because that store cannot be read.
-	if len(decls) == 0 && len(restore) == 0 {
-		return nil, nil
+	// A stack that declares no route and holds no claim has nothing to write, so its deploy never needs the ingress store: a
+	// stack with no ingress label is not refused because that store cannot be read.
+	if len(decls) == 0 {
+		if project == nil {
+			return nil, nil
+		}
+		held, err := d.ingressOps().HeldRoutes(ctx, st.EnvID, st.ID)
+		if err != nil {
+			lg.WarnContext(ctx, "the claims a stack holds could not be read; a deploy with no route leaves them as they are",
+				"env", st.EnvID, "stack", st.ID, "error", err)
+			return nil, nil
+		}
+		if len(held) == 0 {
+			return nil, nil
+		}
 	}
 	canView, err := ingressCanView(ctx, d.Checker, viewer, st.EnvID)
 	if err != nil {
 		return nil, err
 	}
-	return &stackops.ClaimWrite{Decls: decls, Restore: restore, HasGood: hasGood, Actor: claimActorOf(p), CanView: canView}, nil
+	return &stackops.ClaimWrite{Decls: decls, Actor: claimActorOf(p), CanView: canView}, nil
 }
 
 // claimActorOf is who a claim write is audited as: the principal's audit actor, with its ID and display name, and the

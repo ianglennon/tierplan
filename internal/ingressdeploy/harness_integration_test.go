@@ -688,14 +688,10 @@ func (e *swarmEnv) deployStack(name, compose string) (*stack, stackops.DeployRes
 	if err != nil {
 		t.Fatalf("the stack is not deployable: %v", err)
 	}
-	restore, hasGood, err := stackops.LastGoodDeclarations(ctx, e.repo, st)
-	if err != nil {
-		t.Fatalf("LastGoodDeclarations: %v", err)
-	}
 	in := stackops.SwarmDeployInput{
 		EnvID: e.envID, Stack: st, Project: loaded.Project, Files: stacks.NewFileSet(copy.Files), Vars: map[string]string{}, Copy: copy,
 		Caller: e.rootCaller(), Pins: e.repo, RevisionID: rev.ID,
-		Ingress: &stackops.ClaimWrite{Decls: stacks.IngressDeclarations(loaded.Project, stacks.TargetSwarm), Restore: restore, HasGood: hasGood, Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}},
+		Ingress: &stackops.ClaimWrite{Decls: stacks.IngressDeclarations(loaded.Project, stacks.TargetSwarm), Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}},
 	}
 	var res stackops.DeployResult
 	done := make(chan struct{})

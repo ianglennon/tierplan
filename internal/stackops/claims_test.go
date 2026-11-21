@@ -36,6 +36,10 @@ type claimOps struct {
 	mu      sync.Mutex
 	stackID string
 	after   func()
+	// failWith, when set, is what every later ReplaceStackRoutes and ReleaseStack of stackID answers.
+	failWith error
+	// refuseWith, when set, is what every ReplaceStackRoutes answers, as a refusal by the store.
+	refuseWith error
 }
 
 func (o *claimOps) AttachFor(context.Context, string, stacks.Target) (*stacks.IngressAttach, error) {
@@ -47,6 +51,16 @@ func (o *claimOps) World(ctx context.Context, envID string, canView func(string)
 }
 
 func (o *claimOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput, _ audit.Actor) (ingress.Plan, error) {
+	o.mu.Lock()
+	failing := o.failWith != nil && in.StackID == o.stackID
+	refuse := o.refuseWith
+	o.mu.Unlock()
+	if failing {
+		return ingress.Plan{}, o.failWith
+	}
+	if refuse != nil {
+		return ingress.Plan{}, refuse
+	}
 	plan, err := o.st.ReplaceStackRoutes(ctx, in)
 	if err != nil {
 		return plan, err
@@ -64,6 +78,12 @@ func (o *claimOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.Repla
 }
 
 func (o *claimOps) ReleaseStack(ctx context.Context, envID, stackID string, actor audit.Actor) error {
+	o.mu.Lock()
+	failing := o.failWith != nil && stackID == o.stackID
+	o.mu.Unlock()
+	if failing {
+		return o.failWith
+	}
 	return o.st.ReleaseStack(ctx, envID, stackID, actor.ID, nil)
 }
 
@@ -203,15 +223,11 @@ func (f *claimFix) claim(t *testing.T, st stackops.Stack, decls []ingress.Declar
 	}
 }
 
-// write is the ClaimWrite of a deploy of compose for st, with the last good revision read as the API reads it.
+// write is the ClaimWrite of a deploy of compose for st.
 func (f *claimFix) write(t *testing.T, st stackops.Stack, compose string, files ...stacks.File) *stackops.ClaimWrite {
 	t.Helper()
-	restore, hasGood, err := stackops.LastGoodDeclarations(testsupport.Context(t), f.repo, st)
-	if err != nil {
-		t.Fatalf("LastGoodDeclarations: %v", err)
-	}
 	return &stackops.ClaimWrite{
-		Decls: declsOf(t, compose, st.Target, files...), Restore: restore, HasGood: hasGood, Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"},
+		Decls: declsOf(t, compose, st.Target, files...), Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"},
 	}
 }
 
@@ -424,9 +440,7 @@ func TestClaimsReleasedOnFailedFirstDeploy(t *testing.T) {
 	f := newClaimFix(t, false, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the swarm rejected the service" })
 	st := f.newStack(t, "web", stacks.TargetSwarm, routed("b.example.com"))
 	in := f.swarmInput(t, st, routed("b.example.com"))
-	if in.Ingress.HasGood {
-		t.Fatal("the stack has no good revision yet")
-	}
+	wantHeld(t, f, st) // the stack holds nothing yet, so a failed deploy has nothing to put back
 
 	res, _ := f.rig.deploy(t, in)
 
@@ -653,5 +667,98 @@ func TestUnchangedClaimsNotifyNobody(t *testing.T) {
 	}
 	if pending := sub.Pending(); len(pending) != 0 {
 		t.Errorf("notified %v, want nobody told", pending)
+	}
+}
+
+// brokenGood makes the stack's newest good revision one that does not load, with the claims its deploy stored.
+func (f *claimFix) brokenGood(t *testing.T, st stackops.Stack, held string) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	snap, err := f.repo.NewRevision(ctx, st.ID, "user:test", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatalf("NewRevision: %v", err)
+	}
+	if err := f.repo.SetOutcome(ctx, snap.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatalf("SetOutcome: %v", err)
+	}
+	f.claim(t, st, declsOf(t, routed(held), st.Target))
+}
+
+// A failed deploy puts back what the stack held before it, not what its last good revision declares, so a last good
+// revision that no longer loads cannot make it release the names of a stack that is still running (WR-10).
+func TestFailedDeployKeepsClaimsWhenLastGoodDoesNotLoad(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, false, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the swarm rejected the service" })
+	st := f.newStack(t, "web", stacks.TargetSwarm, "services: [this is not a compose file")
+	f.brokenGood(t, st, "a.example.com")
+	if _, _, err := stackops.LastGoodDeclarations(testsupport.Context(t), f.repo, st); err == nil {
+		t.Fatal("the last good revision loads, so this test proves nothing")
+	}
+	wantHeld(t, f, st, "a.example.com")
+
+	res, _ := f.rig.deploy(t, f.swarmInput(t, st, routed("b.example.com")))
+
+	if res.OK() || res.Code != stackops.CodeServiceRejected {
+		t.Fatalf("result = %+v, want the service rejected", res)
+	}
+	wantHeld(t, f, st, "a.example.com")
+	if res.ClaimsRevertFailed {
+		t.Error("the revert worked, so the deploy must not say it failed")
+	}
+}
+
+// A revert that fails is on the job: its output says so, its last item carries the mark, and the deploy's own
+// failure code stands (WR-11).
+func TestFailedClaimRevertIsOnTheJob(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, false, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the swarm rejected the service" })
+	st := f.newStack(t, "web", stacks.TargetSwarm, routed("a.example.com"))
+	f.makeGood(t, st)
+	f.ops.mu.Lock()
+	f.ops.stackID = st.ID
+	f.ops.after = func() {
+		f.ops.mu.Lock()
+		f.ops.failWith = errors.New("database is locked")
+		f.ops.mu.Unlock()
+	}
+	f.ops.mu.Unlock()
+
+	res, job := f.rig.deploy(t, f.swarmInput(t, st, routed("b.example.com")))
+
+	if res.OK() || res.Code != stackops.CodeServiceRejected || !res.ClaimsRevertFailed {
+		t.Fatalf("result = %+v, want the service rejected, with the claims revert marked as failed", res)
+	}
+	lines, _ := f.rig.hub.Output(job.ID)
+	if !strings.Contains(outputText(lines), stackops.ClaimsRevertFailedNote) {
+		t.Errorf("output = %q, want the sentence that the claims were not put back", outputText(lines))
+	}
+	if got := itemByID(t, job, stackops.ItemCleanup).Result["claimsRevert"]; got != "failed" {
+		t.Errorf("last item result = %v, want claimsRevert=failed", itemByID(t, job, stackops.ItemCleanup).Result)
+	}
+	if !strings.Contains(f.logs.String(), "could not put a stack's hostname claims back") {
+		t.Errorf("log = %q, want the failure logged as before", f.logs.String())
+	}
+}
+
+// A claim the store refuses with no sentence still refuses the deploy: an empty reason is a refusal, not a success
+// (IN-06).
+func TestRefusalWithNoSentenceStillRefuses(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, false, nil)
+	f.ops.mu.Lock()
+	f.ops.refuseWith = &ingressstore.RefusedError{Problems: []ingress.Problem{{Severity: ingress.SeverityError}}}
+	f.ops.mu.Unlock()
+	st := f.newStack(t, "web", stacks.TargetSwarm, routed("a.example.com"))
+
+	res, job := f.rig.deploy(t, f.swarmInput(t, st, routed("a.example.com")))
+
+	if res.OK() || res.Code != stackops.CodeIngressRefused {
+		t.Fatalf("result = %+v, want ingress_refused", res)
+	}
+	if w := f.rig.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, a refused claim must leave the engine alone", w)
+	}
+	if msg := itemByID(t, job, stackops.ItemCheck).Message; !strings.HasPrefix(msg, stackops.CodeMessage(stackops.CodeIngressRefused)) || strings.TrimSpace(strings.TrimPrefix(msg, stackops.CodeMessage(stackops.CodeIngressRefused))) == "" {
+		t.Errorf("check message = %q, want a reason after the sentence of the code", msg)
 	}
 }

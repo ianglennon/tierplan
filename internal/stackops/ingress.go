@@ -71,10 +71,8 @@ func (d Deps) attachFor(ctx context.Context, envID string, t stacks.Target) (*st
 type ClaimWrite struct {
 	// Decls are the routes of the revision being deployed.
 	Decls []ingress.Declaration
-	// Restore are the routes of the stack's last good revision. HasGood false means the stack has no good revision
-	// (a first deploy): a failed deploy then releases every claim.
-	Restore []ingress.Declaration
-	HasGood bool
+	// What a failed deploy puts back is not here: the deploy reads what the stack holds just before it writes, and
+	// restores exactly that (WR-10), so an unloadable last good revision cannot make it release a running stack's names.
 	// Actor is who the write is audited as: the person with their ID and display name, or a system actor
 	// ("system:...") for a deploy nobody started.
 	Actor audit.Actor

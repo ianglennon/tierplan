@@ -131,12 +131,15 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	var events *composeEvents
 	// cleanup, once the SDK's up has begun, removes what it left behind when the deploy stops.
 	var cleanup func()
-	// claimsWritten says this deploy stored the stack's claims, so a deploy that does not end well puts them back.
-	var claimsWritten bool
+	// claims says whether this deploy stored the stack's claims (and what the stack held before), so a deploy that does not
+	// end well puts them back.
+	var claims claimWrite
 	defer func() {
 		// First, with the operation lock still held: a hostname only the failed revision asked for is free at once (D-16).
-		if claimsWritten && !res.OK() {
-			d.revertClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
+		if claims.Written && !res.OK() {
+			if err := d.revertClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress.Actor, in.Ingress.CanView, claims.Prior); err != nil {
+				noteClaimsRevertFailed(&res, prog, &final)
+			}
 		}
 		if in.OnDone != nil {
 			in.OnDone(res)
@@ -288,15 +291,15 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	if ctx.Err() != nil {
 		return fail(ItemCheck, CodeCancelled, "")
 	}
-	written, refusal, cerr := d.writeClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
+	written, cerr := d.writeClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
 	switch {
 	case cerr != nil:
 		d.log().Error("a stack's hostname claims could not be stored before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", cerr)
 		return failWith(ItemCheck, CodePolicyUnavailable, "", "The hostnames of the stack could not be checked, so nothing was deployed.")
-	case refusal != "":
-		return failWith(ItemCheck, CodeIngressRefused, "", in.Masker.Mask(CodeMessage(CodeIngressRefused)+" "+refusal))
+	case written.Refused:
+		return failWith(ItemCheck, CodeIngressRefused, "", in.Masker.Mask(CodeMessage(CodeIngressRefused)+" "+written.Reason))
 	}
-	claimsWritten = written
+	claims = written
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
 	// 2. Look up images: decide which image each service is sent with (D-15, D-17). A service that runs the
