@@ -262,6 +262,65 @@ func TestCreateServiceRefusesComponentLabel(t *testing.T) {
 	}
 }
 
+// A staged secret or config, and the spec of an apply, may not set the component label either (D-41): the
+// refusal comes before anything is created.
+func TestApplyAndCreateRefuseTheComponentLabelOnStagedObjectsAndTheApplySpec(t *testing.T) {
+	t.Parallel()
+	labelled := map[string]string{ingress.LabelComponent: ingress.ComponentIngress, "team": "core"}
+	stagedWith := func(kind string) []map[string]any {
+		return []map[string]any{{"kind": kind, "name": "tierplan-ingress-token-x", "data": b64(stagedValue), "labels": labelled}}
+	}
+	for name, run := range map[string]func(t *testing.T) *envRec{
+		"apply, secret": func(t *testing.T) *envRec { return applyStaged(t, stagedWith("secret"), nil) },
+		"apply, config": func(t *testing.T) *envRec { return applyStaged(t, stagedWith("config"), nil) },
+		"apply, spec label on the service": func(t *testing.T) *envRec {
+			return applyStaged(t, nil, func(spec map[string]any) { spec["Labels"] = map[string]any{ingress.LabelComponent: "x"} })
+		},
+		"apply, spec label on the container": func(t *testing.T) *envRec {
+			return applyStaged(t, nil, func(spec map[string]any) {
+				containerSpecOf(spec)["Labels"] = map[string]any{ingress.LabelComponent: "x"}
+			})
+		},
+		"create, secret": func(t *testing.T) *envRec {
+			f, e := actionsEnv(t, nil, loneService())
+			rec := f.req(t, http.MethodPost, "/api/env/"+e.ID+"/services", chatBody(t, nil, stagedWith("secret")))
+			noWrites(t, f, rec)
+			return rec
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec := run(t)
+			if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "ingress_component_label" {
+				t.Fatalf("= %d %s (%s), want 422 ingress_component_label", rec.code, rec.body, rec.ptyp)
+			}
+			noStagedValue(t, "the problem", string(rec.body))
+		})
+	}
+}
+
+func noWrites(t *testing.T, f *envFix, _ *envRec) {
+	t.Helper()
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want nothing created", w)
+	}
+}
+
+// applyStaged applies an edit of svc-api with objects staged and the spec mutated, and fails the test if
+// anything was written to the engine.
+func applyStaged(t *testing.T, objects []map[string]any, mut func(map[string]any)) *envRec {
+	t.Helper()
+	f, e := actionsEnv(t, nil, editableService(nil))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", mut)
+	if objects != nil {
+		body = withObjects(t, body, objects)
+	}
+	rec := admin.apply("svc-api", body)
+	noWrites(t, f, nil)
+	return &envRec{code: rec.Code, body: rec.Body.Bytes(), ptyp: problemType(t, rec)}
+}
+
 // list reads the services list into its items by name.
 func (f *envFix) list(t *testing.T, e envBody) map[string]ingressFlagItem {
 	t.Helper()

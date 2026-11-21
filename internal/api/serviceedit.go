@@ -258,6 +258,7 @@ func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
 			"A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. " +
 			"Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. " + problems +
 			"No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. " +
+			"A spec that sets the label tierplan.component, on the service or on its container, and a staged secret or config that sets it, are refused 422 ingress_component_label before anything is created: the label is TierPlan's own for its ingress objects. " +
 			"Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusAccepted, MaxBodyBytes: maxApplyBody,
 	}, rbac.Requirement{Perm: rbac.PermServicesControl, Scope: rbac.ScopeEnvironment},
@@ -286,6 +287,9 @@ func swarmopsDeps(d ServicesDeps) swarmops.Deps {
 // reviewServiceUpdate judges a spec inside one cluster read: it only reads, so a read that has to be
 // run again on another manager is safe.
 func reviewServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceEditInput) (ServiceReviewBody, error) {
+	if _, sets := specSetsComponentLabel(in.Body.Spec); sets {
+		return ServiceReviewBody{}, componentLabelError()
+	}
 	if err := requireSwarm(ctx, d, envID); err != nil {
 		return ServiceReviewBody{}, err
 	}
@@ -392,12 +396,17 @@ func stagedObjects(in []ServiceStagedObject) ([]swarmops.StagedObject, error) {
 				so.Subnet, so.CreateAnyway = o.Subnet, o.CreateAnyway
 			}
 		case swarmops.KindSecret:
-			if so.Data, err = decodeSecretValue(o.Data); err == nil {
+			// The component label is TierPlan's own for its ingress objects, as on the secrets route (D-41).
+			if hasComponentLabel(o.Labels) {
+				err = componentLabelError()
+			} else if so.Data, err = decodeSecretValue(o.Data); err == nil {
 				err = validateSecretLabels(o.Labels)
 			}
 			so.Labels = o.Labels
 		case swarmops.KindConfig:
-			if so.Templating, _, err = configTemplating(o.Templating); err == nil {
+			if hasComponentLabel(o.Labels) {
+				err = componentLabelError()
+			} else if so.Templating, _, err = configTemplating(o.Templating); err == nil {
 				if so.Data, err = decodeConfigValue(o.Data); err == nil {
 					err = validateSecretLabels(o.Labels)
 				}
@@ -489,6 +498,10 @@ func applyDeps(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, us
 // applyServiceUpdate sends a spec once. The write is sent and seen through, so a browser that goes
 // away while it runs does not turn an update that happened into a failure.
 func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceApplyInput) (ServiceApplyBody, error) {
+	if _, sets := specSetsComponentLabel(in.Body.Spec); sets {
+		// Refused before anything is read, staged or sent, like a create (D-41).
+		return ServiceApplyBody{}, componentLabelError()
+	}
 	objects, err := stagedObjects(in.Body.Objects)
 	if err != nil {
 		return ServiceApplyBody{}, err
