@@ -1274,7 +1274,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The ingress deployer shares the stack routes' operation lock and the job hub, so an enable and a stack operation exclude
 	// each other. Its stack side lists the stacks to redeploy.
 	ingressDeploy := newIngressDeploy(ingressDeployDeps{
-		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc, Hub: ingressHub,
+		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc, Hub: ingressHub, Broker: broker,
 		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
 		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
 		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead),
@@ -1504,6 +1504,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { ingressRecon.Run(bg) })
 	// The ensure loop keeps the switched-on ingress objects as this server wants them; a restored install is paused until an Admin resumes.
 	srv.background.Go(func() { ingressDeploy.Run(bg) })
+	// A node that was away when ingress was switched off has its certificate cache wiped as soon as its agent connects.
+	srv.background.Go(func() { ingressDeploy.RunWipes(bg) })
 	// The ingress hub pushes each environment's changed bundle to its nodes until the server stops.
 	srv.background.Go(func() { ingressHub.Run(bg) })
 	// The header is decided once before anything is served, then again on every certificate install

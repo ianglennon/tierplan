@@ -371,3 +371,40 @@ func TestDeleteIngressNodesByEnv(t *testing.T) {
 		t.Fatalf("a second delete = %d rows, %v; want none", len(again), err)
 	}
 }
+
+// TestQueueAndCompleteWipeRunTheirHookInTheTransaction: the hook of a queued wipe commits with the wipe and a hook that fails
+// takes the wipe with it; completing a wipe runs its hook only when there was a wipe to complete.
+func TestQueueAndCompleteWipeRunTheirHookInTheTransaction(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	boom := errors.New("the audit row could not be written")
+
+	hooked := 0
+	count := func(context.Context, *sql.Tx) error { hooked++; return nil }
+	if err := s.QueueWipe(ctx, "env-a", "node-1", ingress.VolumeName, fixedNow, func(context.Context, *sql.Tx) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("QueueWipe with a failing hook = %v, want the hook's error", err)
+	}
+	if got, _ := s.PendingWipes(ctx, "env-a"); len(got) != 0 {
+		t.Fatalf("a wipe whose hook failed was queued: %+v", got)
+	}
+	if err := s.QueueWipe(ctx, "env-a", "node-1", ingress.VolumeName, fixedNow, count); err != nil || hooked != 1 {
+		t.Fatalf("QueueWipe = %v with %d hook runs, want one", err, hooked)
+	}
+	if got, _ := s.PendingWipes(ctx, "env-a"); len(got) != 1 {
+		t.Fatalf("PendingWipes = %+v, want the queued wipe", got)
+	}
+
+	if _, err := s.CompleteWipe(ctx, "env-a", "node-1", ingress.VolumeName, func(context.Context, *sql.Tx) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("CompleteWipe with a failing hook = %v, want the hook's error", err)
+	}
+	if got, _ := s.PendingWipes(ctx, "env-a"); len(got) != 1 {
+		t.Fatalf("a completion whose hook failed cleared the wipe: %+v", got)
+	}
+	if ok, err := s.CompleteWipe(ctx, "env-a", "node-1", ingress.VolumeName, count); err != nil || !ok || hooked != 2 {
+		t.Fatalf("CompleteWipe = %v, %v with %d hook runs, want true and a second run", ok, err, hooked)
+	}
+	if ok, err := s.CompleteWipe(ctx, "env-a", "node-1", ingress.VolumeName, count); err != nil || ok || hooked != 2 {
+		t.Fatalf("a second CompleteWipe = %v, %v with %d hook runs, want false and no hook", ok, err, hooked)
+	}
+}

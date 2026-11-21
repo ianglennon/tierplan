@@ -6,12 +6,20 @@ package ingressdeploy
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stackops"
 )
+
+// WipeTick is how often RunWipes takes a pass on its own, on the injected clock. An agent that connects takes one sooner.
+const WipeTick = time.Minute
+
+// wipeHolder says who holds the operation lock while a pass wipes the volumes of one environment.
+const wipeHolder = "system:ingress-wipe"
 
 // wipeOutcome is how one node's cache volume wipe ended.
 type wipeOutcome int
@@ -130,6 +138,138 @@ func (s *Service) queueWipe(ctx context.Context, actor audit.Actor, envID string
 	}
 	queued[key] = true
 	return nil
+}
+
+// RunWipes runs the pending wipes until ctx ends: a pass now, one on every WipeTick of the injected clock and one whenever
+// an agent connects (the Deps.Events stream), because a node that was away at the switch is wiped as soon as it is back. A
+// pass never writes while the environment is paused or its operation lock is held, never wipes a node that runs an ingress
+// container, and drops, without wiping, the entries of an environment whose ingress is on again.
+func (s *Service) RunWipes(ctx context.Context) {
+	var events <-chan envs.HealthEvent
+	if s.d.Events != nil {
+		ch, cancel := s.d.Events(ctx)
+		defer cancel()
+		events = ch
+	}
+	for {
+		s.wipeRound(ctx)
+		timer := s.d.Clock.After(WipeTick)
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer:
+				break wait
+			case ev, ok := <-events:
+				switch {
+				case !ok:
+					// The broker dropped a subscriber that fell behind; the tick still takes the passes.
+					s.log().Warn("the ingress wipe loop lost the agent event stream; it runs on its tick")
+					events = nil
+				case ev.Type == envs.EventAgentConnected:
+					s.wipeRound(ctx)
+				}
+			}
+		}
+	}
+}
+
+// wipeRound takes one pass over every environment that has a pending wipe.
+func (s *Service) wipeRound(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	all, err := s.d.Store.AllPendingWipes(ctx)
+	if err != nil {
+		s.log().Warn("the ingress wipe loop could not list the pending wipes", "error", err)
+		return
+	}
+	var order []string
+	for _, w := range all {
+		if len(order) == 0 || order[len(order)-1] != w.EnvID {
+			order = append(order, w.EnvID)
+		}
+	}
+	for _, envID := range order {
+		if ctx.Err() != nil {
+			return
+		}
+		s.wipeEnv(ctx, envID)
+	}
+	if s.wipeHook != nil {
+		s.wipeHook()
+	}
+}
+
+// wipeEnv takes one environment's pending wipes.
+func (s *Service) wipeEnv(ctx context.Context, envID string) {
+	state, err := s.d.Store.DeployState(ctx, envID)
+	if err != nil {
+		s.log().Warn("the ingress wipe loop could not read an environment's state", "environment", envID, "error", err)
+		return
+	}
+	if state.Paused {
+		return
+	}
+	release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
+		Kind: stackops.HolderKindIngress, By: wipeHolder, Workload: "ingress", Started: s.d.Clock.Now(),
+	})
+	if !ok {
+		s.log().Debug("the ingress wipe loop left an environment for the next pass: it is busy", "environment", envID, "holder", held.Kind)
+		return
+	}
+	defer release()
+	// The state is read again under the lock, which an enable and a disable also hold while they switch.
+	if state, err = s.d.Store.DeployState(ctx, envID); err != nil || state.Paused {
+		return
+	}
+	pending, err := s.d.Store.PendingWipes(ctx, envID)
+	if err != nil {
+		s.log().Warn("the ingress wipe loop could not list an environment's pending wipes", "environment", envID, "error", err)
+		return
+	}
+	if state.Enabled {
+		// Ingress is on again, so the proxy owns the volume: nothing is wiped and the entries are of no use.
+		for _, w := range pending {
+			if _, err := s.d.Store.ClearPendingWipe(ctx, envID, w.SwarmNodeID, w.Volume); err != nil {
+				s.log().Warn("the ingress wipe loop could not drop a pending wipe", "environment", envID, "error", err)
+			}
+		}
+		return
+	}
+	info, err := s.d.Envs.Info(ctx, envID)
+	if err != nil {
+		s.log().Warn("the ingress wipe loop could not read an environment", "environment", envID, "error", err)
+		return
+	}
+	for _, w := range pending {
+		node, found := nodeByKey(info.Nodes, w.SwarmNodeID)
+		if !found || !node.Connected {
+			continue
+		}
+		out, err := s.wipeNode(ctx, envID, node, false)
+		if err != nil {
+			s.log().Warn("the ingress wipe loop could not wipe a node's cache volume", "environment", envID, "node", node.Name, "error", err)
+			continue
+		}
+		if out != wipeDone {
+			continue
+		}
+		if err := s.clearWipe(ctx, audit.SystemIngress, envID, node, w.SwarmNodeID); err != nil {
+			s.log().Warn("the ingress wipe loop could not record a wipe", "environment", envID, "node", node.Name, "error", err)
+		}
+	}
+}
+
+// nodeByKey finds the node a pending wipe was queued under.
+func nodeByKey(nodes []NodeInfo, key string) (NodeInfo, bool) {
+	for _, n := range nodes {
+		if pendingKey(n) == key {
+			return n, true
+		}
+	}
+	return NodeInfo{}, false
 }
 
 // clearWipe takes a done wipe off the queue and records ingress.wipe_done in the same transaction. A wipe that was not

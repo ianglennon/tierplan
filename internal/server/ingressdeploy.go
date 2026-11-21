@@ -39,8 +39,10 @@ type ingressDeployDeps struct {
 	Notifier *ingress.Notifier
 	Tokens   *ingresshub.Service
 	// Hub closes an environment's proxy sessions when its ingress is switched off.
-	Hub  *ingresshub.Hub
-	Jobs *jobs.Hub
+	Hub *ingresshub.Hub
+	// Broker's agent.connected events wake the loop that wipes the certificate cache of a node that was away at the switch-off.
+	Broker *envs.Broker
+	Jobs   *jobs.Hub
 	// Locks is the operation lock the stack routes use, so a stack operation and an ingress job exclude each other.
 	Locks         *stackops.Locks
 	Resolver      *registry.Resolver
@@ -61,6 +63,14 @@ type ingressDeployDeps struct {
 // newIngressDeploy builds the deployer from the server's parts. A nil Stacks leaves the deployer listing no stacks to
 // redeploy.
 func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
+	var events func(ctx context.Context) (<-chan envs.HealthEvent, func())
+	if d.Broker != nil {
+		events = func(ctx context.Context) (<-chan envs.HealthEvent, func()) {
+			// Only what happens from now on wakes the loop; the loop's first pass reads the whole queue anyway.
+			_, ch, cancel := d.Broker.Subscribe(ctx)
+			return ch, cancel
+		}
+	}
 	return ingressdeploy.New(ingressdeploy.Deps{
 		Engine:        ingressEngine{agg: d.Aggregator, clusters: d.Clusters},
 		Envs:          ingressEnvReader{st: d.Store, svc: d.Envs},
@@ -69,6 +79,7 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Tokens:        d.Tokens,
 		NodeRows:      d.Tokens,
 		Kicker:        d.Hub,
+		Events:        events,
 		Nodes:         d.Tokens,
 		Stacks:        d.Stacks,
 		CurrentBundle: d.CurrentBundle,

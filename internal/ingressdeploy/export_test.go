@@ -20,3 +20,9 @@ func (s *Service) WakePending() bool {
 		return false
 	}
 }
+
+// SetWipeHook sets a function RunWipes calls after every pass that found pending wipes, so a test waits on a signal.
+func (s *Service) SetWipeHook(fn func()) { s.wipeHook = fn }
+
+// WipeRound takes one pass of the wipe loop and returns when it is done.
+func (s *Service) WipeRound(ctx context.Context) { s.wipeRound(ctx) }

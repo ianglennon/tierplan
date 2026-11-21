@@ -180,6 +180,8 @@ type Service struct {
 	wake chan struct{}
 	// roundHook, when set, is called after every round of the ensure loop. Only a test sets it (export_test.go).
 	roundHook func()
+	// wipeHook, when set, is called after every pass of the wipe loop. Only a test sets it (export_test.go).
+	wipeHook func()
 }
 
 // New builds the deployer.

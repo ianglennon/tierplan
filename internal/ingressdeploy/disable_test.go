@@ -67,6 +67,28 @@ func (c *steppingClock) waited() int {
 	return c.waits
 }
 
+// muxClock is the clock of a deployer under test: it answers as the clock a test last chose, so a test that switches off with a
+// stepping clock can then run the wipe loop on a clock it fires by hand.
+type muxClock struct {
+	mu  sync.Mutex
+	cur stackops.Clock
+}
+
+func (m *muxClock) set(c stackops.Clock) {
+	m.mu.Lock()
+	m.cur = c
+	m.mu.Unlock()
+}
+
+func (m *muxClock) get() stackops.Clock {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cur
+}
+
+func (m *muxClock) Now() time.Time                         { return m.get().Now() }
+func (m *muxClock) After(d time.Duration) <-chan time.Time { return m.get().After(d) }
+
 // kickRecorder records every KickEnv and what the swarm and the environment looked like at that instant.
 type kickRecorder struct {
 	mu    sync.Mutex
@@ -140,6 +162,7 @@ func proxyTask() swarm.Task {
 type disableFix struct {
 	*rig
 	clock  *steppingClock
+	mux    *muxClock
 	eng    *volEngine
 	kicker *kickRecorder
 	// base is the fake manager's configuration, so a test can reconfigure it.
@@ -161,6 +184,7 @@ type disableOpts struct {
 func newDisableFix(t *testing.T, o disableOpts) *disableFix {
 	t.Helper()
 	f := &disableFix{clock: newSteppingClock(), kicker: &kickRecorder{}, events: make(chan envs.HealthEvent, 8)}
+	f.mux = &muxClock{cur: f.clock}
 	eng := &volEngine{byAgent: map[string]*dockerx.Client{}, failRemove: map[string]bool{}, removes: map[string]int{}}
 	f.eng = eng
 	f.rig = newRig(t, rigOptions{
@@ -177,7 +201,7 @@ func newDisableFix(t *testing.T, o disableOpts) *disableFix {
 			d.Engine = eng
 			d.Kicker = f.kicker
 			d.NodeRows = d.Tokens.(*ingresshub.Service)
-			d.Clock = f.clock
+			d.Clock = f.mux
 			d.Events = func(ctx context.Context) (<-chan envs.HealthEvent, func()) {
 				return f.events, func() {}
 			}
@@ -615,5 +639,83 @@ func TestDisableTasksThatNeverGoFailTheServiceStepAndARerunFinishes(t *testing.T
 	wantDisableDone(t, f.disable(seesAll))
 	if hasVolume(t, f.cli) {
 		t.Error("the rerun left the cache volume")
+	}
+}
+
+// TestDisableQueuesUnreachableWipes: with the worker's agent disconnected the switch-off finishes, names the worker as not
+// wiped and queues one pending wipe with one audit row; a second run with the agent still away keeps it queued, audits it
+// once and removes nothing twice; a node whose removal fails is queued as well.
+func TestDisableQueuesUnreachableWipes(t *testing.T) {
+	f := newDisableFix(t, disableOpts{worker: true, workerAway: true})
+	ctx := testsupport.Context(t)
+	prev, err := f.svc.PreviewDisable(ctx, f.envID, seesAll)
+	if err != nil || !slices.Equal(prev.Unreachable, []string{workerNode.Name}) {
+		t.Fatalf("PreviewDisable unreachable = %v, %v; want the worker", prev.Unreachable, err)
+	}
+
+	job := f.disable(seesAll)
+	wantDisableDone(t, job)
+	it := itemOf(job, ingressdeploy.ItemVolumes)
+	if it.Result["unreachable"] != workerNode.Name || it.Result["pending"] != "1" || it.Result["wiped"] != "1" {
+		t.Fatalf("volumes result = %v, want the worker named as not wiped", it.Result)
+	}
+	if hasVolume(t, f.cli) {
+		t.Error("the manager's volume was left")
+	}
+	if !hasVolume(t, f.worker) {
+		t.Error("the unreachable worker's volume vanished without a wipe")
+	}
+	pending, err := f.istore.PendingWipes(ctx, f.envID)
+	if err != nil || len(pending) != 1 || pending[0].SwarmNodeID != workerNode.SwarmNodeID || pending[0].Volume != ingress.VolumeName {
+		t.Fatalf("pending wipes = %+v, %v; want the worker's cache volume", pending, err)
+	}
+	if got := f.auditCount("ingress.wipe_queued"); got != 1 {
+		t.Fatalf("ingress.wipe_queued audit rows = %d, want 1", got)
+	}
+	if n := f.eng.removeCalls(workerNode.AgentID); n != 0 {
+		t.Errorf("%d removals were sent to a node whose agent is away", n)
+	}
+	managerRemoves := f.eng.removeCalls("agent-1")
+
+	// Run again with the agent still away: still one queued wipe and one audit row, and the manager's volume is not removed twice.
+	wantDisableDone(t, f.disable(seesAll))
+	if p, _ := f.istore.PendingWipes(ctx, f.envID); len(p) != 1 {
+		t.Errorf("pending wipes after a rerun = %+v, want still one", p)
+	}
+	if got := f.auditCount("ingress.wipe_queued"); got != 1 {
+		t.Errorf("ingress.wipe_queued audit rows after a rerun = %d, want 1", got)
+	}
+	if got := f.eng.removeCalls("agent-1"); got != managerRemoves {
+		t.Errorf("the rerun sent %d more removals to the manager, want none: its volume is gone", got-managerRemoves)
+	}
+
+	// The worker is back but its removal fails: queued again, which changes nothing.
+	f.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[1].Connected = true })
+	f.eng.failRemove[workerNode.AgentID] = true
+	job = f.disable(seesAll)
+	if it := itemOf(job, ingressdeploy.ItemVolumes); it.Result["unreachable"] != workerNode.Name {
+		t.Errorf("volumes result after a failed removal = %v, want the worker named", it.Result)
+	}
+	if p, _ := f.istore.PendingWipes(ctx, f.envID); len(p) != 1 {
+		t.Errorf("pending wipes after a failed removal = %+v, want one", p)
+	}
+	if !hasVolume(t, f.worker) {
+		t.Error("the worker's volume is gone though its removal failed")
+	}
+
+	// The removal works now: the rerun wipes it, clears the entry and records the wipe.
+	f.eng.failRemove[workerNode.AgentID] = false
+	job = f.disable(seesAll)
+	if it := itemOf(job, ingressdeploy.ItemVolumes); it.Result["unreachable"] != "" || it.Result["wiped"] != "2" {
+		t.Errorf("volumes result = %v, want both wiped", it.Result)
+	}
+	if p, _ := f.istore.PendingWipes(ctx, f.envID); len(p) != 0 {
+		t.Errorf("pending wipes = %+v, want none after the wipe", p)
+	}
+	if hasVolume(t, f.worker) {
+		t.Error("the worker's volume is still there")
+	}
+	if got := f.auditCount("ingress.wipe_done"); got != 1 {
+		t.Errorf("ingress.wipe_done audit rows = %d, want 1", got)
 	}
 }
