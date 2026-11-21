@@ -887,6 +887,13 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		}
 	}
 
+	// The roll back claims the hostnames of the revision it restores, and a restore the ones it already holds; both put the last
+	// good revision's back if they fail (D-17). A roll back is a person's request, so a refusal may name a holder they can view.
+	claims, err := claimWriteFor(ctx, d, p, p, st, prep.Loaded.Project)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
+
 	// The roll back is a revision of its own: a copy of the one it restores, with its images and its
 	// rendering. The draft is not rebased: it still starts from the revision it began at, so the next
 	// review shows the roll back as a deploy made since.
@@ -916,6 +923,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 			Subnets: repo, RestoredSubnets: target.Subnets,
 			// The job's own check refuses what this request refused (D-18).
 			IngressPolicy: pol,
+			Ingress:       claims,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -932,6 +940,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		RestoredPlatforms: target.Platforms,
 		// And the subnets it gave its networks, so a network the roll back has to create again can have the same block.
 		Subnets: repo, RestoredSubnets: target.Subnets,
+		Ingress: claims,
 	}
 	l.items = stackops.DeployItemSpecs()
 	l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {

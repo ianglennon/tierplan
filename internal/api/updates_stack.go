@@ -199,6 +199,8 @@ type stackUpdate struct {
 	standalone bool
 	node       string
 	caller     stackops.Caller
+	// viewer is who a refusal of a hostname may be worded for: the person, nil for a bulk update (D-20).
+	viewer *rbac.Principal
 	// ingress is the policy the update was judged with (nil when the revision names no ingress label), which the standalone job's own check applies again.
 	ingress *stacks.IngressPolicy
 }
@@ -269,7 +271,7 @@ func judgeStackUpdate(ctx context.Context, d StacksDeps, ap *updates.Applier, p 
 	if err != nil {
 		return nil, stackInternal(d, "read the ingress names", env.ID, err)
 	}
-	su.ingress = pol
+	su.ingress, su.viewer = pol, viewer
 	if su.standalone {
 		if su.prep, err = d.ops().PrepareRollbackStandaloneWith(ctx, st, good, goodPins, pol); err != nil {
 			return nil, rollbackPrepareProblem(err, su.masker)
@@ -320,6 +322,12 @@ func (su *stackUpdate) revise(ctx context.Context, actor audit.Actor, bulk, user
 		return launch{}, deployedChanged(st.Name, now.Seq)
 	}
 
+	// An update deploys the declarations the stack already holds, so its claim write is a no-op: nothing is stored and nobody is
+	// told (D-17). It is still made, so a name the store would refuse now stops the update as it stops a deploy.
+	claims, err := claimWriteFor(ctx, d, p, su.viewer, st, su.prep.Loaded.Project)
+	if err != nil {
+		return launch{}, stackInternal(d, "read the ingress names", env.ID, err)
+	}
 	rev, err := repo.NewUpdateRevision(ctx, good, revisionCreator(ctx, repo, p))
 	if err != nil {
 		return launch{}, stackInternal(d, "revision", env.ID, err)
@@ -405,7 +413,7 @@ func (su *stackUpdate) revise(ctx context.Context, actor audit.Actor, bulk, user
 		standaloneIn := stackops.StandaloneDeployInput{
 			EnvID: env.ID, NodeID: su.node, Stack: st, Copy: good.Copy, Reviewed: su.pins, Update: su.update,
 			Pins: repo, RevisionID: rev.ID, Caller: su.caller, Masker: rendering.masker, Subnets: repo,
-			IngressPolicy: su.ingress,
+			IngressPolicy: su.ingress, Ingress: claims,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -422,6 +430,7 @@ func (su *stackUpdate) revise(ctx context.Context, actor audit.Actor, bulk, user
 		EnvID: env.ID, Stack: st, Project: su.prep.Loaded.Project, Files: su.prep.Files, Vars: su.prep.Vars, Copy: good.Copy,
 		Caller: su.caller, Masker: rendering.masker,
 		Pins: repo, Subnets: repo, RevisionID: rev.ID, Update: su.update, Reviewed: su.pins,
+		Ingress: claims,
 	}
 	l.items = stackops.DeployItemSpecs()
 	l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -704,6 +713,7 @@ func rollbackFailedUpdate(ctx context.Context, rb stackRollback, r *jobs.Reporte
 		in := stackops.StandaloneDeployInput{
 			EnvID: rb.env.ID, NodeID: rb.node, Stack: rb.st, Copy: rb.good.Copy, Reviewed: rb.goodPins, Rollback: true,
 			Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: masker, Subnets: repo, RestoredSubnets: rb.good.Subnets,
+			// No Ingress: the automatic roll back writes no claim (D-17).
 		}
 		items = stackops.StandaloneItemSpecs()
 		run = func(jctx context.Context, rr *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -718,6 +728,8 @@ func rollbackFailedUpdate(ctx context.Context, rb stackRollback, r *jobs.Reporte
 			// The revision's own record of its platforms goes with its digests, so the rollback asks no registry for them.
 			RestoredPlatforms: rb.good.Platforms,
 			Subnets:           repo, RestoredSubnets: rb.good.Subnets,
+			// No Ingress: the automatic roll back writes no claim (D-17). The failed update never changed them, and the
+			// revision it puts back is the one that holds them.
 		}
 		items = stackops.DeployItemSpecs()
 		run = func(jctx context.Context, rr *jobs.Reporter, onDone func(stackops.DeployResult)) {

@@ -68,7 +68,8 @@ func ingressCanView(ctx context.Context, d StacksDeps, p *rbac.Principal, envID 
 // good revision's stand) and, for a deploy that fails, the routes of the last good revision to put back. p is who
 // acts; viewer is who a refusal may be worded for (nil for an automatic deploy, whose refusal is read by every viewer
 // of the environment, so it names only the stack's own environment, D-20). The answer is nil when the server has no
-// ingress store. It must be called holding the environment's operation lock and before the new revision exists, so
+// ingress store, and also when neither the deployed revision nor the last good one declares a route (the stack holds no
+// claim, so there is nothing to write or put back). It must be called holding the environment's operation lock and before the new revision exists, so
 // the last good revision it reads is the one that runs.
 //
 // A last good revision that cannot be read or loaded is treated as none (a failed deploy then releases every claim)
@@ -76,10 +77,6 @@ func ingressCanView(ctx context.Context, d StacksDeps, p *rbac.Principal, envID 
 func claimWriteFor(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal, st stackops.Stack, project *types.Project) (*stackops.ClaimWrite, error) {
 	if d.Ingress == nil {
 		return nil, nil
-	}
-	canView, err := ingressCanView(ctx, d, viewer, st.EnvID)
-	if err != nil {
-		return nil, err
 	}
 	restore, hasGood, err := stackops.LastGoodDeclarations(ctx, d.repo(), st)
 	if err != nil {
@@ -94,6 +91,15 @@ func claimWriteFor(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal,
 	decls := restore
 	if project != nil {
 		decls = stacks.IngressDeclarations(project, st.Target)
+	}
+	// A stack that declares no route and whose last good revision declared none holds no claim, so its deploy has nothing to
+	// write and never needs the ingress store: a stack with no ingress label is not refused because that store cannot be read.
+	if len(decls) == 0 && len(restore) == 0 {
+		return nil, nil
+	}
+	canView, err := ingressCanView(ctx, d, viewer, st.EnvID)
+	if err != nil {
+		return nil, err
 	}
 	actor := p.ID
 	if p.Type == rbac.PrincipalSystem && !strings.HasPrefix(actor, "system:") {

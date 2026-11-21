@@ -314,6 +314,16 @@ func TestIngressGateRollbackRefusesAHostReservedSinceTheRevisionRanOnASwarmStack
 	}
 }
 
+// releaseClaims lets go of everything the stack holds, as happens when the stack that held a name is deployed again without
+// it or deleted: a name a deployed stack still holds cannot be reserved or claimed by another, so a test that makes a name
+// unavailable since a revision ran frees it first.
+func releaseClaims(t *testing.T, f *envFix, e envBody, stackID string) {
+	t.Helper()
+	if err := f.stackDeps.Ingress.ReleaseStack(testsupport.Context(t), e.ID, stackID, "admin", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestIngressGateRollbackRefusesARestoreOfAHostReservedSinceItRan(t *testing.T) {
 	t.Parallel()
 	f, e := stackEnv(t, nil)
@@ -322,6 +332,7 @@ func TestIngressGateRollbackRefusesARestoreOfAHostReservedSinceItRan(t *testing.
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "gate-restore")
 	f.deployGood(t, operator, st.ID, ingressCompose(gateHost))
+	releaseClaims(t, f, e, st.ID)
 	reserveHost(t, f, e, seed, gateHost)
 
 	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"mode":"restore","revision":1}`)
@@ -397,6 +408,7 @@ func TestIngressGateUpdateRefusesAHostReservedSinceTheRevisionRanOnASwarmStack(t
 	seed := seedIngressWorld(t, s.f, s.e)
 	s.f.deployGood(t, s.operator, s.st.ID, labelledShopCompose)
 	s.move(t, "web", 'b')
+	releaseClaims(t, s.f, s.e, s.st.ID)
 	reserveHost(t, s.f, s.e, seed, gateHost)
 	writtenBefore := len(s.f.fake.ServiceUpdates())
 
@@ -419,6 +431,7 @@ func TestIngressGateUpdateRefusesAHostReservedSinceTheRevisionRanOnAStandaloneSt
 	seed := seedIngressWorld(t, s.f, s.e)
 	s.f.deployGood(t, s.operator, s.st.ID, labelledStandaloneShopCompose)
 	s.move(t, "web", 'b')
+	releaseClaims(t, s.f, s.e, s.st.ID)
 	reserveHost(t, s.f, s.e, seed, gateHost)
 	_, calls := up.lastProject()
 
@@ -443,6 +456,7 @@ func TestIngressGateUpdateBulkRefusesAndNamesNoOtherEnvironment(t *testing.T) {
 	seed := seedIngressWorld(t, s.f, s.e)
 	s.f.deployGood(t, s.operator, s.st.ID, labelledShopCompose)
 	s.move(t, "web", 'b')
+	releaseClaims(t, s.f, s.e, s.st.ID)
 	if _, err := s.f.stackDeps.Ingress.ReplaceStackRoutes(testsupport.Context(t), ingressstore.ReplaceInput{
 		EnvID: seed.otherEnvID, StackID: seed.otherStackID, Actor: "bob",
 		Decls: []ingress.Declaration{{Service: "web", Host: gateHost, Label: "tierplan.ingress.host", Port: 80}},
