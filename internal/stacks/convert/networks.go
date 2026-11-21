@@ -15,6 +15,7 @@ import (
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -65,7 +66,10 @@ func serviceNetworks(svc composetypes.ServiceConfig, p *composetypes.Project, o 
 				att.DriverOpts = maps.Clone(cfg.DriverOpts)
 			}
 		}
-		if isUserDefined(target) && !slices.Contains(att.Aliases, svc.Name) {
+		// Never on the shared ingress network (D-37, design correction 10): every routed service of every
+		// stack is on it, so a service name there would be one DNS name for two stacks' services. This is a
+		// default rule, not an option, so no caller can forget it.
+		if isUserDefined(target) && target != ingress.NetworkName && !slices.Contains(att.Aliases, svc.Name) {
 			att.Aliases = append(att.Aliases, svc.Name)
 		}
 		out = append(out, att)

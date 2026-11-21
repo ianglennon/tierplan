@@ -4,6 +4,7 @@
 package stacks
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -16,8 +17,7 @@ import (
 // arrives as data; the caller builds it from the store and the caller's permissions, and Check never
 // reads a database or an ingress switch.
 //
-// It is the Phase 18 field of CheckInput. The name Ingress is reserved for Phase 24's network
-// attachment, so this one is IngressPolicy.
+// It is the Phase 18 field of CheckInput; Phase 24's network attachment is CheckInput.Ingress.
 type IngressPolicy struct {
 	// StackID is the stack being checked, so a hostname it already holds is not taken.
 	StackID string
@@ -91,4 +91,107 @@ func ingressProblemAt(p ingress.Problem, idx *PositionIndex, target Target) Prob
 		Severity: Severity(p.Severity), Code: p.Code, Message: p.Message, File: file, Key: key,
 		Line: line, Col: col, EndLine: endLine, EndCol: endCol,
 	}
+}
+
+// IngressAttach asks check to attach the routed services of a swarm stack to the shared ingress
+// network (D-19, D-38). It is set only when ingress is enabled for a swarm environment; the routed
+// set is derived inside check from the same parse the policy uses, so no caller can attach a
+// different set.
+type IngressAttach struct {
+	// Network is the name of the shared overlay network (ingress.NetworkName).
+	Network string
+}
+
+// InjectedIngress records what attachIngress added to a loaded project, so Render can show the
+// project as the user wrote it (D-20) and drift can tell the attachment from the user's own.
+type InjectedIngress struct {
+	// Network is the network the services were attached to.
+	Network string
+	// NetworkAdded is true when the project did not declare the network and it was added as an
+	// external one; false when the file already declared it.
+	NetworkAdded bool
+	// Services are the routed services that were given the attachment, sorted. A service that
+	// already listed the network is not here.
+	Services []string
+	// DefaultAdded are the services of Services that had no networks of their own, so the
+	// default network was written for them to keep them on it (Pitfall 7). Sorted.
+	DefaultAdded []string
+}
+
+// IngressDeclarations are the routes the stack's labels declare, with the problems dropped (check
+// reports those). target is the stack's target: a swarm stack's routes are under deploy.labels.
+func IngressDeclarations(project *types.Project, target Target) []ingress.Declaration {
+	decls, _ := ingress.ParseStack(serviceLabels(project), ingress.Target(target))
+	return decls
+}
+
+// RoutedServices are the names of the services that declare at least one route, sorted.
+func RoutedServices(project *types.Project, target Target) []string {
+	var out []string
+	for _, d := range IngressDeclarations(project, target) {
+		if !slices.Contains(out, d.Service) {
+			out = append(out, d.Service)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// defaultNetworkKey is the key of the network a service joins when it names none.
+const defaultNetworkKey = "default"
+
+// attachIngress joins each routed service to the network, in the loaded project, once (D-19,
+// Pattern 2). It is idempotent: a project that already declares the network, by key or by its name
+// (external: true), keeps that declaration, and a service that already lists it is left alone. A
+// service with no networks of its own gets the default network written first, because naming one
+// network would otherwise take it off the default one. The attachment has no alias: the service
+// name must never be a DNS name on the network every stack shares (D-37). It returns what it
+// added, or nil when there was nothing to add.
+func attachIngress(project *types.Project, routed []string, network string) *InjectedIngress {
+	if len(routed) == 0 || network == "" {
+		return nil
+	}
+	key := ""
+	for k, n := range project.Networks {
+		if k == network || n.Name == network {
+			key = k
+			break
+		}
+	}
+	inj := &InjectedIngress{Network: network}
+	if key == "" {
+		key = network
+		if project.Networks == nil {
+			project.Networks = types.Networks{}
+		}
+		project.Networks[key] = types.NetworkConfig{Name: network, External: true}
+		inj.NetworkAdded = true
+	}
+	for _, name := range routed {
+		svc, ok := project.Services[name]
+		if !ok {
+			continue
+		}
+		if _, has := svc.Networks[key]; has {
+			continue
+		}
+		nets := make(map[string]*types.ServiceNetworkConfig, len(svc.Networks)+2)
+		for k, v := range svc.Networks {
+			nets[k] = v
+		}
+		if len(nets) == 0 {
+			nets[defaultNetworkKey] = nil
+			inj.DefaultAdded = append(inj.DefaultAdded, name)
+		}
+		nets[key] = nil
+		svc.Networks = nets
+		project.Services[name] = svc
+		inj.Services = append(inj.Services, name)
+	}
+	sort.Strings(inj.Services)
+	sort.Strings(inj.DefaultAdded)
+	if !inj.NetworkAdded && len(inj.Services) == 0 {
+		return nil
+	}
+	return inj
 }

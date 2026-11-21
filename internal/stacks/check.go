@@ -38,9 +38,13 @@ type CheckInput struct {
 	// every stack holds. Nil runs only the label parser, so adopt, rebuild, start, drift, the history
 	// comparison and the git import check still report bad ingress labels; the editor check, the review
 	// and every deploy gate set it, so a hostname outside the environment's domains or held by another
-	// stack is refused where the person sees it (LBL-02, LBL-04). The name Ingress is reserved for
-	// Phase 24's network attachment.
+	// stack is refused where the person sees it (LBL-02, LBL-04).
 	IngressPolicy *IngressPolicy
+	// Ingress asks for the routed services of a swarm stack to be joined to the shared ingress
+	// network (D-19). The swarm deploy gate, the review and PrepareRollbackWith set it when ingress is
+	// enabled for the environment; every other caller leaves it nil and so marks itself unattached
+	// (a guard test enforces that each call site decides). It is read only for a swarm target.
+	Ingress *IngressAttach
 }
 
 // CheckResult is what a check found. Loaded is set when the compose file loaded, and is what the
@@ -196,6 +200,11 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	// engine or any later step can see it. A service with a build and no image is a blocking error
 	// above, so what is left to deploy always names an image.
 	stripBuild(loaded.Project)
+	// The ingress attachment goes in after lint and stripBuild, so neither the lint problems nor the
+	// position index ever see the injected key, and before anything converts the project (D-19).
+	if in.Ingress != nil && in.Target == TargetSwarm {
+		loaded.Ingress = attachIngress(loaded.Project, RoutedServices(loaded.Project, in.Target), in.Ingress.Network)
+	}
 	res.Loaded = loaded
 	res.Problems = append(append(res.Problems, binds...), lintProblems(found, file)...)
 	if in.Target == TargetSwarm {
