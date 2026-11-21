@@ -10,6 +10,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -113,6 +114,9 @@ type Deps struct {
 	Jobs   *jobs.Hub
 	Locks  stackops.OperationLock
 	Audit  *audit.Writer
+	// Notifier is the ingress store's notifier: the ensure loop takes a pass whenever it reports a change. Nil
+	// leaves the loop to its tick and to Wake.
+	Notifier *ingress.Notifier
 	// Resolver chooses the registry credential of the proxy image; nil sends none. Give it only a non-nil
 	// *registry.Resolver, since a nil one inside the interface is not nil.
 	Resolver Registry
@@ -138,6 +142,10 @@ type Deps struct {
 // Service deploys the objects of an environment's ingress.
 type Service struct {
 	d Deps
+	// wake asks the ensure loop for a pass soon; it holds at most one.
+	wake chan struct{}
+	// roundHook, when set, is called after every round of the ensure loop. Only a test sets it (export_test.go).
+	roundHook func()
 }
 
 // New builds the deployer.
@@ -148,7 +156,7 @@ func New(d Deps) *Service {
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{d: d}
+	return &Service{d: d, wake: make(chan struct{}, 1)}
 }
 
 func (s *Service) log() *slog.Logger { return s.d.Log }

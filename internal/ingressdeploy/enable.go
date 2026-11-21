@@ -12,6 +12,8 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
@@ -19,6 +21,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/netspace"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // JobKindEnable is the kind of the job that enables an environment's ingress.
@@ -373,45 +376,14 @@ func fail(code string, err error, detail ...string) error {
 	return se
 }
 
-// token makes sure the current join token's secret exists on the swarm. The token's clear text lives in a
-// local variable between the issue and the secret create and is put in no item, line, log or audit detail.
-// A current, enabled token whose secret is there is reused; a token that is missing, disabled, or whose
-// secret is gone is replaced by the next generation (Pitfall 10).
+// token makes sure the current join token's secret exists on the swarm, through the step the ensure loop shares
+// (ensureSecret). A token that is missing, disabled, or whose secret is gone is replaced by the next generation
+// (Pitfall 10).
 func (e *enableRun) token(ctx context.Context) error {
 	s := e.s
-	err := s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
-		rows, err := c.SecretList(ctx)
-		if err != nil {
-			return err
-		}
-		st, err := s.d.Tokens.TokenStatus(ctx, e.envID)
-		if err != nil {
-			return err
-		}
-		if st.Exists && !st.Disabled {
-			name := SecretName(e.envID, st.Generation, st.ID)
-			for _, row := range rows {
-				if row.Name != name {
-					continue
-				}
-				if !ingress.OwnsSecret(row.Name, row.Labels) {
-					return fmt.Errorf("the swarm holds a secret named %s that is not TierPlan's", name)
-				}
-				e.secretID, e.secretName = row.ID, name
-				return nil
-			}
-		}
-		tok, err := s.d.Tokens.IssueToken(ctx, e.actor, e.envID, "", auditUserAgent)
-		if err != nil {
-			return fmt.Errorf("issue the join token: %w", err)
-		}
-		name := SecretName(e.envID, tok.Generation, tok.ID)
-		id, err := c.SecretCreate(ctx, SecretSpec(name, []byte(tok.Token)))
-		if err != nil {
-			return err
-		}
-		e.secretID, e.secretName = id, name
-		return nil
+	err := s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) (err error) {
+		e.secretID, e.secretName, err = s.ensureSecret(ctx, c, e.actor, e.envID, true)
+		return err
 	})
 	if err != nil {
 		// The engine's words are not shown: an error that touched the token step is never put in a job.
@@ -421,46 +393,12 @@ func (e *enableRun) token(ctx context.Context) error {
 	return nil
 }
 
-// network makes sure the ingress network exists: an existing one that is TierPlan's is reused, a same-named
-// one that is not is refused, and otherwise a /22 is made from the swarm's pool under the allocation lock.
+// network makes sure the ingress network exists, through the step the ensure loop shares (ensureNetwork).
 func (e *enableRun) network(ctx context.Context) error {
 	s := e.s
-	err := s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
-		rows, err := c.Networks(ctx)
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			if row.Name != ingress.NetworkName {
-				continue
-			}
-			if !ingress.OwnsNetwork(row.Name, row.Labels) {
-				return &stepError{code: CodeEnableNetworkFailed, err: fmt.Errorf("the swarm holds a network named %s that is not TierPlan's", row.Name),
-					detail: "A network named " + row.Name + " already exists and is not TierPlan's. Remove or rename it, then enable ingress again."}
-			}
-			if len(row.Subnets) > 0 {
-				e.subnet = row.Subnets[0]
-			}
-			return nil
-		}
-		if s.d.AddressSpaces != nil {
-			defer s.d.AddressSpaces.LockAllocation(e.envID)()
-		}
-		subnet := e.req.Subnet
-		if subnet == "" {
-			subnet, err = s.chooseSubnet(ctx, e.envID, true)
-			if err != nil {
-				return &stepError{code: CodeEnableNetworkFailed, err: err,
-					detail: "No free " + fmt.Sprintf("/%d", NetworkPrefix) + " block is left in the swarm's address pools."}
-			}
-		} else if _, err := netip.ParsePrefix(subnet); err != nil {
-			return &stepError{code: CodeEnableNetworkFailed, err: err, detail: "The subnet is not a valid CIDR block."}
-		}
-		if _, _, err := c.NetworkCreateAllocated(ctx, NetworkSpec(subnet), s.d.AllocationWait); err != nil {
-			return &stepError{code: CodeEnableNetworkFailed, err: err, detail: dockerx.DaemonText(err)}
-		}
-		e.subnet = subnet
-		return nil
+	err := s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) (err error) {
+		e.subnet, err = s.ensureNetwork(ctx, c, e.envID, e.req.Subnet)
+		return err
 	})
 	if err != nil {
 		var se *stepError
@@ -473,47 +411,22 @@ func (e *enableRun) network(ctx context.Context) error {
 	return nil
 }
 
-// service creates the global proxy service, or, when one that is TierPlan's exists, updates it at the
-// version read, carrying its force-update counter over so the update does not restart the proxy by itself.
+// service creates the global proxy service, or, when one that is TierPlan's exists, updates it, through the step
+// the ensure loop shares (ensureService). An enable always writes the update of an existing service.
 func (e *enableRun) service(ctx context.Context) error {
 	s := e.s
 	state, err := s.d.Store.DeployState(ctx, e.envID)
 	if err != nil {
 		return fail(CodeEnableServiceFailed, err)
 	}
-	spec := ProxyServiceSpec(SpecInput{
-		Image: e.image, URL: s.url(), Pin: strings.Join(s.pins(), ","), SecretName: e.secretName, AccessLog: state.AccessLogs,
-	})
-	spec.TaskTemplate.ContainerSpec.Secrets[0].SecretID = e.secretID
 	auth, err := s.authFor(ctx, e.envID, e.image)
 	if err != nil {
 		return fail(CodeEnableServiceFailed, err)
 	}
+	in := serviceInput{secretID: e.secretID, secretName: e.secretName, accessLog: state.AccessLogs, auth: auth, always: true}
 	err = s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
-		cur, _, ierr := c.ServiceInspect(ctx, ingress.ServiceName)
-		switch {
-		case ierr == nil:
-			if !ingress.OwnsService(cur.Name, cur.Labels) {
-				return &stepError{code: CodeEnableServiceFailed, err: errors.New("the swarm holds a service named " + cur.Name + " that is not TierPlan's"),
-					detail: "A service named " + cur.Name + " already exists and is not TierPlan's. Remove or rename it, then enable ingress again."}
-			}
-			spec.TaskTemplate.ForceUpdate = liveForceUpdate(cur.Spec)
-			raw, merr := json.Marshal(spec)
-			if merr != nil {
-				return merr
-			}
-			_, uerr := c.ServiceUpdate(ctx, cur.ID, cur.Version, raw, auth)
-			return uerr
-		case errors.Is(ierr, dockerx.ErrServiceNotFound):
-			raw, merr := json.Marshal(spec)
-			if merr != nil {
-				return merr
-			}
-			_, _, cerr := c.ServiceCreate(ctx, raw, auth)
-			return cerr
-		default:
-			return ierr
-		}
+		_, err := s.ensureService(ctx, c, in)
+		return err
 	})
 	if err != nil {
 		var se *stepError
@@ -568,4 +481,174 @@ func liveForceUpdate(spec json.RawMessage) uint64 {
 		return 0
 	}
 	return s.TaskTemplate.ForceUpdate
+}
+
+// ensureSecret makes sure the swarm holds the secret of the current join token and returns its ID and name. It is the
+// token step of the enable job and of the ensure loop; c is a manager's client, inside one write. A current, enabled
+// token whose secret is there is reused; a token that is missing, or whose secret is gone, is replaced by the next
+// generation, and a disabled token too when replaceDisabled is set (an enable) (Pitfall 10). With replaceDisabled
+// false a disabled token is an admin's decision the loop does not undo: its secret is returned when it exists, and
+// otherwise nothing is made and the ID and name come back empty. The token's clear text lives in a local variable
+// between the issue and the secret create and is put in no item, line, log or audit detail.
+func (s *Service) ensureSecret(ctx context.Context, c *dockerx.Client, actor audit.Actor, envID string, replaceDisabled bool) (id, name string, err error) {
+	rows, err := c.SecretList(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	st, err := s.d.Tokens.TokenStatus(ctx, envID)
+	if err != nil {
+		return "", "", err
+	}
+	if st.Exists && (!st.Disabled || !replaceDisabled) {
+		name := SecretName(envID, st.Generation, st.ID)
+		for _, row := range rows {
+			if row.Name != name {
+				continue
+			}
+			if !ingress.OwnsSecret(row.Name, row.Labels) {
+				return "", "", fmt.Errorf("the swarm holds a secret named %s that is not TierPlan's", name)
+			}
+			return row.ID, name, nil
+		}
+		if st.Disabled {
+			return "", "", nil
+		}
+	}
+	tok, err := s.d.Tokens.IssueToken(ctx, actor, envID, "", auditUserAgent)
+	if err != nil {
+		return "", "", fmt.Errorf("issue the join token: %w", err)
+	}
+	name = SecretName(envID, tok.Generation, tok.ID)
+	id, err = c.SecretCreate(ctx, SecretSpec(name, []byte(tok.Token)))
+	if err != nil {
+		return "", "", err
+	}
+	return id, name, nil
+}
+
+// ensureNetwork makes sure the ingress network exists and returns its subnet: an existing one that is TierPlan's is
+// reused, a same-named one that is not is refused, and otherwise a /22 (or the requested block) is made from the
+// swarm's pool under the allocation lock. It is the network step of the enable job and of the ensure loop; c is a
+// manager's client, inside one write. A refusal is a *stepError that carries the sentence to show.
+func (s *Service) ensureNetwork(ctx context.Context, c *dockerx.Client, envID, requested string) (string, error) {
+	rows, err := c.Networks(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, row := range rows {
+		if row.Name != ingress.NetworkName {
+			continue
+		}
+		if !ingress.OwnsNetwork(row.Name, row.Labels) {
+			return "", &stepError{code: CodeEnableNetworkFailed, err: fmt.Errorf("the swarm holds a network named %s that is not TierPlan's", row.Name),
+				detail: "A network named " + row.Name + " already exists and is not TierPlan's. Remove or rename it, then enable ingress again."}
+		}
+		if len(row.Subnets) > 0 {
+			return row.Subnets[0], nil
+		}
+		return "", nil
+	}
+	if s.d.AddressSpaces != nil {
+		defer s.d.AddressSpaces.LockAllocation(envID)()
+	}
+	subnet := requested
+	if subnet == "" {
+		subnet, err = s.chooseSubnet(ctx, envID, true)
+		if err != nil {
+			return "", &stepError{code: CodeEnableNetworkFailed, err: err,
+				detail: "No free " + fmt.Sprintf("/%d", NetworkPrefix) + " block is left in the swarm's address pools."}
+		}
+	} else if _, err := netip.ParsePrefix(subnet); err != nil {
+		return "", &stepError{code: CodeEnableNetworkFailed, err: err, detail: "The subnet is not a valid CIDR block."}
+	}
+	if _, _, err := c.NetworkCreateAllocated(ctx, NetworkSpec(subnet), s.d.AllocationWait); err != nil {
+		return "", &stepError{code: CodeEnableNetworkFailed, err: err, detail: dockerx.DaemonText(err)}
+	}
+	return subnet, nil
+}
+
+// serviceInput is what the service step needs to build the proxy service.
+type serviceInput struct {
+	secretID, secretName string
+	accessLog            bool
+	// auth is the registry credential the proxy image is sent with, "" for none.
+	auth string
+	// always writes the update of an existing service even when it already matches (an enable does, so a repeat
+	// brings the service to the spec); false writes it only on a difference (the ensure loop).
+	always bool
+}
+
+// desiredService is the proxy service this server wants, with the ID of its secret filled in.
+func (s *Service) desiredService(in serviceInput) swarm.ServiceSpec {
+	spec := ProxyServiceSpec(SpecInput{
+		Image: IngressImage(s.d.ServerVersion), URL: s.url(), Pin: strings.Join(s.pins(), ","), SecretName: in.secretName, AccessLog: in.accessLog,
+	})
+	spec.TaskTemplate.ContainerSpec.Secrets[0].SecretID = in.secretID
+	return spec
+}
+
+// serviceChanges lists how the live spec differs from the desired one. Both go through the swarm's defaults first
+// (stacks.NormalizeSpec) and the force-update counter is taken from the live spec; the live spec names its networks
+// by ID, so they are put back to names with nets before the two are compared. A spec that cannot be read is an error.
+func serviceChanges(desired swarm.ServiceSpec, liveSpec json.RawMessage, nets []dockerx.NetworkRow) ([]stacks.PathChange, error) {
+	var cur swarm.ServiceSpec
+	if err := json.Unmarshal(liveSpec, &cur); err != nil {
+		return nil, fmt.Errorf("read the proxy service's spec: %w", err)
+	}
+	for i := range cur.TaskTemplate.Networks {
+		t := &cur.TaskTemplate.Networks[i]
+		for _, n := range nets {
+			if n.ID != "" && n.ID == t.Target {
+				t.Target = n.Name
+			}
+		}
+	}
+	desired.TaskTemplate.ForceUpdate = cur.TaskTemplate.ForceUpdate
+	return stacks.ChangedPaths(stacks.NormalizeSpec(cur), stacks.NormalizeSpec(desired)), nil
+}
+
+// ensureService creates the global proxy service, or, when one that is TierPlan's exists, updates it at the version
+// read, carrying its force-update counter over so the update does not restart the proxy by itself. Unless in.always is
+// set it writes only when the live spec differs from the desired one. It reports whether it wrote. It is the service
+// step of the enable job and of the ensure loop; c is a manager's client, inside one write. Nothing waits for the
+// update to converge.
+func (s *Service) ensureService(ctx context.Context, c *dockerx.Client, in serviceInput) (bool, error) {
+	spec := s.desiredService(in)
+	cur, _, err := c.ServiceInspect(ctx, ingress.ServiceName)
+	switch {
+	case err == nil:
+		if !ingress.OwnsService(cur.Name, cur.Labels) {
+			return false, &stepError{code: CodeEnableServiceFailed, err: errors.New("the swarm holds a service named " + cur.Name + " that is not TierPlan's"),
+				detail: "A service named " + cur.Name + " already exists and is not TierPlan's. Remove or rename it, then enable ingress again."}
+		}
+		spec.TaskTemplate.ForceUpdate = liveForceUpdate(cur.Spec)
+		if !in.always {
+			nets, err := c.Networks(ctx)
+			if err != nil {
+				return false, err
+			}
+			changes, err := serviceChanges(spec, cur.Spec, nets)
+			if err != nil {
+				return false, err
+			}
+			if len(changes) == 0 {
+				return false, nil
+			}
+		}
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			return false, err
+		}
+		_, err = c.ServiceUpdate(ctx, cur.ID, cur.Version, raw, in.auth)
+		return err == nil, err
+	case errors.Is(err, dockerx.ErrServiceNotFound):
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			return false, err
+		}
+		_, _, err = c.ServiceCreate(ctx, raw, in.auth)
+		return err == nil, err
+	default:
+		return false, err
+	}
 }

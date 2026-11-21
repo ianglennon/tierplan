@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/buildinfo"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
@@ -34,8 +35,10 @@ type ingressDeployDeps struct {
 	Clusters   *envs.Clusters
 	Envs       *envs.Service
 	Ingress    *ingressstore.Store
-	Tokens     *ingresshub.Service
-	Jobs       *jobs.Hub
+	// Notifier wakes the ensure loop on every change to the ingress state.
+	Notifier *ingress.Notifier
+	Tokens   *ingresshub.Service
+	Jobs     *jobs.Hub
 	// Locks is the operation lock the stack routes use, so a stack operation and an ingress job exclude each other.
 	Locks         *stackops.Locks
 	Resolver      *registry.Resolver
@@ -56,6 +59,7 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Engine:        ingressEngine{agg: d.Aggregator, clusters: d.Clusters},
 		Envs:          ingressEnvReader{st: d.Store, svc: d.Envs},
 		Store:         d.Ingress,
+		Notifier:      d.Notifier,
 		Tokens:        d.Tokens,
 		Jobs:          d.Jobs,
 		Locks:         d.Locks,
