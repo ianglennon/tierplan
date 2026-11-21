@@ -484,7 +484,14 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	// started: a compose file that cannot be deployed is refused here, with the problems the review
 	// lists, and leaves no revision behind. The project it returns is the one that is converted,
 	// rendered and deployed.
-	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
+	// A routed service joins the shared ingress network exactly when ingress is on for this swarm environment (D-18,
+	// D-19). A read that fails refuses the deploy: converting without the attachment would take a routed service off
+	// the network.
+	attach, err := ingressAttachFor(ctx, d, env.ID, st.Target)
+	if err != nil {
+		return nil, deployableProblem(d, env.ID, err)
+	}
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol, Ingress: attach})
 	if err != nil {
 		return nil, deployableProblem(d, env.ID, err)
 	}
@@ -619,6 +626,7 @@ func declaresIngress(c stacks.WorkingCopy) bool {
 // policy and the name have all passed.
 func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker, pol *stacks.IngressPolicy) (*StackDeployOutput, error) {
 	repo := d.repo()
+	// ingress: unattached, the standalone attach is Phase 25
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
 	if checked.Loaded == nil {
 		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")

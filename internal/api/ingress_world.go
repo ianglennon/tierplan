@@ -5,10 +5,17 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -66,4 +73,90 @@ func ingressGatePolicy(ctx context.Context, d StacksDeps, p *rbac.Principal, c s
 		return nil, nil
 	}
 	return pol, nil
+}
+
+// ingressOps adapts the ingress store to stackops.Ingress: the one door the stack pipeline asks about ingress by
+// (D-18). It adds the audit rows of the claim writes, in the transaction of the change.
+type ingressOps struct{ d StacksDeps }
+
+// ingressOps is the adaptor of the deps' ingress store, or nil (no ingress) when the server has none. The nil is
+// the interface's own, not a nil adaptor in an interface.
+func (d StacksDeps) ingressOps() stackops.Ingress {
+	if d.Ingress == nil {
+		return nil
+	}
+	return ingressOps{d: d}
+}
+
+// ingressClaimTarget is the audit target type of a claim write: the stack that holds the claim.
+const ingressClaimTarget = "stack"
+
+// AttachFor is the attachment of a swarm target of an environment whose ingress is switched on, and nil otherwise
+// (D-13, D-19). A standalone target is never attached (the standalone attach is Phase 25).
+func (o ingressOps) AttachFor(ctx context.Context, envID string, target stacks.Target) (*stacks.IngressAttach, error) {
+	if target != stacks.TargetSwarm {
+		return nil, nil
+	}
+	set, err := o.d.Ingress.Settings(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	if !set.Enabled {
+		return nil, nil
+	}
+	return &stacks.IngressAttach{Network: ingress.NetworkName}, nil
+}
+
+// World reads the ingress world of the environment.
+func (o ingressOps) World(ctx context.Context, envID string, canView func(string) bool) (ingress.World, error) {
+	return o.d.Ingress.World(ctx, envID, canView)
+}
+
+// claimActor is the audit actor of a claim write whose caller named itself by a string: a "system:" name is a
+// system actor, anything else a user.
+func claimActor(actor string) audit.Actor {
+	if strings.HasPrefix(actor, "system:") {
+		return audit.Actor{Type: audit.ActorSystem, ID: actor, Name: actor}
+	}
+	return audit.Actor{Type: audit.ActorUser, ID: actor, Name: actor}
+}
+
+// claimHook records one audit row of a claim write in the write's own transaction. A nil Audit writes none.
+func (o ingressOps) claimHook(action, envID, stackID, actor string) ingressstore.ClaimHook {
+	if o.d.Audit == nil {
+		return nil
+	}
+	return func(ctx context.Context, tx *sql.Tx, p ingress.Plan) error {
+		return o.d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor: claimActor(actor), Action: action, TargetType: ingressClaimTarget, TargetID: stackID, EnvID: envID,
+			Result: audit.ResultSuccess, Details: map[string]string{"hostnames": strconv.Itoa(len(p.Claims))},
+		})
+	}
+}
+
+// ReplaceStackRoutes stores the stack's claims and audits a change as ingress.claim_replaced.
+func (o ingressOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput) (ingress.Plan, error) {
+	if in.Hook == nil {
+		in.Hook = o.claimHook(audit.ActionIngressClaimReplaced, in.EnvID, in.StackID, in.Actor)
+	}
+	return o.d.Ingress.ReplaceStackRoutes(ctx, in)
+}
+
+// ReleaseStack lets go of the stack's claims and audits a change as ingress.claim_released.
+func (o ingressOps) ReleaseStack(ctx context.Context, envID, stackID, actor string) error {
+	return o.d.Ingress.ReleaseStack(ctx, envID, stackID, actor, o.claimHook(audit.ActionIngressClaimReleased, envID, stackID, actor))
+}
+
+// Notify wakes the reconciler of the environment.
+func (o ingressOps) Notify(envID string) { o.d.Ingress.Notify(envID) }
+
+// ingressAttachFor is the attachment a swarm conversion of a stack in envID carries, nil when ingress is off or the
+// server has no ingress store. A read that fails is an error: the caller refuses instead of converting without the
+// attachment.
+func ingressAttachFor(ctx context.Context, d StacksDeps, envID string, target stacks.Target) (*stacks.IngressAttach, error) {
+	ops := d.ingressOps()
+	if ops == nil {
+		return nil, nil
+	}
+	return ops.AttachFor(ctx, envID, target)
 }

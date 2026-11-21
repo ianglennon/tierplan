@@ -132,6 +132,13 @@ func (s *Store) writeQuiet(ctx context.Context, fn func(tx *sql.Tx, q *sqlc.Quer
 	return nil
 }
 
+// Notify tells the store's notifier that the environment changed, for a change the store did not make
+// itself (a stack deleted, whose claims went with its row). It is nil-safe: a store built without a
+// notifier tells nobody.
+func (s *Store) Notify(envID string) {
+	s.notifier.Notify(envID)
+}
+
 // SetEnabled switches an environment's ingress on or off. The first switch creates the environment's
 // row. A change raises config_version once, notifies once and reports true; asking for the value it
 // already has changes nothing and reports false. hook, which may be nil, runs in the transaction of a
