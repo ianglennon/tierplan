@@ -71,7 +71,7 @@ appears.
 | `ingress_no_address_space` | The swarm's address pools have no free /22 block. |
 | `ingress_subnet_invalid` | The subnet you gave is not an IPv4 CIDR block. |
 | `ingress_subnet_overlaps` | The subnet you gave overlaps an existing network. The finding lists them. |
-| `ingress_name_taken` | The swarm already holds a network, service, secret or volume under a name ingress uses that is not TierPlan's. Rename or remove it. |
+| `ingress_name_taken` | The swarm already holds a service, a network or a join token secret under a name ingress uses that is not TierPlan's. Rename or remove it. The check does not look at volumes: the certificate cache volume is a per node object, and a volume of that name that does not carry TierPlan's label would be mounted by the proxy, and switching off leaves it in place. |
 | `ingress_url_unset` | TierPlan does not know its own address, which the proxies dial. Set the agent URL or the public URL. |
 | `ingress_url_routed` | TierPlan's own address is a hostname that a route or a reservation holds, so the proxies would reach TierPlan through themselves. |
 | `ingress_http01_conflict` | See the next section. |
