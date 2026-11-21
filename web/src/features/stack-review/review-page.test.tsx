@@ -83,6 +83,19 @@ function reviewBody(over: Record<string, unknown> = {}) {
   };
 }
 
+const REFUSED =
+  "A hostname this stack asks for is taken or not allowed. Nothing was changed. Fix the labels and review again.";
+const refused = () =>
+  Response.json(
+    {
+      type: "ingress_refused",
+      title: "x",
+      status: 409,
+      detail: "app.example.com is held by stack shop.",
+    },
+    { status: 409 },
+  );
+
 const problem = (status: number, type: string) =>
   Response.json({ type, title: "x", status, detail: "d" }, { status });
 
@@ -1149,6 +1162,49 @@ describe("the operation lock", () => {
       ),
     ).toBeTruthy();
   });
+
+  // D-15 and UI-SPEC S4: a hostname the stack asks for is refused, nothing was changed, and the server's reason follows
+  // the sentence as a second span of text.
+  it("says a hostname is taken or not allowed, that nothing was changed, and gives the server's reason as text", async () => {
+    deploy = refused;
+    const { onDeployed } = mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(deployButton());
+    const alert = await screen.findByRole("alert");
+    const spans = alert.querySelectorAll("span");
+    expect(within(alert).getByText(REFUSED)).toBeTruthy();
+    expect(within(alert).getByText("app.example.com is held by stack shop.")).toBeTruthy();
+    expect(Array.from(spans).map((s) => s.textContent)).toContain(
+      "app.example.com is held by stack shop.",
+    );
+    expect(onDeployed).not.toHaveBeenCalled();
+    expect(deployButton().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("draws the reason of a refused claim as text, never as markup", async () => {
+    deploy = () =>
+      Response.json(
+        { type: "ingress_refused", title: "x", status: 409, detail: "<b>shop</b> holds it" },
+        { status: 409 },
+      );
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(deployButton());
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("<b>shop</b> holds it")).toBeTruthy();
+    expect(alert.querySelector("b")).toBeNull();
+  });
+
+  it("words a refusal with no reason as the sentence alone", async () => {
+    deploy = () =>
+      Response.json({ type: "ingress_refused", title: "x", status: 409 }, { status: 409 });
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(deployButton());
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(REFUSED)).toBeTruthy();
+    expect(alert.querySelectorAll("span")).toHaveLength(1);
+  });
 });
 
 // A roll back to a chosen revision (plan 08-03, STK-08, D-02): the revision's own stack with its stored
@@ -1228,6 +1284,16 @@ describe("in roll back mode", () => {
     expect(posts("/rollback")).toHaveLength(1);
     expect(posts("/rollback")[0]?.body).toEqual({ revision: 1, expectedDeployed: 3 });
     expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("words a claim the store refused as nothing changed, with the server's reason", async () => {
+    rollback = refused;
+    mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(rollbackButton());
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(REFUSED)).toBeTruthy();
+    expect(within(alert).getByText("app.example.com is held by stack shop.")).toBeTruthy();
   });
 
   it("says the stack was deployed again, stores nothing, and reviews again on request", async () => {
@@ -1397,6 +1463,16 @@ describe("in restore mode", () => {
     await screen.findByRole("table", { name: "Summary of changes" });
     expect(posts("/rollback")).toHaveLength(0);
     expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("words a claim the store refused as nothing changed, with the server's reason", async () => {
+    rollback = refused;
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(REFUSED)).toBeTruthy();
+    expect(within(alert).getByText("app.example.com is held by stack shop.")).toBeTruthy();
   });
 
   it("says the stack was deployed again, stores nothing, and reviews again on request", async () => {

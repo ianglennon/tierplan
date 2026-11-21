@@ -83,6 +83,8 @@ function deployRefusal(t: Translate, err: DeployRequestError, envName: string): 
       return t("stackReview.deployErrors.targetChanged");
     case "too_many_deploys":
       return t("stackReview.deployErrors.tooMany");
+    case "ingress_refused":
+      return t("stackIngress.review.refused");
   }
   if (err.status === 0) return t("stackReview.deployErrors.lost");
   if (err.status === 403) return t("stackReview.deployErrors.permission");
@@ -135,6 +137,12 @@ function restoreRefusal(t: Translate, err: DeployRequestError, envName: string):
   return shared === t("stackReview.deployErrors.generic")
     ? t("stackRestore.review.errors.generic")
     : shared;
+}
+
+// A refused claim says which hostname in the server's own sentence, already redacted by the server. It is drawn as
+// text after the page's sentence.
+function refusalDetail(err: DeployRequestError): string | undefined {
+  return err.type === "ingress_refused" && err.reason ? err.reason : undefined;
 }
 
 // The review's code for the blocking problem of an environment that is busy. It has nothing in the
@@ -253,6 +261,8 @@ export function ReviewPage({
   const rollback$ = useRollbackToRevision(envId, stackId);
   const restore$ = useRestoreStack(envId, stackId);
   const [deployError, setDeployError] = useState<string | null>(null);
+  // The server's reason for a refused hostname claim, shown after the sentence.
+  const [refusalReason, setRefusalReason] = useState<string | undefined>(undefined);
   const [tab, setTab] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   // The roll back was refused because the stack was deployed again: the review is out of date and says so.
@@ -306,12 +316,14 @@ export function ReviewPage({
   function rollBack() {
     if (!data || revision === undefined || rollback$.isPending || rollback$.isSuccess) return;
     setDeployError(null);
+    setRefusalReason(undefined);
     rollback$.mutate(
       { revision, ...(data.deployedSeq > 0 ? { expectedDeployed: data.deployedSeq } : {}) },
       {
         onSuccess: (answer) => onDeployed(answer.jobId),
         onError: (err) => {
           setDeployError(rollbackRefusal(t, err, envName));
+          setRefusalReason(refusalDetail(err));
           setStale(err.type === "deployed_changed");
         },
       },
@@ -324,12 +336,14 @@ export function ReviewPage({
   function restoreStack() {
     if (!data || seq === undefined || restore$.isPending || restore$.isSuccess) return;
     setDeployError(null);
+    setRefusalReason(undefined);
     restore$.mutate(
       { revision: seq },
       {
         onSuccess: (answer) => onDeployed(answer.jobId),
         onError: (err) => {
           setDeployError(restoreRefusal(t, err, envName));
+          setRefusalReason(refusalDetail(err));
           setStale(err.type === "deployed_changed");
         },
       },
@@ -341,6 +355,7 @@ export function ReviewPage({
   function deploy() {
     if (!data || deploy$.isPending || deploy$.isSuccess) return;
     setDeployError(null);
+    setRefusalReason(undefined);
     deploy$.mutate(
       {
         draftVersion: data.draftVersion,
@@ -352,7 +367,10 @@ export function ReviewPage({
       },
       {
         onSuccess: (answer) => onDeployed(answer.jobId),
-        onError: (err) => setDeployError(deployRefusal(t, err, envName)),
+        onError: (err) => {
+          setDeployError(deployRefusal(t, err, envName));
+          setRefusalReason(refusalDetail(err));
+        },
       },
     );
   }
@@ -626,6 +644,7 @@ export function ReviewPage({
           <CircleX aria-hidden="true" />
           <AlertDescription className="flex flex-wrap items-center gap-3 break-words">
             <span>{deployError}</span>
+            {refusalReason ? <span>{refusalReason}</span> : null}
             {stale ? (
               <Button
                 type="button"
@@ -635,6 +654,7 @@ export function ReviewPage({
                 disabled={review.isFetching}
                 onClick={() => {
                   setDeployError(null);
+                  setRefusalReason(undefined);
                   setStale(false);
                   void review.refetch();
                 }}

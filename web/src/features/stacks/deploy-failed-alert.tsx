@@ -34,6 +34,10 @@ const PULL_CODES = new Set([
   "pull_failed",
 ]);
 
+// The code of a deploy whose hostname claims the store refused, before anything was written (D-15). Nothing was
+// changed either, so it offers no roll back; the console says which hostname.
+const INGRESS_REFUSED = "ingress_refused";
+
 // reasonOf is the sentence for how an operation failed, from its code. The server's code is a stable
 // word; this words it, and a code it has no words for gets the plain one.
 function reasonOf(t: Translate, code: string): string {
@@ -45,8 +49,9 @@ function reasonOf(t: Translate, code: string): string {
 // page", D-14): it says where TierPlan stopped and why, and offers the console and the one-click way back
 // to the version that ran well. It stays until a later deploy succeeds, because it is drawn from the
 // stack's newest operation. A deploy that was cancelled or that a restart interrupted is told as that.
-// A deploy that stopped at the pull of an image changed nothing, so it says that and offers no roll back: the version that ran
-// before still runs, and a roll back would only deploy it again. A roll back that stopped there keeps its retry.
+// A deploy that stopped at the pull of an image, or at a hostname the ingress refused, changed nothing, so it says
+// that and offers no roll back: the version that ran before still runs, and a roll back would only deploy it again.
+// A roll back that stopped there keeps its retry.
 // A service name and a code are text. Nothing here rolls back by itself.
 export function DeployFailedAlert({ stack }: DeployFailedAlertProps) {
   const t = useT();
@@ -65,6 +70,7 @@ export function DeployFailedAlert({ stack }: DeployFailedAlertProps) {
         : "stackDeploy.lastFailed.title",
   );
   const pulling = !cancelled && op.state === "failed" && PULL_CODES.has(op.code);
+  const refused = !cancelled && op.state === "failed" && op.code === INGRESS_REFUSED;
   let body: string;
   switch (true) {
     case op.state === "interrupted":
@@ -81,6 +87,9 @@ export function DeployFailedAlert({ stack }: DeployFailedAlertProps) {
             reason: reasonOf(t, op.code),
           })
         : t("stackDeploy.lastFailed.pull", { reason: reasonOf(t, op.code) });
+      break;
+    case refused:
+      body = t("stackDeploy.lastFailed.ingressRefused");
       break;
     case cancelled:
       body = op.failedService
@@ -115,7 +124,7 @@ export function DeployFailedAlert({ stack }: DeployFailedAlertProps) {
             </Button>
           ) : null}
           {/* The caption names the revision the one-click roll back restores, when it was deployed and by whom. */}
-          {pulling && !rollback ? null : (
+          {(pulling || refused) && !rollback ? null : (
             <RollbackAction
               envId={stack.envId}
               stackId={stack.id}

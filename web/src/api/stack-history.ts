@@ -136,7 +136,12 @@ export function useRollbackToRevision(envId: string, stackId: string) {
         });
         if (!res.data) {
           const problem = readProblem(res.error, res.response);
-          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+          throw new DeployRequestError(
+            problem.status,
+            problem.type,
+            problem.fields,
+            problem.detail,
+          );
         }
         return res.data;
       } catch (e) {
