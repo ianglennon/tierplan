@@ -25,7 +25,7 @@ type CA struct {
 	pem  []byte
 }
 
-// NewCA makes a CA valid from an hour ago for a day, so a run never depends on a fixed expiry date.
+// NewCA makes a CA valid from an hour ago for a week, so a run never depends on a fixed expiry date.
 func NewCA(t testing.TB) *CA {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -37,7 +37,7 @@ func NewCA(t testing.TB) *CA {
 		SerialNumber:          serial(t),
 		Subject:               pkix.Name{CommonName: "TierPlan Traefik test CA"},
 		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.Add(24 * time.Hour),
+		NotAfter:              now.Add(7 * 24 * time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -57,6 +57,14 @@ func NewCA(t testing.TB) *CA {
 // returns its chain (the leaf alone) and its key, both as PEM.
 func (c *CA) Leaf(t testing.TB, hosts ...string) (chainPEM, keyPEM []byte) {
 	t.Helper()
+	return c.LeafValidFor(t, 24*time.Hour, hosts...)
+}
+
+// LeafValidFor is Leaf for a certificate that is valid for the given time from now (and from an hour ago). TierPlan serves
+// a certificate only while it has more than a day left, so a test that uploads one through the certificate store asks for
+// more than that, and no more than the CA's own week.
+func (c *CA) LeafValidFor(t testing.TB, valid time.Duration, hosts ...string) (chainPEM, keyPEM []byte) {
+	t.Helper()
 	if len(hosts) == 0 {
 		t.Fatal("traefiktest: Leaf needs a host name")
 	}
@@ -70,7 +78,7 @@ func (c *CA) Leaf(t testing.TB, hosts ...string) (chainPEM, keyPEM []byte) {
 		Subject:      pkix.Name{CommonName: hosts[0]},
 		DNSNames:     hosts,
 		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.Add(24 * time.Hour),
+		NotAfter:     now.Add(valid),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
