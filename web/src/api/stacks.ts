@@ -26,6 +26,7 @@ export type StackReview = components["schemas"]["StackReviewBody"];
 export type StackReviewService = components["schemas"]["StackReviewServiceBody"];
 export type StackReviewImage = components["schemas"]["StackReviewImageBody"];
 export type StackReviewObject = components["schemas"]["StackReviewObjectBody"];
+export type StackReviewIngress = components["schemas"]["StackReviewIngressBody"];
 export type StackTextDiff = components["schemas"]["StackTextDiffBody"];
 export type StackDiffHunk = components["schemas"]["StackDiffHunkBody"];
 export type StackDiffLine = components["schemas"]["StackDiffLineBody"];

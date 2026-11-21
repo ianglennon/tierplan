@@ -31,6 +31,7 @@ import { BlockingList } from "@/features/stack-review/blocking-list";
 import { CommitsCard } from "@/features/stack-review/commits-card";
 import { ConcurrentDeployPanel } from "@/features/stack-review/concurrent-deploy-panel";
 import { ImagePinTable } from "@/features/stack-review/image-pin-table";
+import { IngressSection } from "@/features/stack-review/ingress-section";
 import { MovedHeadNote } from "@/features/stack-review/moved-head-note";
 import { OtherResourcesTable } from "@/features/stack-review/other-resources-table";
 import { RevertsDriftSection } from "@/features/stack-review/reverts-drift-section";
@@ -597,6 +598,7 @@ export function ReviewPage({
               </TabsList>
               <TabsContent value="changes" className="flex flex-col gap-4">
                 <ServiceDiffList services={changed} context={ownershipContext.context} />
+                <IngressSection ingress={data.ingress} target={stack.data?.target} />
                 <OtherResourcesTable objects={data.objects ?? []} />
               </TabsContent>
               <TabsContent value="yaml">

@@ -579,6 +579,85 @@ describe("the Changes tab", () => {
     expect(screen.getByText("db_pass")).toBeTruthy();
   });
 
+  it("draws the Ingress card after the service diff and before Other resources, and a warning only in the warnings list", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          objects: [{ change: "added", kind: "network", name: "front", detail: "" }],
+          ingress: {
+            routes: [
+              {
+                change: "added",
+                hostname: "app.example.com",
+                path: "/",
+                port: 8080,
+                scheme: "http",
+                service: "web",
+              },
+            ],
+            certificates: [{ hostname: "app.example.com", state: "will_issue" }],
+            network: [{ service: "web", change: "joins", replacesTasks: true }],
+          },
+          problems: [
+            problemOf({
+              severity: "warning",
+              code: "ingress_dnsrr",
+              message: "web uses DNS round robin, so ingress cannot route to it.",
+            }),
+          ],
+        }),
+      );
+    mount();
+    const card = await screen.findByRole("heading", { level: 3, name: "Ingress" });
+    const diff = await screen.findByRole("table", { name: "Changes to web" });
+    const other = screen.getByRole("heading", { name: "Other resources" });
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(diff, card)).toBe(true);
+    expect(follows(card, other)).toBe(true);
+    expect(screen.getByRole("table", { name: "Routes" })).toBeTruthy();
+    // The warning is the server's own message in the warnings list, not in the card.
+    const message = screen.getByText("web uses DNS round robin, so ingress cannot route to it.");
+    expect(message).toBeTruthy();
+    expect(card.closest("section")?.contains(message)).toBe(false);
+  });
+
+  it("draws no Ingress card when the review has no ingress section", async () => {
+    review = () => Response.json(reviewBody({ services: [changedWeb()] }));
+    mount();
+    await screen.findByRole("table", { name: "Changes to web" });
+    expect(screen.queryByRole("heading", { name: "Ingress" })).toBeNull();
+  });
+
+  it("leaves the network table out of the card for a standalone stack", async () => {
+    target = "standalone";
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          ingress: {
+            routes: [
+              {
+                change: "added",
+                hostname: "app.example.com",
+                path: "/",
+                port: 8080,
+                scheme: "http",
+                service: "web",
+                note: "Not served on this host yet.",
+              },
+            ],
+            certificates: [],
+            network: [{ service: "web", change: "joins", replacesTasks: true }],
+          },
+        }),
+      );
+    mount();
+    expect(await screen.findByRole("table", { name: "Routes" })).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "Network changes" })).toBeNull();
+  });
+
   it("lists every service as Added on a first deploy and says nothing from the stack is running", async () => {
     review = () =>
       Response.json(
