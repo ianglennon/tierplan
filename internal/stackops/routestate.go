@@ -24,6 +24,9 @@ const (
 	RouteNotAttached = "not_attached"
 	// RouteIngressOff: the environment's ingress is switched off.
 	RouteIngressOff = "ingress_off"
+	// RouteNotServedYet: the stack runs on a standalone host, which ingress does not serve yet. Its routes keep their
+	// hostnames; they are not worked out against the swarm.
+	RouteNotServedYet = "not_served_yet"
 )
 
 // RouteKey names a route by its hostname and path prefix, the pair the renderer's skipped list and the bundle's manifest
@@ -37,6 +40,9 @@ func routePath(p string) string { return cmp.Or(p, "/") }
 type RouteStateInput struct {
 	// Enabled is true when the environment's ingress is switched on.
 	Enabled bool
+	// NotServed is true when the stack's target is not served by ingress yet (a standalone host). Every route then reads
+	// RouteNotServedYet, whatever else is known.
+	NotServed bool
 	// Stopped is true when a person stopped the stack: it keeps its hostnames and its routes read backend not running.
 	Stopped bool
 	// Routes are the routes the stack holds.
@@ -65,7 +71,7 @@ type RouteState struct {
 }
 
 // RouteStates derives the state of each route of a stack, in hostname then path order. The first test that holds
-// decides: ingress off, then the backend not running (a stopped stack's routes all read so, since it keeps its claims),
+// decides: not served yet (a standalone host), then ingress off, then the backend not running (a stopped stack's routes all read so, since it keeps its claims),
 // then not attached, then waiting for a certificate, then pending, and serving last.
 func RouteStates(in RouteStateInput) []RouteState {
 	out := make([]RouteState, 0, len(in.Routes))
@@ -73,6 +79,8 @@ func RouteStates(in RouteStateInput) []RouteState {
 		key := RouteKey{Hostname: r.Hostname, Path: routePath(r.PathPrefix)}
 		s := RouteState{Hostname: key.Hostname, Path: key.Path, Service: r.Service}
 		switch reason := in.Skipped[key]; {
+		case in.NotServed:
+			s.State = RouteNotServedYet
 		case !in.Enabled:
 			s.State = RouteIngressOff
 		case in.Stopped || in.Running[r.Service] <= 0:

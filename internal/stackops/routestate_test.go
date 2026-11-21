@@ -11,7 +11,7 @@ import (
 )
 
 // The state of a route is derived on read from what is stored, what runs and what the nodes applied, and kept
-// nowhere (plan 24-25, D-24). The precedence is ingress_off, backend_not_running, not_attached, waiting_certificate,
+// nowhere (plan 24-25, D-24). The precedence is not_served_yet, ingress_off, backend_not_running, not_attached, waiting_certificate,
 // pending, serving.
 
 func TestRouteStateMatrix(t *testing.T) {
@@ -54,7 +54,11 @@ func TestRouteStateMatrix(t *testing.T) {
 		{"not attached", func(in *stackops.RouteStateInput) { in.Attached = map[string]bool{"web": false} }, stackops.RouteNotAttached, "", false},
 		{"ingress off", func(in *stackops.RouteStateInput) { in.Enabled = false }, stackops.RouteIngressOff, "", false},
 
+		{"not served yet: a standalone stack", func(in *stackops.RouteStateInput) { in.NotServed, in.Running, in.Attached = true, nil, nil }, stackops.RouteNotServedYet, "", false},
+
 		// Precedence.
+		{"not served yet beats ingress off", func(in *stackops.RouteStateInput) { in.NotServed, in.Enabled = true, false }, stackops.RouteNotServedYet, "", false},
+		{"not served yet beats stopped", func(in *stackops.RouteStateInput) { in.NotServed, in.Stopped = true, true }, stackops.RouteNotServedYet, "", false},
 		{"ingress off beats stopped", func(in *stackops.RouteStateInput) { in.Enabled, in.Stopped = false, true }, stackops.RouteIngressOff, "", false},
 		{"stopped beats not attached", func(in *stackops.RouteStateInput) {
 			in.Stopped = true

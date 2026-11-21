@@ -148,6 +148,22 @@ func TestStackRoutesRoute(t *testing.T) {
 		}
 	})
 
+	t.Run("a standalone stack's routes read not served yet, whatever the swarm says", func(t *testing.T) {
+		if _, err := f.st.Write.Exec(`UPDATE stacks SET target = 'standalone' WHERE id = ?`, st.ID); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = f.st.Write.Exec(`UPDATE stacks SET target = 'swarm' WHERE id = ?`, st.ID) })
+		_, got := routeStates(t, viewer, st.ID)
+		if len(got.Routes) != 2 {
+			t.Fatalf("routes = %+v, want both", got.Routes)
+		}
+		for _, r := range got.Routes {
+			if r.State != "not_served_yet" || r.Stopped {
+				t.Errorf("route = %+v, want not_served_yet, not stopped", r)
+			}
+		}
+	})
+
 	t.Run("the body never carries a certificate, a key or a token", func(t *testing.T) {
 		rec := viewer.do(http.MethodGet, routesPath(st.ID), "")
 		for _, bad := range []string{"PRIVATE KEY", "BEGIN CERTIFICATE", "token", "chain"} {
