@@ -170,6 +170,7 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 			rv.Summary.Volumes.Changed++
 		}
 	}
+	d.fillIngressStandalone(ctx, in, rv, project)
 	rv.Problems = rv.Problems.Sorted()
 	d.addRevertsDrift(ctx, in, rv, rawStandaloneRows(cmp, diff.Removed, standalonePins(items, pinned)), reviewMasker(in))
 	return nil
