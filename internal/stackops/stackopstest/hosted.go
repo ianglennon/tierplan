@@ -77,6 +77,7 @@ func Host(t testing.TB, name, stackID, compose string, vars []stacks.Var, files 
 func HostPinned(t testing.TB, name, stackID, compose string, vars []stacks.Var, pins map[string]string, files ...stacks.File) *Hosted {
 	t.Helper()
 	copy := stacks.WorkingCopy{Files: append([]stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}, files...), Vars: vars}
+	// ingress: unattached, standalone test helper
 	checked := stacks.Check(context.Background(), stacks.CheckInput{Name: name, Target: stacks.TargetStandalone, Copy: copy})
 	if checked.Loaded == nil {
 		t.Fatalf("check: %v", checked.Problems)
@@ -184,6 +185,7 @@ func (h *Hosted) Apply(c *dockertest.FakeConfig) {
 func Foreign(t testing.TB, name, compose string) *Hosted {
 	t.Helper()
 	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}}
+	// ingress: unattached, standalone test helper
 	checked := stacks.Check(context.Background(), stacks.CheckInput{Name: name, Target: stacks.TargetStandalone, Copy: copy})
 	if checked.Loaded == nil {
 		t.Fatalf("check: %v", checked.Problems)
