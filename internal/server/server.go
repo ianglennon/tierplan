@@ -1274,7 +1274,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The ingress deployer shares the stack routes' operation lock and the job hub, so an enable and a stack operation exclude
 	// each other. Its stack side lists the stacks to redeploy.
 	ingressDeploy := newIngressDeploy(ingressDeployDeps{
-		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc,
+		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc, Hub: ingressHub,
 		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
 		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
 		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead),

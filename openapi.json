@@ -10380,6 +10380,112 @@
         ],
         "type": "object"
       },
+      "IngressDisableNodeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The node's name",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID the node's agent connects as",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "name"
+        ],
+        "type": "object"
+      },
+      "IngressDisablePreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "findings": {
+            "description": "What stands in the way, each an error: ingress_paused first, then ingress_routes_live listing every hostname and path with its stack. Empty when nothing does",
+            "items": {
+              "$ref": "#/components/schemas/IngressFindingBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "removes": {
+            "$ref": "#/components/schemas/IngressDisableRemovesBody",
+            "description": "What the switch-off would remove"
+          },
+          "unreachable": {
+            "description": "The nodes whose agent is not connected now: their certificate cache volume is wiped when the agent connects",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "findings",
+          "removes",
+          "unreachable"
+        ],
+        "type": "object"
+      },
+      "IngressDisableRemovesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "network": {
+            "description": "The ingress network's name; empty when the swarm was read and does not hold it",
+            "type": "string"
+          },
+          "secrets": {
+            "description": "The names of the join token secrets the swarm holds",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "service": {
+            "description": "The proxy service's name; empty when the swarm was read and does not hold it",
+            "type": "string"
+          },
+          "volumes": {
+            "description": "The nodes whose certificate cache volume is wiped: every node of the environment",
+            "items": {
+              "$ref": "#/components/schemas/IngressDisableNodeBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "service",
+          "network",
+          "secrets",
+          "volumes"
+        ],
+        "type": "object"
+      },
+      "IngressDisableStartBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The disable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "type": "object"
+      },
       "IngressDomainBody": {
         "additionalProperties": false,
         "properties": {
@@ -10642,7 +10748,7 @@
             "type": "string"
           },
           "items": {
-            "description": "The steps, in the order they run: token, network, service and switch",
+            "description": "The steps, in the order they run: token, network, service and switch for ingress_enable; switch_off, service, volumes, network, secret, token and nodes for ingress_disable",
             "items": {
               "$ref": "#/components/schemas/StackJobItemBody"
             },
@@ -10652,9 +10758,10 @@
             ]
           },
           "kind": {
-            "description": "What the job does",
+            "description": "What the job does: ingress_enable or ingress_disable",
             "enum": [
-              "ingress_enable"
+              "ingress_enable",
+              "ingress_disable"
             ],
             "type": "string"
           },
@@ -33998,6 +34105,108 @@
           }
         },
         "summary": "Try a certificate again now",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/disable": {
+      "post": {
+        "description": "Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; 409 ingress_standalone_unavailable on a standalone environment; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "disableIngress",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressDisableStartBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Switch ingress off for a swarm environment",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/disable/preview": {
+      "post": {
+        "description": "Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "previewIngressDisable",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressDisablePreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview switching ingress off for a swarm environment",
         "tags": [
           "ingress"
         ]

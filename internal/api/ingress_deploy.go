@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -21,16 +22,18 @@ import (
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
-// The ingress deploy routes (Phase 24, DEP-01): an Admin previews what switching ingress on would create and what would
-// stop it, switches it on as a job, and follows that job. Nothing here changes a stack: stacks are redeployed by their
+// The ingress deploy routes (Phase 24, DEP-01, DEP-07): an Admin previews what switching ingress on would create and what would
+// stop it, switches it on as a job, previews and runs the switch-off the same way, and follows the job. Nothing here changes a stack: stacks are redeployed by their
 // own deploy to join the ingress network.
 
 const (
 	problemIngressStandalone       = "ingress_standalone_unavailable"
 	problemIngressPreflightRefused = "ingress_preflight_refused"
 	problemIngressJobNotFound      = "ingress_job_not_found"
+	problemIngressRoutesLive       = ingressdeploy.CodeRoutesLive
+	problemIngressPaused           = ingressdeploy.CodePaused
 
-	// ingressJobKindPrefix is what every kind of ingress job in the jobs hub starts with (ingress_enable today).
+	// ingressJobKindPrefix is what every kind of ingress job in the jobs hub starts with (ingress_enable and ingress_disable).
 	ingressJobKindPrefix = "ingress_"
 
 	ingressJobGone = "This ingress job is no longer here. Jobs are kept for 10 minutes after they end."
@@ -207,6 +210,44 @@ type IngressEnableStartOutput struct {
 	Body         IngressEnableStartBody
 }
 
+// IngressDisableNodeBody is a node whose certificate cache volume a switch-off wipes.
+type IngressDisableNodeBody struct {
+	NodeID string `json:"nodeId" doc:"The ID the node's agent connects as"`
+	Name   string `json:"name" doc:"The node's name"`
+}
+
+// IngressDisableRemovesBody is what a switch-off would remove.
+type IngressDisableRemovesBody struct {
+	Service string                   `json:"service" doc:"The proxy service's name; empty when the swarm was read and does not hold it"`
+	Network string                   `json:"network" doc:"The ingress network's name; empty when the swarm was read and does not hold it"`
+	Secrets []string                 `json:"secrets" doc:"The names of the join token secrets the swarm holds"`
+	Volumes []IngressDisableNodeBody `json:"volumes" doc:"The nodes whose certificate cache volume is wiped: every node of the environment"`
+}
+
+// IngressDisablePreviewBody is the answer to the preview of a switch-off.
+type IngressDisablePreviewBody struct {
+	Findings    []IngressFindingBody      `json:"findings" doc:"What stands in the way, each an error: ingress_paused first, then ingress_routes_live listing every hostname and path with its stack. Empty when nothing does"`
+	Removes     IngressDisableRemovesBody `json:"removes" doc:"What the switch-off would remove"`
+	Unreachable []string                  `json:"unreachable" doc:"The nodes whose agent is not connected now: their certificate cache volume is wiped when the agent connects"`
+}
+
+// IngressDisablePreviewOutput wraps IngressDisablePreviewBody for huma.
+type IngressDisablePreviewOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressDisablePreviewBody
+}
+
+// IngressDisableStartBody is the answer to the switch-off: the job that does it.
+type IngressDisableStartBody struct {
+	JobID string `json:"jobId" doc:"The disable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream"`
+}
+
+// IngressDisableStartOutput wraps IngressDisableStartBody for huma.
+type IngressDisableStartOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressDisableStartBody
+}
+
 // IngressJobPathInput carries {envId} and {jobId}.
 type IngressJobPathInput struct {
 	EnvironmentPathInput
@@ -216,12 +257,12 @@ type IngressJobPathInput struct {
 // IngressJobBody is an ingress job.
 type IngressJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
-	Kind       string               `json:"kind" enum:"ingress_enable" doc:"What the job does"`
+	Kind       string               `json:"kind" enum:"ingress_enable,ingress_disable" doc:"What the job does: ingress_enable or ingress_disable"`
 	StartedBy  string               `json:"startedBy" doc:"Who started it, as the hub records its owner"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
-	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch"`
+	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch for ingress_enable; switch_off, service, volumes, network, secret, token and nodes for ingress_disable"`
 	Output     []StackJobOutputLine `json:"output" doc:"The output log, oldest first"`
 }
 
@@ -301,12 +342,15 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 	}
 	fail := func(ctx context.Context, what string, err error) error {
 		var pre *ingressdeploy.PreflightError
+		var refused *ingressdeploy.DisableRefusedError
 		var locked *ingressdeploy.LockedError
 		switch {
 		case errors.Is(err, ingressdeploy.ErrStandaloneUnavailable):
 			return httpx.Problem(http.StatusConflict, problemIngressStandalone, "Ingress is not yet available on a standalone environment.")
 		case errors.As(err, &pre):
 			return ingressPreflightProblem(pre)
+		case errors.As(err, &refused):
+			return ingressDisableProblem(refused)
 		case errors.As(err, &locked):
 			name := ""
 			if env := httpx.EnvFrom(ctx); env != nil {
@@ -378,6 +422,80 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 			return nil, fail(ctx, "enable ingress", err)
 		}
 		return &IngressEnableStartOutput{CacheControl: "no-store", Body: IngressEnableStartBody{JobID: id}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewIngressDisable",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/ingress/disable/preview",
+		Summary:     "Preview switching ingress off for a swarm environment",
+		Description: "Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) " +
+			"and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live " +
+			"while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. " +
+			"A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: " +
+			"their cache volume, which holds the private keys, is wiped when the agent connects. " +
+			"409 " + problemIngressStandalone + " on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressDisablePreviewOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		canView, err := d.canView(ctx, p, in.EnvID)
+		if err != nil {
+			return nil, fail(ctx, "read the access for the ingress switch-off preview", err)
+		}
+		res, err := d.Service.PreviewDisable(ctx, in.EnvID, canView)
+		if err != nil {
+			return nil, fail(ctx, "preview the ingress switch-off", err)
+		}
+		body := IngressDisablePreviewBody{
+			Findings: ingressFindings(res.Findings), Unreachable: res.Unreachable,
+			Removes: IngressDisableRemovesBody{
+				Service: res.Removes.Service, Network: res.Removes.Network, Secrets: res.Removes.Secrets,
+				Volumes: make([]IngressDisableNodeBody, 0, len(res.Removes.Volumes)),
+			},
+		}
+		for _, n := range res.Removes.Volumes {
+			body.Removes.Volumes = append(body.Removes.Volumes, IngressDisableNodeBody{NodeID: n.ID, Name: n.Name})
+		}
+		return &IngressDisablePreviewOutput{CacheControl: "no-store", Body: body}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "disableIngress",
+		Method:        http.MethodPost,
+		Path:          "/api/env/{envId}/ingress/disable",
+		Summary:       "Switch ingress off for a swarm environment",
+		DefaultStatus: http.StatusAccepted,
+		Description: "Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), " +
+			"remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, " +
+			"disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped " +
+			"when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. " +
+			"409 " + problemIngressRoutesLive + " while a claim with routes exists, listing each hostname and path with its stack in errors; 409 " + problemIngressPaused + " while a restore's pause stands; " +
+			"409 " + problemIngressStandalone + " on a standalone environment; 409 " + problemOperationLocked + " while another operation holds the environment. Nothing is written when it is refused. " +
+			"Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressDisableStartOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		canView, err := d.canView(ctx, p, in.EnvID)
+		if err != nil {
+			return nil, fail(ctx, "read the access for the ingress switch-off", err)
+		}
+		id, err := d.Service.Disable(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID, canView)
+		if err != nil {
+			return nil, fail(ctx, "switch ingress off", err)
+		}
+		return &IngressDisableStartOutput{CacheControl: "no-store", Body: IngressDisableStartBody{JobID: id}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -532,6 +650,44 @@ func serveIngressJobStream(w http.ResponseWriter, req *http.Request, d IngressDe
 			return nil, false
 		},
 	})
+}
+
+// canView says which environments a message about a held name may name: the caller's own access decides, and with no
+// principal or no checker only the environment itself is visible, as ingressPolicyFor builds it.
+func (d IngressDeployDeps) canView(ctx context.Context, p *rbac.Principal, envID string) (func(string) bool, error) {
+	canView := func(id string) bool { return id == envID }
+	if p != nil && d.Checker != nil {
+		access, err := d.Checker.Access(ctx, p)
+		if err != nil {
+			return nil, fmt.Errorf("read the access of the principal: %w", err)
+		}
+		canView = func(id string) bool { return access.For(id).Role != rbac.RoleNone }
+	}
+	return canView, nil
+}
+
+// ingressDisableProblem is the 409 for a switch-off that was refused: its type is the code of the first finding
+// (ingress_paused or ingress_routes_live), and each finding is listed with its code as the location, its sentence as the
+// message and its items, the routes and their stacks, as the value.
+func ingressDisableProblem(e *ingressdeploy.DisableRefusedError) error {
+	var details []*huma.ErrorDetail
+	var msgs []string
+	for _, f := range e.Findings {
+		items := f.Items
+		if items == nil {
+			items = []string{}
+		}
+		details = append(details, &huma.ErrorDetail{Location: f.Code, Message: f.Message, Value: items})
+		msgs = append(msgs, f.Message)
+	}
+	typ := ""
+	if len(e.Findings) > 0 {
+		typ = e.Findings[0].Code
+	}
+	return &huma.ErrorModel{
+		Type: typ, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+		Detail: "Ingress cannot be switched off: " + strings.Join(msgs, " "), Errors: details,
+	}
 }
 
 // ingressPreflightProblem is the 409 for an enable the preflight refused: each finding that refuses is listed with its code

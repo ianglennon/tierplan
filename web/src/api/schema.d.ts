@@ -1552,6 +1552,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch ingress off for a swarm environment
+         * @description Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; 409 ingress_standalone_unavailable on a standalone environment; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["disableIngress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/disable/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching ingress off for a swarm environment
+         * @description Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["previewIngressDisable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/ingress/domains": {
         parameters: {
             query?: never;
@@ -10539,6 +10579,34 @@ export interface components {
             /** @description The environment's certificates, live and retired, by hostname */
             items: components["schemas"]["IngressCertBody"][] | null;
         };
+        IngressDisableNodeBody: {
+            /** @description The node's name */
+            name: string;
+            /** @description The ID the node's agent connects as */
+            nodeId: string;
+        };
+        IngressDisablePreviewBody: {
+            /** @description What stands in the way, each an error: ingress_paused first, then ingress_routes_live listing every hostname and path with its stack. Empty when nothing does */
+            findings: components["schemas"]["IngressFindingBody"][] | null;
+            /** @description What the switch-off would remove */
+            removes: components["schemas"]["IngressDisableRemovesBody"];
+            /** @description The nodes whose agent is not connected now: their certificate cache volume is wiped when the agent connects */
+            unreachable: string[] | null;
+        };
+        IngressDisableRemovesBody: {
+            /** @description The ingress network's name; empty when the swarm was read and does not hold it */
+            network: string;
+            /** @description The names of the join token secrets the swarm holds */
+            secrets: string[] | null;
+            /** @description The proxy service's name; empty when the swarm was read and does not hold it */
+            service: string;
+            /** @description The nodes whose certificate cache volume is wiped: every node of the environment */
+            volumes: components["schemas"]["IngressDisableNodeBody"][] | null;
+        };
+        IngressDisableStartBody: {
+            /** @description The disable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
+            jobId: string;
+        };
         IngressDomainBody: {
             /**
              * Format: int64
@@ -10644,13 +10712,13 @@ export interface components {
             finishedAt: string;
             /** @description The job ID */
             id: string;
-            /** @description The steps, in the order they run: token, network, service and switch */
+            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable; switch_off, service, volumes, network, secret, token and nodes for ingress_disable */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What the job does
+             * @description What the job does: ingress_enable or ingress_disable
              * @enum {string}
              */
-            kind: "ingress_enable";
+            kind: "ingress_enable" | "ingress_disable";
             /** @description The output log, oldest first */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description Who started it, as the hub records its owner */
@@ -21142,6 +21210,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressDisableStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressDisable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressDisablePreviewBody"];
+                };
             };
             /** @description Error */
             default: {

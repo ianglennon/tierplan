@@ -230,6 +230,46 @@ func (s *Store) AddPendingWipe(ctx context.Context, tx *sql.Tx, envID, swarmNode
 	return nil
 }
 
+// QueueWipe queues the wipe of a node's certificate cache volume and runs hook, which may be nil, in the same transaction, so
+// the audit row that names the queued wipe is never written without it. Queuing the same wipe again changes nothing.
+func (s *Store) QueueWipe(ctx context.Context, envID, swarmNodeID, volume string, at time.Time, hook DeployHook) error {
+	return s.writeQuiet(ctx, func(tx *sql.Tx, _ *sqlc.Queries) (bool, error) {
+		if err := s.AddPendingWipe(ctx, tx, envID, swarmNodeID, volume, at); err != nil {
+			return false, err
+		}
+		if hook != nil {
+			if err := hook(ctx, tx); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+}
+
+// CompleteWipe removes a queued wipe once it is done. hook, which may be nil, runs in the same transaction, and only when
+// there was a queued wipe to remove: the audit row of a done wipe is never written for one that was not queued. It reports
+// whether there was one.
+func (s *Store) CompleteWipe(ctx context.Context, envID, swarmNodeID, volume string, hook DeployHook) (bool, error) {
+	cleared := false
+	err := s.writeQuiet(ctx, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		n, err := q.DeleteIngressPendingWipe(ctx, sqlc.DeleteIngressPendingWipeParams{EnvID: envID, SwarmNodeID: swarmNodeID, Volume: volume})
+		if err != nil {
+			return false, fmt.Errorf("ingressstore: clear the wipe of %q on node %q: %w", volume, swarmNodeID, err)
+		}
+		if n == 0 {
+			return false, nil
+		}
+		cleared = true
+		if hook != nil {
+			if err := hook(ctx, tx); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+	return cleared, err
+}
+
 // pendingWipeOf converts a row.
 func pendingWipeOf(r sqlc.IngressPendingWipe) PendingWipe {
 	return PendingWipe{EnvID: r.EnvID, SwarmNodeID: r.SwarmNodeID, Volume: r.Volume, CreatedAt: fromNanos(r.CreatedAt)}

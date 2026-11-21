@@ -38,7 +38,9 @@ type ingressDeployDeps struct {
 	// Notifier wakes the ensure loop on every change to the ingress state.
 	Notifier *ingress.Notifier
 	Tokens   *ingresshub.Service
-	Jobs     *jobs.Hub
+	// Hub closes an environment's proxy sessions when its ingress is switched off.
+	Hub  *ingresshub.Hub
+	Jobs *jobs.Hub
 	// Locks is the operation lock the stack routes use, so a stack operation and an ingress job exclude each other.
 	Locks         *stackops.Locks
 	Resolver      *registry.Resolver
@@ -65,6 +67,8 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Store:         d.Ingress,
 		Notifier:      d.Notifier,
 		Tokens:        d.Tokens,
+		NodeRows:      d.Tokens,
+		Kicker:        d.Hub,
 		Nodes:         d.Tokens,
 		Stacks:        d.Stacks,
 		CurrentBundle: d.CurrentBundle,

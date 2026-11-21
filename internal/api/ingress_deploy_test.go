@@ -134,7 +134,7 @@ func newDeployFixDeps(t *testing.T, standalone bool, config func(*dockertest.Fak
 	f.ingressDeployJobs = hub
 	df := &deployFix{ingressFix: f, fake: fake, cli: cli, hub: hub}
 	d := ingressdeploy.Deps{
-		Engine: deployEngine{cli: cli}, Envs: deployEnvs{standalone: standalone}, Store: f.ingressStore, Tokens: f.ingressNodes, Nodes: f.ingressNodes,
+		Engine: deployEngine{cli: cli}, Envs: deployEnvs{standalone: standalone}, Store: f.ingressStore, Tokens: f.ingressNodes, NodeRows: f.ingressNodes, Nodes: f.ingressNodes,
 		Jobs: hub, Locks: f.stackLocks, Audit: f.aud, AddressSpaces: &deployAddressing{cli: cli},
 		AllocationWait: dockerx.AllocationWait{After: func(time.Duration) <-chan time.Time {
 			c := make(chan time.Time, 1)

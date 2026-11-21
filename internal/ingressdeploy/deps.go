@@ -85,6 +85,21 @@ type Tokens interface {
 
 var _ Tokens = (*ingresshub.Service)(nil)
 
+// Kicker closes the live ingress sessions of an environment: *ingresshub.Hub has this method. Disable calls it once ingress
+// is switched off and before the proxy service is removed, so no proxy is still being served.
+type Kicker interface {
+	KickEnv(envID, code string)
+}
+
+var _ Kicker = (*ingresshub.Hub)(nil)
+
+// NodeRows removes the ingress node rows of an environment, auditing each: *ingresshub.Service has this method.
+type NodeRows interface {
+	RemoveEnvNodes(ctx context.Context, actor audit.Actor, envID string) ([]ingresshub.Node, error)
+}
+
+var _ NodeRows = (*ingresshub.Service)(nil)
+
 // NodeLister lists the ingress nodes of an environment: ingresshub.Service has this method.
 type NodeLister interface {
 	ListNodes(ctx context.Context, envID string) ([]ingresshub.Node, error)
@@ -123,9 +138,16 @@ type Deps struct {
 	// CurrentBundle is the environment's current ingress bundle ID and whether it has one, for the status; nil
 	// reads none, so no node counts as ready.
 	CurrentBundle func(envID string) (string, bool)
-	Jobs          *jobs.Hub
-	Locks         stackops.OperationLock
-	Audit         *audit.Writer
+	// Kicker closes an environment's proxy sessions when ingress is switched off; nil closes none.
+	Kicker Kicker
+	// NodeRows removes the environment's proxy node rows at the end of a switch-off; nil removes none.
+	NodeRows NodeRows
+	// Events delivers the health stream's live events (the agent.connected events wake the wipe loop) and the function that
+	// ends the subscription; nil leaves the wipe loop to its tick.
+	Events func(ctx context.Context) (<-chan envs.HealthEvent, func())
+	Jobs   *jobs.Hub
+	Locks  stackops.OperationLock
+	Audit  *audit.Writer
 	// Notifier is the ingress store's notifier: the ensure loop takes a pass whenever it reports a change. Nil
 	// leaves the loop to its tick and to Wake.
 	Notifier *ingress.Notifier
