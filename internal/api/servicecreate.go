@@ -101,7 +101,8 @@ func registerServiceCreate(r *httpx.Router, d ServicesDeps) {
 			"A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. " +
 			"Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. " + problems +
 			"No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. " +
-			"Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused.",
+			"Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused. " +
+			"A spec that sets the label tierplan.component, on the service or on its container, is refused 422 ingress_component_label before anything is created: the label is TierPlan's own for its ingress objects.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxApplyBody,
 	}, rbac.Requirement{Perm: rbac.PermServicesManage, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *ServiceCreateInput) (*ServiceCreateOutput, error) {
@@ -120,6 +121,9 @@ func registerServiceCreate(r *httpx.Router, d ServicesDeps) {
 // reviewServiceCreate judges a new service's spec inside one cluster read: it only reads, so a read
 // that has to be run again on another manager is safe.
 func reviewServiceCreate(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceCreateReviewInput) (ServiceReviewBody, error) {
+	if _, sets := specSetsComponentLabel(in.Body.Spec); sets {
+		return ServiceReviewBody{}, componentLabelError()
+	}
 	if err := requireSwarm(ctx, d, envID); err != nil {
 		return ServiceReviewBody{}, err
 	}
@@ -148,6 +152,15 @@ func reviewServiceCreate(ctx context.Context, d ServicesDeps, p *rbac.Principal,
 // createService makes one service. The write is sent and seen through, so a browser that goes away
 // while it runs does not turn a service that was made into a failure.
 func createService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceCreateInput) (ServiceCreateBody, error) {
+	if name, sets := specSetsComponentLabel(in.Body.Spec); sets {
+		// Refused before anything is staged or sent, and audited like every other refused create.
+		if name == "" {
+			name = "(unnamed)"
+		}
+		auditServiceAction(ctx, d, p, envID, in.UserAgent, audit.ActionServiceCreated, "", name,
+			map[string]string{"name": name, "image": "", "digest": "", "objects": "0", "code": problemIngressComponentLabel}, problemIngressComponentLabel)
+		return ServiceCreateBody{}, componentLabelError()
+	}
 	objects, err := stagedObjects(in.Body.Objects)
 	if err != nil {
 		return ServiceCreateBody{}, err

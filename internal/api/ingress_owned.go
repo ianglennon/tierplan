@@ -42,17 +42,18 @@ func hasComponentLabel(labels map[string]string) bool {
 }
 
 // specSetsComponentLabel reports whether a service spec, as the create routes receive it, sets the component
-// label on the service or on its container. A spec that does not decode is not judged here: the strict decode
-// of the create refuses it with its own words.
-func specSetsComponentLabel(raw []byte) bool {
+// label on the service or on its container, and the name the spec asks for. A spec that does not decode is not
+// judged here: the strict decode of the create refuses it with its own words.
+func specSetsComponentLabel(raw []byte) (name string, sets bool) {
 	var spec struct {
+		Name         string
 		Labels       map[string]string
 		TaskTemplate struct {
 			ContainerSpec struct{ Labels map[string]string }
 		}
 	}
 	if json.Unmarshal(raw, &spec) != nil {
-		return false
+		return "", false
 	}
-	return hasComponentLabel(spec.Labels) || hasComponentLabel(spec.TaskTemplate.ContainerSpec.Labels)
+	return spec.Name, hasComponentLabel(spec.Labels) || hasComponentLabel(spec.TaskTemplate.ContainerSpec.Labels)
 }

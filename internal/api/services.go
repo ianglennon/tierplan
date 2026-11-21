@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/swarmops"
 	"github.com/ianglennon/tierplan/internal/tunnel"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
@@ -615,6 +616,9 @@ func scaleOne(ctx context.Context, d ServicesDeps, envID string, t ContainerActi
 			return err
 		}
 		out.id, name = detail.ID, detail.Name
+		if detail.Ingress {
+			return swarmops.ErrIngressOwned
+		}
 		if detail.Mode != "replicated" {
 			return dockerx.ErrNotScalable
 		}
@@ -638,7 +642,7 @@ func scaleOne(ctx context.Context, d ServicesDeps, envID string, t ContainerActi
 	}
 	code, detail := scaleError(err)
 	res.Result, res.Code, res.Detail = actionFailed, code, detail
-	if code == codeNotScalable {
+	if code == codeNotScalable || code == problemIngressOwned {
 		res.Result = actionSkipped
 	}
 	if code == codeScaleFailed || code == codeRegistryUnresolved {
@@ -716,6 +720,8 @@ var swarmWriteDetail = map[string]string{
 // scaleError maps the error of one scale to a result code and a sentence.
 func scaleError(err error) (code, detail string) {
 	switch {
+	case errors.Is(err, swarmops.ErrIngressOwned):
+		return problemIngressOwned, ingressOwnedMessage
 	case errors.Is(err, dockerx.ErrNotScalable):
 		return codeNotScalable, "A global or job service has no replica count to set."
 	case errors.Is(err, errRegistryUnresolved):

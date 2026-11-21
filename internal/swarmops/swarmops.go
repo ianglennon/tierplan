@@ -51,6 +51,9 @@ var (
 	// ErrStackOwned means a stack owns the service, so its settings change through the stack
 	// (D-05). The error is a *StackOwnedError.
 	ErrStackOwned = errors.New("swarmops: the service belongs to a stack")
+	// ErrIngressOwned means the service is TierPlan's ingress proxy (the component label and the reserved
+	// name), which is changed by switching ingress on or off and never by hand (D-29).
+	ErrIngressOwned = errors.New("swarmops: the service is TierPlan's ingress proxy")
 	// ErrRefused means the host-escalation policy refuses the spec for this caller. The error is
 	// a *RefusedError.
 	ErrRefused = errors.New("swarmops: the spec needs Admin")
@@ -227,6 +230,9 @@ func prepare(ctx context.Context, deps Deps, c common) (*prepared, error) {
 		return p, err
 	}
 	p.detail = detail
+	if detail.Ingress {
+		return p, ErrIngressOwned
+	}
 	owner := deps.StackOwner
 	if owner == nil {
 		owner = func(labels map[string]string) (string, bool) {

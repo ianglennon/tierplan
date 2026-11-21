@@ -226,6 +226,9 @@ func TestCreateServiceRefusesComponentLabel(t *testing.T) {
 			if w := f.fake.Writes(); len(w) != 0 {
 				t.Errorf("writes = %v, want nothing created", w)
 			}
+			if rows := f.serviceAudits(t); len(rows) != 1 || rows[0].Action != audit.ActionServiceCreated || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "ingress_component_label" {
+				t.Errorf("audit rows = %+v, want one service.created failure ingress_component_label", rows)
+			}
 			rec = f.req(t, http.MethodPost, "/api/env/"+e.ID+"/services/review", body)
 			if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "ingress_component_label" {
 				t.Errorf("review = %d %s (%s), want 422 ingress_component_label", rec.code, rec.body, rec.ptyp)

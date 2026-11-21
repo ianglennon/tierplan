@@ -233,6 +233,9 @@ func forceUpdateService(ctx context.Context, d ServicesDeps, p *rbac.Principal, 
 			return err
 		}
 		wo.id, wo.name, wo.image = detail.ID, detail.Name, detail.Image
+		if detail.Ingress {
+			return swarmops.ErrIngressOwned
+		}
 		version := in.Body.Version
 		if version == 0 {
 			version = detail.Version
@@ -311,6 +314,9 @@ func rollbackService(ctx context.Context, d ServicesDeps, p *rbac.Principal, env
 			return err
 		}
 		wo.id, wo.name, wo.image = detail.ID, detail.Name, detail.Image
+		if detail.Ingress {
+			return swarmops.ErrIngressOwned
+		}
 		if detail.Version != in.Body.Version {
 			return dockerx.ErrServiceChanged
 		}
@@ -460,6 +466,8 @@ func serviceActionProblem(d ServicesDeps, envID, failedType string, err error) (
 	var unresolvedErr *imageUnresolvedError
 	var refused *dockerx.RollbackRefusedError
 	switch {
+	case errors.Is(err, swarmops.ErrIngressOwned):
+		return problemIngressOwned, ingressOwnedError()
 	case errors.As(err, &unresolvedErr):
 		return problemImageUnresolved, &huma.ErrorModel{
 			Type: problemImageUnresolved, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
