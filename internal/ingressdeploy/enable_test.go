@@ -4,12 +4,14 @@
 package ingressdeploy_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
-	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -226,8 +228,8 @@ func TestPreviewWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Preview: %v", err)
 	}
-	if len(res.Findings) != 0 {
-		t.Errorf("findings = %+v, want none", res.Findings)
+	if len(res.Findings) != 1 || res.Findings[0].Code != ingressdeploy.CodeRedeployNeeded || res.Findings[0].Severity != ingressdeploy.SeverityWarning {
+		t.Errorf("findings = %+v, want only the warning that lists the stack to redeploy", res.Findings)
 	}
 	if res.Plan.Network.Name != ingress.NetworkName || res.Plan.Network.Subnet != "10.0.4.0/22" {
 		t.Errorf("plan network = %+v", res.Plan.Network)
@@ -409,13 +411,32 @@ func TestEnableRotatesWhenSecretMissing(t *testing.T) {
 	}
 }
 
+// foreignNetworkEngine makes a network with the reserved name that is not TierPlan's appear just before the first
+// write of the job, as one made by someone else after the preflight read the swarm.
+type foreignNetworkEngine struct {
+	ingressdeploy.Engine
+	once   sync.Once
+	create func()
+}
+
+func (e *foreignNetworkEngine) WriteOnManager(ctx context.Context, envID string, fn func(*dockerx.Client) error) error {
+	e.once.Do(e.create)
+	return e.Engine.WriteOnManager(ctx, envID, fn)
+}
+
 // TestEnableRefusesForeignSameNameNetwork: a network that has the reserved name and not TierPlan's labels is
-// never reused; the network item fails naming it, later items are skipped and ingress stays off.
+// never reused. The preflight refuses one it can see; when one appears after the preflight, the network item
+// fails naming it, later items are skipped and ingress stays off.
 func TestEnableRefusesForeignSameNameNetwork(t *testing.T) {
-	r := newRig(t, rigOptions{config: func(c *dockertest.FakeConfig) {
-		c.Networks = append(c.Networks, dockertest.FakeNetwork{
-			ID: "foreign", Name: ingress.NetworkName, Driver: "overlay", Scope: "swarm", Subnets: []string{"10.9.0.0/24"},
-		})
+	var r *rig
+	r = newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
+		d.Engine = &foreignNetworkEngine{Engine: d.Engine, create: func() {
+			spec := ingressdeploy.NetworkSpec("10.9.0.0/24")
+			spec.Labels = nil
+			if _, _, err := r.cli.NetworkCreate(context.Background(), spec); err != nil {
+				t.Errorf("make the foreign network: %v", err)
+			}
+		}}
 	}})
 	job := r.enable(ingressdeploy.EnableRequest{})
 	net := itemOf(job, ingressdeploy.ItemNetwork)
@@ -430,8 +451,8 @@ func TestEnableRefusesForeignSameNameNetwork(t *testing.T) {
 			t.Errorf("item %s = %q %q, want skipped not_run", id, it.State, it.Code)
 		}
 	}
-	if got := len(r.fake.NetworkCreates()); got != 0 {
-		t.Errorf("network creates = %d, want none beside the foreign one", got)
+	if got := len(r.fake.NetworkCreates()); got != 1 {
+		t.Errorf("network creates = %d, want only the foreign one", got)
 	}
 	if got := len(r.fake.ServiceCreates()); got != 0 {
 		t.Errorf("service creates = %d, want none", got)

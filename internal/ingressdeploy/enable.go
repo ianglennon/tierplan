@@ -174,28 +174,17 @@ func (s *Service) Preview(ctx context.Context, envID string, req EnableRequest) 
 	if !info.Swarm {
 		return PreviewResult{}, ErrStandaloneUnavailable
 	}
-	findings, err := s.preflight(ctx, info, req)
+	findings, redeploy, err := s.preflightRun(ctx, info, req)
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	res := PreviewResult{Findings: findings}
+	res := PreviewResult{Findings: findings, Redeploy: redeploy}
 	res.Plan.Network.Name = ingress.NetworkName
 	res.Plan.Service.Name = ingress.ServiceName
 	res.Plan.Service.Image = IngressImage(s.d.ServerVersion)
 	res.Plan.Volume.Name = ingress.VolumeName
 	res.Plan.Secret.New = true
 	res.Plan.Network.Subnet = req.Subnet
-	if s.d.Stacks != nil {
-		stacks, err := s.d.Stacks.WithRoutes(ctx, envID)
-		if err != nil {
-			return PreviewResult{}, fmt.Errorf("list the stacks that hold routes: %w", err)
-		}
-		for _, st := range stacks {
-			if !st.Attached {
-				res.Redeploy = append(res.Redeploy, st)
-			}
-		}
-	}
 	if !info.ManagerConnected {
 		return res, nil
 	}
