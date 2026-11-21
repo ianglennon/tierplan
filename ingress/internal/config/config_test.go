@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
 
 const (
@@ -221,5 +223,80 @@ func TestValidPin(t *testing.T) {
 		if ValidPin(bad) {
 			t.Errorf("ValidPin(%q) = true", bad)
 		}
+	}
+}
+
+func TestLoadAccessLog(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		{"unset", "", false, false},
+		{"one", "1", true, false},
+		{"one padded", " 1 ", true, false},
+		{"zero refused", "0", false, true},
+		{"yes refused", "yes", false, true},
+		{"true refused", "true", false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(env(map[string]string{EnvURL: goodURL, EnvAccessLog: tc.value}))
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "TIERPLAN_INGRESS_ACCESS_LOG") || !strings.Contains(err.Error(), "1") {
+					t.Fatalf("error = %v, want one naming TIERPLAN_INGRESS_ACCESS_LOG and saying 1 switches it on", err)
+				}
+				return
+			}
+			if err != nil || cfg.AccessLog != tc.want {
+				t.Fatalf("AccessLog = %t, err = %v; want %t", cfg.AccessLog, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestEnvNamesAreTheSupervisors proves that every name the server's deployer writes (the proto constants) is a
+// name Load reads, so the two modules cannot drift apart (D-47, Pitfall 18).
+func TestEnvNamesAreTheSupervisors(t *testing.T) {
+	base := map[string]string{ingressbundle.EnvURL: goodURL}
+	with := func(name, value string) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		m[name] = value
+		return m
+	}
+
+	cfg, err := Load(env(with(ingressbundle.EnvURL, goodURL)))
+	if err != nil || cfg.URL != goodURL {
+		t.Errorf("%s: URL = %q, err = %v", ingressbundle.EnvURL, cfg.URL, err)
+	}
+	cfg, err = Load(env(with(ingressbundle.EnvPin, goodPin)))
+	if err != nil || len(cfg.Pins) != 1 || cfg.Pins[0] != goodPin {
+		t.Errorf("%s: Pins = %v, err = %v", ingressbundle.EnvPin, cfg.Pins, err)
+	}
+	cfg, err = Load(env(with(ingressbundle.EnvNodeID, "node-1")))
+	if err != nil || cfg.NodeID != "node-1" {
+		t.Errorf("%s: NodeID = %q, err = %v", ingressbundle.EnvNodeID, cfg.NodeID, err)
+	}
+	cfg, err = Load(env(with(ingressbundle.EnvAccessLog, "1")))
+	if err != nil || !cfg.AccessLog {
+		t.Errorf("%s: AccessLog = %t, err = %v", ingressbundle.EnvAccessLog, cfg.AccessLog, err)
+	}
+	cfg, err = Load(env(with(ingressbundle.EnvJoinTokenFile, "/run/secrets/token"))) //nolint:gosec // a test fixture
+	if err != nil {
+		t.Fatalf("%s: %v", ingressbundle.EnvJoinTokenFile, err)
+	}
+	if got, err := cfg.JoinToken(files(map[string]string{"/run/secrets/token": "tpit_from-file"})); err != nil || got != "tpit_from-file" { //nolint:gosec // a test fixture
+		t.Errorf("%s: token = %q, err = %v", ingressbundle.EnvJoinTokenFile, got, err)
+	}
+	cfg, err = Load(env(with(ingressbundle.EnvJoinToken, "tpit_from-env"))) //nolint:gosec // a test fixture
+	if err != nil {
+		t.Fatalf("%s: %v", ingressbundle.EnvJoinToken, err)
+	}
+	if got, err := cfg.JoinToken(files(nil)); err != nil || got != "tpit_from-env" {
+		t.Errorf("%s: token = %q, err = %v", ingressbundle.EnvJoinToken, got, err)
 	}
 }
