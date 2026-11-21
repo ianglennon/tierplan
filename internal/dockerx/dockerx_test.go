@@ -543,7 +543,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // types, so they are listed in methodsWithMobyTypes; the update path that calls them (internal/updates) is the only caller.
 // ServiceUpdateAuthFromSpec (Phase 12, IMG-06, D-07) is ServiceUpdate for a write with no registry credential to send: the same
 // strictly decoded spec, once, never retried, with registryAuthFrom=spec instead of an X-Registry-Auth header. It takes no engine type.
-var allowedMethods = []string{"AddressPools", "Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ComposeContainers", "ComposeDown", "ComposeStart", "ComposeStop", "ComposeUp", "ConfigsWithLabel", "ContainerAction", "ContainerCreate", "ContainerDetail", "ContainerEnd", "ContainerInspectFull", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerRename", "ContainerStatsOnce", "ContainersWithLabel", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkConnectEndpoint", "NetworkCreate", "NetworkCreateAllocated", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "NetworkSwarmUsage", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "SecretsWithLabel", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServiceUpdateAuthFromSpec", "ServicesWithLabel", "SetTaskHistoryLimit", "Snapshot", "StartExec", "SwarmNetworkNames", "SwarmSettings", "SystemTime", "TaskHistoryLimit", "TaskLogs", "TaskNetworkRefs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers", "VolumesWithLabel"}
+var allowedMethods = []string{"AddressPools", "Close", "Cluster", "ConfigCreate", "ConfigInspect", "ConfigList", "ConfigRemove", "ComposeContainers", "ComposeDown", "ComposeStart", "ComposeStop", "ComposeUp", "ConfigsWithLabel", "ContainerAction", "ContainerCreate", "ContainerDetail", "ContainerEnd", "ContainerInspectFull", "ContainerLogs", "ContainerOwnership", "ContainerRemove", "ContainerRename", "ContainerStatsOnce", "ContainersWithLabel", "DistributionInspect", "Events", "ImageDetail", "ImageHistory", "ImagePull", "ImageRemove", "ImageUntag", "ImageUsers", "NetworkConnect", "NetworkConnectEndpoint", "NetworkCreate", "NetworkCreateAllocated", "NetworkDetail", "NetworkDisconnect", "NetworkRemove", "NetworkSwarmUsage", "Networks", "NetworksWithLabel", "NodeInspect", "NodeRemove", "NodeUpdate", "Probe", "RestartPolicies", "ResolveImage", "RunningContainers", "SecretCreate", "SecretInspect", "SecretList", "SecretRemove", "SecretsWithLabel", "ServiceCreate", "ServiceForceUpdate", "ServiceInspect", "ServiceLogs", "ServiceRefs", "ServiceRemove", "ServiceRollback", "ServiceScale", "ServiceUpdate", "ServiceUpdateAuthFromSpec", "ServicesWithLabel", "SetTaskHistoryLimit", "Snapshot", "StartExec", "SwarmNetworkNames", "SwarmSettings", "SystemTime", "TaskHistoryLimit", "TaskLogs", "TaskNetworkRefs", "Tasks", "VolumeCreate", "VolumeDetail", "VolumeDriver", "VolumeExists", "VolumeRemove", "VolumeSizes", "VolumeUsers", "VolumesWithLabel"}
 
 // typedMethodsWithForbiddenWords are allowed methods whose names contain a word the
 // pattern below refuses, each reviewed one by one.
@@ -1904,5 +1904,19 @@ func TestProbeReportsTheSwarmManagersBoundedAndChecked(t *testing.T) {
 				t.Errorf("SwarmClusterID = %q, want %q", res.SwarmClusterID, c.cluster)
 			}
 		})
+	}
+}
+
+func TestRunningContainersListsOnlyTheRunningOnes(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Containers: []dockertest.FakeContainer{
+		{ID: "c1", Names: []string{"/web"}, State: "running", Ports: []dockertest.FakePort{{IP: "0.0.0.0", Private: 80, Public: 80, Type: "tcp"}}},
+		{ID: "c2", Names: []string{"/old"}, State: "exited"},
+	}})
+	got, err := newClient(t, fake).RunningContainers(context.Background())
+	if err != nil {
+		t.Fatalf("RunningContainers: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "web" || len(got[0].Ports) != 1 || got[0].Ports[0] != "0.0.0.0:80->80/tcp" {
+		t.Errorf("RunningContainers = %+v, want only web with its published port", got)
 	}
 }
