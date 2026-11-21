@@ -2660,7 +2660,7 @@ export interface paths {
         post?: never;
         /**
          * Remove a service
-         * @description Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.
+         * @description Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. TierPlan's ingress proxy service is refused: 409 ingress_owned, before anything is sent; switch ingress off to remove it. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.
          */
         delete: operations["removeService"];
         options?: never;
@@ -13641,6 +13641,8 @@ export interface components {
             id: string;
             /** @description The image the spec names */
             image: components["schemas"]["ServiceImageBody"];
+            /** @description True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it */
+            ingress: boolean;
             /** @description The service's own labels, as Docker reports them */
             labels: {
                 [key: string]: string;
@@ -13798,6 +13800,8 @@ export interface components {
             id: string;
             /** @description The image the service's spec names, as written; empty when it has none */
             image: string;
+            /** @description True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it */
+            ingress: boolean;
             /**
              * @description How the swarm runs it
              * @enum {string}

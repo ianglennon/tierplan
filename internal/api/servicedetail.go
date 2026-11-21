@@ -122,6 +122,7 @@ type ServiceDetailBody struct {
 	Stack           string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
 	TierPlanStackID string `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
 	Agent           bool   `json:"agent" doc:"True for a TierPlan agent service"`
+	Ingress         bool   `json:"ingress" doc:"True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it"`
 	CreatedAt       string `json:"createdAt" format:"date-time" doc:"When the service was created"`
 	UpdatedAt       string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
 
@@ -366,7 +367,7 @@ func getServiceInspect(ctx context.Context, d ServicesDeps, p *rbac.Principal, e
 // MaskServiceSpec, the only form of it this function sees.
 func serviceDetailBody(detail dockerx.ServiceDetail, shown swarm.ServiceSpec, nets []dockerx.NetworkName, row dockerx.ServiceRow, haveRow, reveal bool) ServiceDetailBody {
 	b := ServiceDetailBody{
-		ID: detail.ID, Name: detail.Name, Mode: detail.Mode, Stack: detail.Stack, Agent: detail.Agent,
+		ID: detail.ID, Name: detail.Name, Mode: detail.Mode, Stack: detail.Stack, Agent: detail.Agent, Ingress: detail.Ingress,
 		CreatedAt: rfc3339(detail.CreatedAt), UpdatedAt: rfc3339(detail.UpdatedAt),
 		Image: serviceImageBody(detail.Image),
 		Ports: []ServicePortBody{}, Mounts: []ServiceMountBody{}, Secrets: []ServiceFileRefBody{}, Configs: []ServiceFileRefBody{},

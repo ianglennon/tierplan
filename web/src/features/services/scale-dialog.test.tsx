@@ -31,6 +31,7 @@ const web: ServiceItem = {
   stack: "",
   tierplanStackId: "",
   agent: false,
+  ingress: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
   updateMessage: "",

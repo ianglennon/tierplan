@@ -179,6 +179,7 @@ func registerServiceActions(r *httpx.Router, d ServicesDeps) {
 		OperationID: "removeService", Method: http.MethodDelete, Path: "/api/env/{envId}/services/{serviceId}",
 		Summary: "Remove a service",
 		Description: "Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. " +
+			"TierPlan's ingress proxy service is refused: 409 ingress_owned, before anything is sent; switch ingress off to remove it. " +
 			"A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. " +
 			"TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. " +
 			"404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. " +
@@ -407,6 +408,9 @@ func removeService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID
 		wo.id, wo.name, wo.image = detail.ID, detail.Name, detail.Image
 		agent = detail.Agent
 		confirmed = detail.Agent && in.Confirm == detail.Name
+		if detail.Ingress {
+			return &serviceRemoveRefusedError{code: problemIngressOwned, problem: ingressOwnedError()}
+		}
 		if s, id, owned := stackOwner(detail.Labels); owned {
 			stack = s
 			known := loadStackIDs(writeCtx, d.Store, envID, d.Log)

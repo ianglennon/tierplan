@@ -110,6 +110,7 @@ type ServiceItem struct {
 	Stack           string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
 	TierPlanStackID string `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
 	Agent           bool   `json:"agent" doc:"True for a TierPlan agent service"`
+	Ingress         bool   `json:"ingress" doc:"True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it"`
 	UpdatedAt       string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
 
 	Ports           []string `json:"ports" doc:"The ports the service publishes, as published->target/protocol (8080->80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none"`
@@ -480,7 +481,7 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 		item := ServiceItem{
 			ID: row.ID, Name: row.Name, Mode: row.Mode, Running: row.Running, Desired: row.Desired,
 			UpdateState: row.UpdateState, Image: row.Image, Stack: row.Stack, TierPlanStackID: known.confirmedFor(row.Stack, row.Labels),
-			Agent: row.Agent, UpdatedAt: rfc3339(row.UpdatedAt),
+			Agent: row.Agent, Ingress: row.Ingress, UpdatedAt: rfc3339(row.UpdatedAt),
 			Ports: servicePortStrings(row.Ports), UpdateMessage: row.UpdateMessage, HasPreviousSpec: row.HasPreviousSpec,
 			CreatedAt: rfc3339(row.CreatedAt),
 		}

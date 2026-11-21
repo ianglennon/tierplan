@@ -47,6 +47,7 @@ export function itemOf(d: ServiceDetail): ServiceItem {
     stack: d.stack,
     tierplanStackId: d.tierplanStackId,
     agent: d.agent,
+    ingress: d.ingress,
     updatedAt: d.updatedAt,
     ports: [],
     updateMessage: d.updateMessage,

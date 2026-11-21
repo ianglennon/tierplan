@@ -18231,6 +18231,10 @@
             "$ref": "#/components/schemas/ServiceImageBody",
             "description": "The image the spec names"
           },
+          "ingress": {
+            "description": "True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it",
+            "type": "boolean"
+          },
           "labels": {
             "additionalProperties": {
               "type": "string"
@@ -18357,6 +18361,7 @@
           "stack",
           "tierplanStackId",
           "agent",
+          "ingress",
           "createdAt",
           "updatedAt",
           "image",
@@ -18622,6 +18627,10 @@
             "description": "The image the service's spec names, as written; empty when it has none",
             "type": "string"
           },
+          "ingress": {
+            "description": "True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it",
+            "type": "boolean"
+          },
           "mode": {
             "description": "How the swarm runs it",
             "enum": [
@@ -18693,6 +18702,7 @@
           "stack",
           "tierplanStackId",
           "agent",
+          "ingress",
           "updatedAt",
           "ports",
           "updateMessage",
@@ -37847,7 +37857,7 @@
     },
     "/api/env/{envId}/services/{serviceId}": {
       "delete": {
-        "description": "Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.",
+        "description": "Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. TierPlan's ingress proxy service is refused: 409 ingress_owned, before anything is sent; switch ingress off to remove it. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.",
         "operationId": "removeService",
         "parameters": [
           {
