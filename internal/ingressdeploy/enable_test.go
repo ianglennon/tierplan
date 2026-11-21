@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -288,5 +289,157 @@ func TestEnableRefusesWithoutManager(t *testing.T) {
 	}
 	if got := r.fake.Writes(); len(got) != 0 {
 		t.Errorf("writes = %v, want none", got)
+	}
+}
+
+// secretNames are the names of the secrets the fake swarm holds.
+func secretNames(r *rig) []string {
+	var out []string
+	for _, s := range r.secrets() {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// TestEnableIsIdempotent: an enable after an enable creates no second network, secret or service and
+// issues no new token generation; with only the service gone, it makes the service again and reuses the
+// network and the secret.
+func TestEnableIsIdempotent(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	ctx := testsupport.Context(t)
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+	first, _ := r.tokens.TokenStatus(ctx, r.envID)
+
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+	if got := len(r.fake.SecretCreates()); got != 1 {
+		t.Errorf("secret creates after a repeat = %d, want 1", got)
+	}
+	if got := len(r.fake.NetworkCreates()); got != 1 {
+		t.Errorf("network creates after a repeat = %d, want 1", got)
+	}
+	if got := len(r.fake.ServiceCreates()); got != 1 {
+		t.Errorf("service creates after a repeat = %d, want 1", got)
+	}
+	if got := len(r.fake.ServiceUpdates()); got != 1 {
+		t.Errorf("service updates after a repeat = %d, want 1 (the existing service is brought to the spec)", got)
+	}
+	again, _ := r.tokens.TokenStatus(ctx, r.envID)
+	if again.Generation != first.Generation || again.ID != first.ID {
+		t.Errorf("token after a repeat = %+v, want the first %+v", again, first)
+	}
+	if got := r.auditCount("ingress.enabled"); got != 1 {
+		t.Errorf("ingress.enabled audit rows = %d, want 1: a repeat changes nothing", got)
+	}
+
+	// Only the service is gone: the rest is reused and the service is made again.
+	svc, ok := r.service()
+	if !ok {
+		t.Fatal("no proxy service")
+	}
+	if err := r.cli.ServiceRemove(ctx, svc.ID); err != nil {
+		t.Fatalf("ServiceRemove: %v", err)
+	}
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+	if got := len(r.fake.ServiceCreates()); got != 2 {
+		t.Errorf("service creates after the service was removed = %d, want 2", got)
+	}
+	if got := len(r.fake.SecretCreates()); got != 1 {
+		t.Errorf("secret creates = %d, want the secret reused", got)
+	}
+	if got := len(r.fake.NetworkCreates()); got != 1 {
+		t.Errorf("network creates = %d, want the network reused", got)
+	}
+	if st, _ := r.tokens.TokenStatus(ctx, r.envID); st.Generation != 1 {
+		t.Errorf("token generation = %d, want 1", st.Generation)
+	}
+}
+
+// TestEnableRotatesWhenSecretMissing: a current token whose secret is gone from the swarm is replaced by the
+// next generation, whose secret is created; so is a disabled token.
+func TestEnableRotatesWhenSecretMissing(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	ctx := testsupport.Context(t)
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+	st1, _ := r.tokens.TokenStatus(ctx, r.envID)
+	name1 := ingressdeploy.SecretName(r.envID, 1, st1.ID)
+
+	// The service holds the secret, so it goes first; then the secret.
+	svc, _ := r.service()
+	if err := r.cli.ServiceRemove(ctx, svc.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range r.secrets() {
+		if err := r.cli.SecretRemove(ctx, s.ID); err != nil {
+			t.Fatalf("SecretRemove: %v", err)
+		}
+	}
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+	st2, _ := r.tokens.TokenStatus(ctx, r.envID)
+	name2 := ingressdeploy.SecretName(r.envID, 2, st2.ID)
+	if st2.Generation != 2 || st2.ID == st1.ID {
+		t.Fatalf("token after the secret was lost = %+v, want generation 2 with a new ID", st2)
+	}
+	if names := secretNames(r); len(names) != 1 || names[0] != name2 {
+		t.Fatalf("secrets = %v, want only %s (not %s)", names, name2, name1)
+	}
+
+	// A disabled token is replaced the same way, and the service moves to the new secret.
+	if err := r.tokens.DisableToken(ctx, testActor, r.envID, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+	st3, _ := r.tokens.TokenStatus(ctx, r.envID)
+	name3 := ingressdeploy.SecretName(r.envID, 3, st3.ID)
+	if st3.Generation != 3 || st3.Disabled {
+		t.Fatalf("token after a disabled one = %+v, want an enabled generation 3", st3)
+	}
+	found := false
+	for _, n := range secretNames(r) {
+		found = found || n == name3
+	}
+	if !found {
+		t.Errorf("secrets = %v, want %s among them", secretNames(r), name3)
+	}
+	ups := r.fake.ServiceUpdates()
+	if len(ups) == 0 {
+		t.Fatal("the service was not updated to the new secret")
+	}
+	if got := ups[len(ups)-1].Spec.TaskTemplate.ContainerSpec.Secrets[0].SecretName; got != name3 {
+		t.Errorf("the service's secret = %q, want %q", got, name3)
+	}
+}
+
+// TestEnableRefusesForeignSameNameNetwork: a network that has the reserved name and not TierPlan's labels is
+// never reused; the network item fails naming it, later items are skipped and ingress stays off.
+func TestEnableRefusesForeignSameNameNetwork(t *testing.T) {
+	r := newRig(t, rigOptions{config: func(c *dockertest.FakeConfig) {
+		c.Networks = append(c.Networks, dockertest.FakeNetwork{
+			ID: "foreign", Name: ingress.NetworkName, Driver: "overlay", Scope: "swarm", Subnets: []string{"10.9.0.0/24"},
+		})
+	}})
+	job := r.enable(ingressdeploy.EnableRequest{})
+	net := itemOf(job, ingressdeploy.ItemNetwork)
+	if net.State != jobs.ItemFailed || net.Code != ingressdeploy.CodeEnableNetworkFailed {
+		t.Fatalf("network item = %q %q, want failed enable_network_failed", net.State, net.Code)
+	}
+	if !strings.Contains(net.Detail, ingress.NetworkName) {
+		t.Errorf("the item's detail %q does not name the object", net.Detail)
+	}
+	for _, id := range []string{ingressdeploy.ItemService, ingressdeploy.ItemSwitch} {
+		if it := itemOf(job, id); it.State != jobs.ItemSkipped || it.Code != ingressdeploy.CodeNotRun {
+			t.Errorf("item %s = %q %q, want skipped not_run", id, it.State, it.Code)
+		}
+	}
+	if got := len(r.fake.NetworkCreates()); got != 0 {
+		t.Errorf("network creates = %d, want none beside the foreign one", got)
+	}
+	if got := len(r.fake.ServiceCreates()); got != 0 {
+		t.Errorf("service creates = %d, want none", got)
+	}
+	if state, _ := r.istore.DeployState(testsupport.Context(t), r.envID); state.Enabled {
+		t.Error("ingress was switched on")
+	}
+	if _, held := r.locks.Held(r.envID); held {
+		t.Error("the lock is still held after the failed job")
 	}
 }
