@@ -191,7 +191,8 @@ func (s *StackDeployer) refusal(stackID string, err error) error {
 	var em *huma.ErrorModel
 	if errors.As(err, &em) && em.Status < http.StatusInternalServerError {
 		switch em.Type {
-		case problemStackInvalid:
+		case problemStackInvalid, problemIngressRefused:
+			// A hostname the ingress policy refuses is as undeployable to an automatic deploy as a compose error is.
 			return &DeployRefusal{Code: refusalNotDeployable, Detail: firstProblem(em)}
 		case problemNameClash:
 			return &DeployRefusal{Code: refusalNameClash, Detail: em.Detail}

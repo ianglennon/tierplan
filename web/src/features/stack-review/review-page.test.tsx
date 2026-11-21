@@ -92,6 +92,8 @@ const refused = () =>
       title: "x",
       status: 409,
       detail: "app.example.com is held by stack shop.",
+      // The server's real shape: the reason is the detail, and each refused label is also listed at its place.
+      errors: [{ location: "compose.yaml:7", message: "app.example.com is held by stack shop." }],
     },
     { status: 409 },
   );

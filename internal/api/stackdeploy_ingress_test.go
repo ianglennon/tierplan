@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -36,14 +37,14 @@ func ingressStandaloneCompose(hosts ...string) string {
 	return b.String()
 }
 
-// deployRefusedAs fails unless the deploy of the saved draft is refused 422 stack_invalid with a problem that names
+// deployRefusedAs fails unless the deploy of the saved draft is refused 409 ingress_refused with a problem that names
 // want, and unless nothing was stored or written.
 func deployRefusedAs(t *testing.T, f *envFix, c *roleCaller, stackID string, version int64, want string) {
 	t.Helper()
 	writes := len(f.fake.Writes())
 	rec := c.deploy(stackID, `{"draftVersion":`+itoaT(version)+`}`)
-	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
-		t.Fatalf("deploy: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_refused" {
+		t.Fatalf("deploy: %d %.400s, want 409 ingress_refused", rec.Code, rec.Body)
 	}
 	if !strings.Contains(rec.Body.String(), want) {
 		t.Errorf("answer = %.600s, want a problem that names %q", rec.Body, want)
@@ -65,6 +66,52 @@ func TestIngressGateDeploySwarmRefusesAReservedHost(t *testing.T) {
 	v := saveCompose(t, admin, st.ID, ingressCompose(seed.reservedHost), "[]")
 
 	deployRefusedAs(t, f, admin, st.ID, v, seed.reservedHost)
+}
+
+// An ingress refusal is a 409 of its own only when the hostname is all that is wrong: a draft that also has another
+// error (here an unknown ingress label) is a 422 stack_invalid, which lists both.
+func TestIngressGateDeployKeepsStackInvalidForAComposeErrorBesideAReservedHost(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "gate-mixed")
+	v := saveCompose(t, admin, st.ID, ingressCompose(seed.reservedHost)+"  other:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.bogus: x\n", "[]")
+
+	rec := admin.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
+		t.Fatalf("deploy: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), seed.reservedHost) {
+		t.Errorf("answer = %.600s, want the reserved host listed beside the compose error", rec.Body)
+	}
+	if revs := f.revisions(t, st.ID); len(revs) != 0 {
+		t.Errorf("revisions = %+v, a refused deploy stores none", revs)
+	}
+}
+
+// The reason of an ingress refusal is the problem's detail, which the review page draws.
+func TestIngressGateDeployAnswersTheReasonInTheDetail(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "gate-detail")
+	v := saveCompose(t, admin, st.ID, ingressCompose(seed.reservedHost), "[]")
+
+	rec := admin.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+
+	var p struct {
+		Status int    `json:"status"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_refused" || p.Status != http.StatusConflict || !strings.Contains(p.Detail, seed.reservedHost) {
+		t.Errorf("deploy: %d %.400s, want 409 ingress_refused naming %s in detail", rec.Code, rec.Body, seed.reservedHost)
+	}
 }
 
 func TestIngressGateDeploySwarmStartsForAFreeHostUnderTheDomain(t *testing.T) {
@@ -116,8 +163,8 @@ func TestIngressGateDeployGitAutoDeployNamesNoOtherEnvironment(t *testing.T) {
 
 	// The same draft refused to an instance admin at the screen names the stack and the environment that hold it.
 	rec := instanceAdmin.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
-	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
-		t.Fatalf("deploy: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_refused" {
+		t.Fatalf("deploy: %d %.400s, want 409 ingress_refused", rec.Code, rec.Body)
 	}
 	if body := rec.Body.String(); !strings.Contains(body, seed.otherStack) || !strings.Contains(body, seed.otherEnvName) {
 		t.Errorf("answer = %.600s, want the holder %q in %q named for an instance admin", body, seed.otherStack, seed.otherEnvName)
@@ -272,11 +319,11 @@ func unreserveHost(t *testing.T, f *envFix, e envBody, seed ingressWorldSeed, ho
 	}
 }
 
-// refusedAndStoredNothing fails unless rec is a 422 stack_invalid that names want, and the stack still has revisions revisions.
+// refusedAndStoredNothing fails unless rec is a 409 ingress_refused that names want, and the stack still has revisions revisions.
 func refusedAndStoredNothing(t *testing.T, f *envFix, rec *httptest.ResponseRecorder, stackID, want string, revisions int) {
 	t.Helper()
-	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
-		t.Fatalf("answer: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_refused" {
+		t.Fatalf("answer: %d %.400s, want 409 ingress_refused", rec.Code, rec.Body)
 	}
 	if !strings.Contains(rec.Body.String(), want) {
 		t.Errorf("answer = %.600s, want a problem that names %q", rec.Body, want)
@@ -482,8 +529,8 @@ func TestIngressGateUpdateBulkRefusesAndNamesNoOtherEnvironment(t *testing.T) {
 		t.Errorf("revisions = %+v, want the two the stack had: a refused update stores none", revs)
 	}
 	runs := s.f.runsOfBulk(t, ans.BulkID)
-	if len(runs) != 1 || runs[0].State != updates.RunRefused || runs[0].Reason != "stack_invalid" {
-		t.Fatalf("runs = %+v, want the one run refused as stack_invalid", runs)
+	if len(runs) != 1 || runs[0].State != updates.RunRefused || runs[0].Reason != "ingress_refused" {
+		t.Fatalf("runs = %+v, want the one run refused as ingress_refused", runs)
 	}
 	recorded := fmt.Sprintf("%+v %+v", runs[0], job.Items)
 	for _, leak := range []string{seed.otherStack, seed.otherEnvName, seed.otherEnvID, seed.otherStackID} {

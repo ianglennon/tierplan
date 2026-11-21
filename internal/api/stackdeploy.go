@@ -216,7 +216,7 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 			"On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and tierplan.stack.id, and each service com.docker.stack.image with the image as written. " +
 			"A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to TIERPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. " +
 			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
-			"A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +
+			"A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid, except that a stack whose only errors are hostnames another stack holds, a reserved one or one no registered domain covers is 409 ingress_refused, with the reason in detail, before anything is stored. " +
 			"A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. " +
 			"A name that something TierPlan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). " +
 			"Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. " +
@@ -647,7 +647,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p, viewer *rbac.Pr
 	// ingress: unattached, the standalone attach is Phase 25
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
 	if checked.Loaded == nil {
-		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+		return nil, stackInvalidOrRefused(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
 	if mode == deployModeUpdate {
 		if err := stackops.ValidateUpdateServices(checked.Loaded.Project, st.Target, st.Name, body.Services); err != nil {
@@ -658,7 +658,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p, viewer *rbac.Pr
 		return nil, refuse(refusalObjects, objectProblem(err, masker))
 	}
 	if checked.Problems.Errors() > 0 {
-		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+		return nil, stackInvalidOrRefused(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
 	node, err := d.ops().StandaloneNode(ctx, env.ID)
 	if err != nil {
@@ -1375,7 +1375,7 @@ func operationLocked(envName string, h stackops.Holder) error {
 func deployableProblem(d StacksDeps, envID string, err error) error {
 	var nd *stacks.NotDeployableError
 	if errors.As(err, &nd) {
-		return stackInvalid(nd.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+		return stackInvalidOrRefused(nd.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
 	return stackInternal(d, "check", envID, err)
 }
@@ -1391,7 +1391,7 @@ func rollbackPrepareProblem(err error, m stacks.Masker) error {
 	case stackops.PrepareLoad:
 		var nd *stacks.NotDeployableError
 		if errors.As(pe.Err, &nd) {
-			return stackInvalid(nd.Problems, "That version has errors now, so it can't be deployed again.")
+			return stackInvalidOrRefused(nd.Problems, "That version has errors now, so it can't be deployed again.")
 		}
 		return httpx.Problem(http.StatusUnprocessableEntity, problemComposeInvalid, "That version can't be read, so it can't be deployed again.")
 	case stackops.PrepareObjects:

@@ -140,6 +140,7 @@
         "tooMany": "You already have 5 jobs running. Wait for one to finish.",
         "target": "This environment is no longer the kind of target this stack was created for.",
         "clash": "Something TierPlan does not manage already uses this stack's name on this environment.",
+        "refused": "A hostname in that version is taken or not allowed now. Nothing was changed.",
         "lost": "TierPlan couldn't tell whether the roll back started. Open the stack to see where it stands.",
         "generic": "Couldn't start the roll back. Try again."
       }
