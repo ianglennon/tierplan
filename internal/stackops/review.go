@@ -485,7 +485,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 			bump(&rv.Summary.Configs, o.Change)
 		}
 	}
-	d.fillIngressSwarm(ctx, in, &rv, project)
+	d.fillIngressSwarm(ctx, in, &rv, project, plan.Services, desired, running, live)
 	rv.Problems = rv.Problems.Sorted()
 	d.addRevertsDrift(ctx, in, &rv, rawSwarmRows(desired, running), masker)
 	return rv, nil

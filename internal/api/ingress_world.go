@@ -10,11 +10,13 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
@@ -184,9 +186,64 @@ func (o ingressOps) HeldRoutes(ctx context.Context, envID, stackID string) ([]in
 	return out, nil
 }
 
-// CertStates says nothing yet (task 2 fills it in).
-func (o ingressOps) CertStates(context.Context, string, []string) (map[string]stackops.CertState, error) {
-	return map[string]stackops.CertState{}, nil
+// certNotReady is what a waiting hostname is told when its certificate has no recorded failure to explain the wait.
+const certNotReady = "The certificate is not ready to be served yet."
+
+// CertStates is the state of the certificate of each hostname, read through Serving and never the chain or the key
+// (T-24-41): a hostname with a servable certificate is reused, one with no certificate row will be issued, and one
+// with rows and none servable is waiting, with the sentence of the failure its live certificate recorded when there is
+// one. The certificates are queued for every claimed hostname whether ingress is on or off (D-40), so the states read
+// the same either way. A server with no certificate store says nothing about any hostname.
+func (o ingressOps) CertStates(ctx context.Context, envID string, hostnames []string) (map[string]stackops.CertState, error) {
+	out := make(map[string]stackops.CertState, len(hostnames))
+	certs := o.d.IngressCerts
+	if certs == nil {
+		return out, nil
+	}
+	now := time.Now()
+	if o.d.Clock != nil {
+		now = o.d.Clock.Now()
+	}
+	_, serving, err := certs.Serving(ctx, envID, hostnames, now)
+	if err != nil {
+		return nil, err
+	}
+	var failures map[string]string
+	for _, c := range serving {
+		switch {
+		case c.Reason == "":
+			out[c.Hostname] = stackops.CertState{State: stackops.CertReused}
+		case c.Reason == ingresscert.ReasonNoCertificate:
+			out[c.Hostname] = stackops.CertState{State: stackops.CertWillIssue}
+		default:
+			if failures == nil {
+				if failures, err = liveCertFailures(ctx, certs, envID); err != nil {
+					return nil, err
+				}
+			}
+			reason := certNotReady
+			if class, ok := failures[c.Hostname]; ok {
+				reason = ingresscert.FailureHint(class)
+			}
+			out[c.Hostname] = stackops.CertState{State: stackops.CertWaiting, Reason: reason}
+		}
+	}
+	return out, nil
+}
+
+// liveCertFailures is the class of the last failure of each hostname's live certificate that recorded one.
+func liveCertFailures(ctx context.Context, certs *ingresscert.Store, envID string) (map[string]string, error) {
+	rows, err := certs.EnvCerts(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, c := range rows {
+		if c.RetiredAt.IsZero() && c.LastErrorClass != "" {
+			out[c.Hostname] = c.LastErrorClass
+		}
+	}
+	return out, nil
 }
 
 // claimActor is the audit actor of a claim write whose caller named itself by a string: a "system:" name is a

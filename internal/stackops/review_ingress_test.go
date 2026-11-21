@@ -302,7 +302,9 @@ func TestReviewIngressNetwork(t *testing.T) {
 	reviewOf := func(t *testing.T, r *swarmRig, compose string) stackops.Review {
 		t.Helper()
 		r.deps.Ingress = &fakeIngress{attach: attachedBy()}
-		rv, err := r.deps.Review(testsupport.Context(t), r.reviewInput(t, "shop", compose, nil))
+		in := r.reviewInput(t, "shop", compose, nil)
+		in.Ingress = attachedBy() // the review route reads it from AttachFor
+		rv, err := r.deps.Review(testsupport.Context(t), in)
 		if err != nil {
 			t.Fatalf("review: %v", err)
 		}

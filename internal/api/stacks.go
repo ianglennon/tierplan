@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
@@ -121,6 +122,10 @@ type StacksDeps struct {
 	// holds), which the editor check and the review judge a stack's ingress labels against, and which every deploy
 	// gate does too (D-18, D-19). Nil leaves the policy out everywhere; the label parser still runs.
 	Ingress *ingressstore.Store
+	// IngressCerts is the certificate store, which a review reads the state of each hostname's certificate from:
+	// whether one can be served, is still to be issued or is waiting. The review never reads a key or a chain from it.
+	// Nil leaves the certificate rows out of the review.
+	IngressCerts *ingresscert.Store
 	// Clock and ConvergeTimeout are what a swarm deploy waits on and for: the clock its polls and
 	// its timeout run on (nil is the wall clock), and how long each service gets to settle (zero is
 	// ten minutes; TIERPLAN_STACK_CONVERGE_TIMEOUT).

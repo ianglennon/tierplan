@@ -9,9 +9,12 @@ import (
 	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 // What a deploy, a roll back or a restore does to ingress, as the review lists it before anything is changed (D-22,
@@ -167,6 +170,137 @@ func routeRows(held []ingress.Route, decls []ingress.Declaration, note string) [
 	return rows
 }
 
+// declaredHosts are the distinct hostnames the declarations name, sorted.
+func declaredHosts(decls []ingress.Declaration) []string {
+	hosts := make([]string, 0, len(decls))
+	for _, d := range decls {
+		hosts = append(hosts, ingress.NormalizeHost(d.Host))
+	}
+	slices.Sort(hosts)
+	return slices.Compact(hosts)
+}
+
+// certificateRows is one row for each hostname the revision declares that the ingress model could say something
+// about, ordered by hostname. It reads nothing but the states it is given.
+func certificateRows(hosts []string, states map[string]CertState) []IngressCertRow {
+	rows := make([]IngressCertRow, 0, len(hosts))
+	for _, h := range hosts {
+		st, ok := states[h]
+		if !ok {
+			continue
+		}
+		row := IngressCertRow{Hostname: h, State: st.State}
+		if st.State == CertWaiting {
+			row.Reason = st.Reason
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// hasIngressNetwork reports whether a service spec lists the shared ingress network among its networks. A converted
+// spec names an object it found on the swarm by its ID, and a live spec's IDs are turned to names (liveSpecs), so the
+// network is known by its name and by ids, the IDs of the network the swarm holds under that name.
+func hasIngressNetwork(spec swarm.ServiceSpec, ids []string) bool {
+	return len(stacks.StripIngressAttachment(spec, ids...).TaskTemplate.Networks) != len(spec.TaskTemplate.Networks)
+}
+
+// ingressNetworkIDs are the IDs of the networks the swarm holds under the shared ingress network's name.
+func ingressNetworkIDs(all []dockerx.NetworkRow) []string {
+	var ids []string
+	for _, n := range all {
+		if n.Name == ingress.NetworkName {
+			ids = append(ids, n.ID)
+		}
+	}
+	return ids
+}
+
+// networkRows is the services that join or leave the shared ingress network. A service that runs and whose desired
+// spec adds the network joins it, and a service that runs on it and whose desired spec drops it leaves it: both
+// replace its tasks, because a spec change of TaskTemplate.Networks does. A service that is made new joins with
+// nothing to replace. A service that is removed is its own row of the service list and says nothing here. short maps
+// a swarm service name to the name in the compose file; the rows are ordered by that name.
+func networkRows(desired, running map[string]swarm.ServiceSpec, short map[string]string, ids []string) []IngressAttachRow {
+	var rows []IngressAttachRow
+	for name, spec := range desired {
+		now, exists := running[name]
+		want, had := hasIngressNetwork(spec, ids), exists && hasIngressNetwork(now, ids)
+		switch {
+		case want && !had:
+			rows = append(rows, IngressAttachRow{Service: shortOf(short, name), Change: IngressAttachJoins, ReplacesTasks: exists})
+		case !want && had:
+			rows = append(rows, IngressAttachRow{Service: shortOf(short, name), Change: IngressAttachLeaves, ReplacesTasks: true})
+		}
+	}
+	slices.SortFunc(rows, func(a, b IngressAttachRow) int {
+		if c := strings.Compare(a.Service, b.Service); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Change, b.Change)
+	})
+	return rows
+}
+
+func shortOf(short map[string]string, name string) string {
+	if s, ok := short[name]; ok && s != "" {
+		return s
+	}
+	return name
+}
+
+// shortNames maps the swarm service name of each planned service to its name in the compose file.
+func shortNames(services []convert.ServicePlan) map[string]string {
+	out := make(map[string]string, len(services))
+	for _, sp := range services {
+		out[sp.Name] = sp.Short
+	}
+	return out
+}
+
+// ingressWarnings are the warnings a review gives for the routed services of a project (D-13, D-23). The services
+// are the ones decls name; none of them is an error. off says the environment's ingress is switched off, which one
+// warning (ingress_disabled) tells once, at the first routed service. A service the file does not hold is not judged.
+// The problems are written against compose.yaml at the service's key, for the caller to place.
+func ingressWarnings(project *types.Project, decls []ingress.Declaration, off bool) stacks.Problems {
+	if project == nil || len(decls) == 0 {
+		return nil
+	}
+	routed := make([]string, 0, len(decls))
+	for _, d := range decls {
+		if !slices.Contains(routed, d.Service) {
+			routed = append(routed, d.Service)
+		}
+	}
+	slices.Sort(routed)
+	warn := func(code, service, msg string) stacks.Problem {
+		return stacks.Problem{
+			Severity: stacks.SeverityWarning, Code: code, Message: msg, File: stacks.ComposeFile, Key: "services." + service,
+			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		}
+	}
+	var out stacks.Problems
+	if off {
+		out = append(out, warn(CodeIngressDisabled, routed[0], messageIngressDisabled))
+	}
+	for _, name := range routed {
+		svc, ok := project.Services[name]
+		if !ok {
+			continue
+		}
+		if svc.HealthCheck == nil || svc.HealthCheck.Disable {
+			out = append(out, warn(CodeIngressNoHealth, name, name+messageIngressNoHealth))
+		}
+		if svc.Deploy != nil && svc.Deploy.EndpointMode == "dnsrr" {
+			out = append(out, warn(CodeIngressDNSRR, name, name+messageIngressDNSRR))
+		}
+		if (svc.Deploy != nil && svc.Deploy.Replicas != nil && *svc.Deploy.Replicas == 0) || (svc.Scale != nil && *svc.Scale == 0) {
+			out = append(out, warn(CodeIngressNoReplicas, name, name+messageIngressNoReplicas))
+		}
+	}
+	return out
+}
+
 // ingressSection is the routes and certificates of the section for the revision that declares decls, read against what
 // the stack holds now. It is nil when the server has no ingress model, and when the stack's holdings cannot be read: a
 // list built on a guess would call every route added. note is put on the routes that will be held.
@@ -179,19 +313,35 @@ func (d Deps) ingressSection(ctx context.Context, in ReviewInput, decls []ingres
 		d.log().Warn("could not read the routes a stack holds for its review", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return nil
 	}
-	return &IngressReview{Routes: routeRows(held, decls, note)}
+	sec := &IngressReview{Routes: routeRows(held, decls, note)}
+	if hosts := declaredHosts(decls); len(hosts) > 0 {
+		states, err := d.Ingress.CertStates(ctx, in.EnvID, hosts)
+		if err != nil {
+			// The certificates are told where they can be read; the routes still are.
+			d.log().Warn("could not read the certificate states of a stack for its review", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		} else {
+			sec.Certificates = certificateRows(hosts, states)
+		}
+	}
+	return sec
 }
 
-// fillIngressSwarm sets Review.Ingress of a review of a swarm stack from the revision's project. An update of images
-// changes no route, so it has no section.
-func (d Deps) fillIngressSwarm(ctx context.Context, in ReviewInput, rv *Review, project *types.Project) {
+// fillIngressSwarm sets Review.Ingress and adds the ingress warnings of a review of a swarm stack: the revision's
+// project (the one the review converted), the specs a deploy would write (desired) against the ones that run. An update
+// of images changes no route, so it has no section.
+func (d Deps) fillIngressSwarm(ctx context.Context, in ReviewInput, rv *Review, project *types.Project, plan []convert.ServicePlan, desired, running map[string]swarm.ServiceSpec, live liveStack) {
 	if in.Mode == ReviewModeUpdate || project == nil {
 		return
 	}
 	decls := stacks.IngressDeclarations(project, in.Stack.Target)
-	if sec := d.ingressSection(ctx, in, decls, ""); !sec.empty() {
+	sec := d.ingressSection(ctx, in, decls, "")
+	if sec != nil {
+		sec.Network = networkRows(desired, running, shortNames(plan), ingressNetworkIDs(live.AllNetworks))
+	}
+	if !sec.empty() {
 		rv.Ingress = sec
 	}
+	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, ingressWarnings(project, decls, in.IngressOff))...)
 }
 
 // fillIngressStandalone sets Review.Ingress of a review of a stack of a standalone host: the routes and the

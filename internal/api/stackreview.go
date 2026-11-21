@@ -300,6 +300,9 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		d.Log.Warn("whether ingress is on for an environment could not be read for a stack review", "environment", env.ID, "error", aerr)
 	} else {
 		ri.Ingress = attach
+		// A swarm environment whose ingress is off still claims the routes a stack declares, but serves none of them
+		// (D-13): the review warns of it. Nothing is said when the server has no ingress model at all.
+		ri.IngressOff = attach == nil && st.Target == stacks.TargetSwarm && d.Ingress != nil
 	}
 	restore := in.Body.Mode == stackops.ReviewModeRestore
 	rollback := in.Body.Mode == stackops.ReviewModeRollback || restore

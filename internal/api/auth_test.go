@@ -601,9 +601,15 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		if stackLogs.Now == nil {
 			stackLogs.Now = f.clk.now
 		}
+		// The certificate store of a real server, which the stack review reads the state of each hostname's certificate from and
+		// the ingress certificate routes use.
+		if f.ingressCertStore == nil {
+			f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
+		}
 		stackDeps := api.StacksDeps{
-			Logs:       stackLogs,
-			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
+			IngressCerts: f.ingressCertStore,
+			Logs:         stackLogs,
+			Aggregator:   f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
 			Updates:   updateSvc,
@@ -684,7 +690,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Audit: f.aud, Checker: checker, Log: log,
 		CertSweep: func() { f.ingressSweeps.Add(1) },
 	})
-	f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
+	if f.ingressCertStore == nil {
+		f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
+	}
 	certHub := jobs.New(jobs.Options{})
 	t.Cleanup(certHub.Close)
 	certMgr, certErr := ingresscert.New(ingresscert.Deps{
