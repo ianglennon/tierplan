@@ -89,10 +89,13 @@ func (r *IngressReview) empty() bool {
 	return r == nil || (len(r.Routes) == 0 && len(r.Certificates) == 0 && len(r.Network) == 0)
 }
 
-// routeKey is what makes two routes the same route: where it matches, and what it goes to.
+// routeKey is what makes two routes the same route: where it matches, what it goes to and how it is forwarded, which
+// is every field the store compares (hostname, name, path, service, port, scheme and strip). A route that changes in any
+// of them reads as one released and one added.
 type routeKey struct {
-	host, path, service, scheme string
-	port                        int
+	host, name, path, service, scheme string
+	port                              int
+	strip                             bool
 }
 
 func pathOf(p string) string {
@@ -110,7 +113,7 @@ func schemeOf(s ingress.Scheme) string {
 }
 
 // routeRows is the routes the stack holds now (held) against the ones its revision declares (decls): a route in both,
-// unchanged in hostname, path, service, port and scheme, is kept; one only declared is added; one only held is
+// unchanged in hostname, name, path, service, port, scheme and strip, is kept; one only declared is added; one only held is
 // released. The rows are ordered by hostname, then path, then change, so two calls agree. note is put on the rows of
 // routes that will be held (added and kept).
 func routeRows(held []ingress.Route, decls []ingress.Declaration, note string) []IngressRouteRow {
@@ -134,10 +137,10 @@ func routeRows(held []ingress.Route, decls []ingress.Declaration, note string) [
 		}
 	}
 	for _, r := range held {
-		add(routeKey{host: ingress.NormalizeHost(r.Hostname), path: pathOf(r.PathPrefix), service: r.Service, scheme: schemeOf(r.Scheme), port: r.Port}, true)
+		add(routeKey{host: ingress.NormalizeHost(r.Hostname), name: r.Name, path: pathOf(r.PathPrefix), service: r.Service, scheme: schemeOf(r.Scheme), port: r.Port, strip: r.Strip}, true)
 	}
 	for _, d := range decls {
-		add(routeKey{host: ingress.NormalizeHost(d.Host), path: pathOf(d.PathPrefix), service: d.Service, scheme: schemeOf(d.Scheme), port: d.Port}, false)
+		add(routeKey{host: ingress.NormalizeHost(d.Host), name: d.Name, path: pathOf(d.PathPrefix), service: d.Service, scheme: schemeOf(d.Scheme), port: d.Port, strip: d.Strip}, false)
 	}
 	rows := make([]IngressRouteRow, 0, len(order))
 	for _, e := range order {

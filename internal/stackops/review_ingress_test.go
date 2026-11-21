@@ -113,8 +113,8 @@ const routedTwo = `services:
 `
 
 // heldRoute is a route as the store holds it.
-func heldRoute(host, path, service string, port int, scheme ingress.Scheme) ingress.Route {
-	return ingress.Route{Hostname: host, PathPrefix: path, Service: service, Port: port, Scheme: scheme}
+func heldRoute(name, host, path, service string, port int, scheme ingress.Scheme) ingress.Route {
+	return ingress.Route{Hostname: host, Name: name, PathPrefix: path, Service: service, Port: port, Scheme: scheme}
 }
 
 // reviewWith reviews a compose file of a swarm stack with the ingress model fake.
@@ -132,8 +132,8 @@ func reviewWith(t *testing.T, fake *fakeIngress, name, compose string) stackops.
 func TestReviewIngressRoutes(t *testing.T) {
 	t.Parallel()
 	fake := &fakeIngress{held: []ingress.Route{
-		heldRoute("c.example.com", "/", "web", 80, ingress.SchemeHTTP),
-		heldRoute("a.example.com", "/", "web", 80, ingress.SchemeHTTP),
+		heldRoute("c", "c.example.com", "/", "web", 80, ingress.SchemeHTTP),
+		heldRoute("a", "a.example.com", "/", "web", 80, ingress.SchemeHTTP),
 	}}
 	rv := reviewWith(t, fake, "shop", routedTwo)
 	if rv.Ingress == nil {
@@ -154,9 +154,9 @@ func TestReviewIngressRoutes(t *testing.T) {
 func TestReviewIngressRouteAdjacency(t *testing.T) {
 	t.Parallel()
 	fake := &fakeIngress{held: []ingress.Route{
-		heldRoute("a.example.com", "/api", "web", 80, ingress.SchemeHTTP),
-		heldRoute("a.example.com", "/", "web", 80, ingress.SchemeHTTP),
-		heldRoute("z.example.com", "", "web", 80, ""),
+		heldRoute("api", "a.example.com", "/api", "web", 80, ingress.SchemeHTTP),
+		heldRoute("root", "a.example.com", "/", "web", 80, ingress.SchemeHTTP),
+		heldRoute("z", "z.example.com", "", "web", 80, ""),
 	}}
 	rv := reviewWith(t, fake, "shop", `services:
   web:
@@ -186,6 +186,48 @@ func TestReviewIngressRouteAdjacency(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("rows = %q, want %q", got, want)
+	}
+}
+
+// A route whose strip flag or name changed is not the route the stack holds: the proxy forwards it differently (strip) or
+// the store records it differently (name), so the review reads it as one released and one added, never as kept (IN-08).
+func TestReviewIngressRouteChangeOfStripOrName(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27
+    deploy:
+      labels:
+        tierplan.ingress.api.host: a.example.com
+        tierplan.ingress.api.port: "80"
+        tierplan.ingress.api.path: /api
+        tierplan.ingress.api.strip: "true"
+`
+	rows := func(held ingress.Route) []string {
+		rv := reviewWith(t, &fakeIngress{held: []ingress.Route{held}}, "shop", compose)
+		if rv.Ingress == nil {
+			t.Fatal("review has no ingress section")
+		}
+		var got []string
+		for _, r := range rv.Ingress.Routes {
+			got = append(got, r.Change+" "+r.Hostname+" "+r.Path)
+		}
+		return got
+	}
+	same := heldRoute("api", "a.example.com", "/api", "web", 80, ingress.SchemeHTTP)
+	same.Strip = true
+	if got, want := rows(same), []string{"kept a.example.com /api"}; !slices.Equal(got, want) {
+		t.Errorf("an unchanged route: rows = %q, want %q", got, want)
+	}
+	unstripped := same
+	unstripped.Strip = false
+	if got, want := rows(unstripped), []string{"added a.example.com /api", "released a.example.com /api"}; !slices.Equal(got, want) {
+		t.Errorf("a changed strip flag: rows = %q, want %q", got, want)
+	}
+	renamed := same
+	renamed.Name = "old"
+	if got, want := rows(renamed), []string{"added a.example.com /api", "released a.example.com /api"}; !slices.Equal(got, want) {
+		t.Errorf("a changed name: rows = %q, want %q", got, want)
 	}
 }
 
@@ -456,7 +498,7 @@ func TestReviewIngressStandaloneAndRollback(t *testing.T) {
 		t.Parallel()
 		r := newStandaloneRig(t)
 		r.deps.Ingress = &fakeIngress{
-			held:   []ingress.Route{heldRoute("x.example.com", "/", "web", 80, ingress.SchemeHTTP)},
+			held:   []ingress.Route{heldRoute("x", "x.example.com", "/", "web", 80, ingress.SchemeHTTP)},
 			states: map[string]stackops.CertState{"x.example.com": {State: stackops.CertReused}, "y.example.com": {State: stackops.CertWillIssue}},
 		}
 		rv, err := r.deps.Review(testsupport.Context(t), r.standaloneReviewInput(t, "demo", standaloneRouted, nil))
@@ -486,7 +528,7 @@ func TestReviewIngressStandaloneAndRollback(t *testing.T) {
 		}
 	})
 
-	held := []ingress.Route{heldRoute("c.example.com", "/", "web", 80, ingress.SchemeHTTP)}
+	held := []ingress.Route{heldRoute("c", "c.example.com", "/", "web", 80, ingress.SchemeHTTP)}
 	wantSwap := []stackops.IngressRouteRow{
 		{Change: stackops.IngressRouteReleased, Hostname: "c.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
 		{Change: stackops.IngressRouteAdded, Hostname: "x.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
