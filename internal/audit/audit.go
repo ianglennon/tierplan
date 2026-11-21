@@ -398,6 +398,14 @@ const (
 	ActionIngressJoinTokenRotated  = "ingress.join_token_rotated"
 	ActionIngressJoinTokenDisabled = "ingress.join_token_disabled"
 	ActionIngressNodeEnrolRefused  = "ingress.node_enrol_refused"
+	// The ingress deployment (Phase 24). An admin switched the proxy's access log on or off (24-17). The server queued
+	// the wipe of a certificate cache volume on a node it could not reach, and later wiped it (24-27, 24-27). A restore
+	// paused an environment's ingress management, and an admin resumed it (24-13, 24-17). None carries a secret.
+	ActionIngressAccessLogsChanged = "ingress.access_logs_changed"
+	ActionIngressWipeQueued        = "ingress.wipe_queued"
+	ActionIngressWipeDone          = "ingress.wipe_done"
+	ActionIngressDeployPaused      = "ingress.deploy_paused"
+	ActionIngressDeployResumed     = "ingress.deploy_resumed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

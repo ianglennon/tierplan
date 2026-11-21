@@ -424,7 +424,12 @@
         "join_token_created": "Created ingress join token",
         "join_token_rotated": "Rotated ingress join token",
         "join_token_disabled": "Disabled ingress join token",
-        "node_enrol_refused": "Refused ingress node connection"
+        "node_enrol_refused": "Refused ingress node connection",
+        "access_logs_changed": "Changed ingress access logs",
+        "wipe_queued": "Queued an ingress cache wipe for an unreachable node",
+        "wipe_done": "Wiped ingress cache from a node",
+        "deploy_paused": "Paused ingress management after a restore",
+        "deploy_resumed": "Resumed ingress management after a restore"
       }
     },
     "coalesced": {
