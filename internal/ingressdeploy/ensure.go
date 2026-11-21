@@ -52,6 +52,10 @@ const (
 	// EnsureURLUnset is a pass that found no usable ingress URL (empty, or not a wss:// address with a host): the proxy
 	// would not start with it, so nothing is written and the running proxies keep the spec they have (WR-06).
 	EnsureURLUnset = "url_unset"
+	// EnsureEnableFailed is what a failed enable job leaves on an environment that is still off: the objects it made stay, and
+	// the status reports them as a failed enable and not as an incomplete switch-off (IN-11). A successful enable, and a
+	// switch-off, clear it; the ensure loop never writes it.
+	EnsureEnableFailed = "enable_failed"
 	// EnsureUpdateFailed is a pass that left the proxy service alone because the update this server wants was written
 	// before and the swarm rolled it back (WR-07). It is tried again when the wanted spec changes or after UpdateRetryAfter.
 	EnsureUpdateFailed = "update_failed"

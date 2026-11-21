@@ -408,6 +408,8 @@ func (e *disableRun) switchOff(ctx context.Context) error {
 	if _, err := s.d.Store.SetEnabled(ctx, e.envID, false, e.actor.ID, hook); err != nil {
 		return fail(CodeDisableSwitchFailed, err)
 	}
+	// A switch-off ends what a failed enable left to report: from here the leftovers are this job's to remove.
+	s.clearEnableFailed(ctx, e.envID)
 	if s.d.Kicker != nil {
 		s.d.Kicker.KickEnv(e.envID, "ingress_disabled")
 	}

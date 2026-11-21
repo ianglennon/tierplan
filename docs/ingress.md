@@ -54,7 +54,9 @@ takes the lowest free /22 of the swarm's pools.
 The job ends when the objects exist. Each node's proxy then enrols and applies its first configuration on its own,
 which takes a little while longer: read `GET .../ingress/status` to see when every node is ready.
 
-If a step of the job fails, the steps after it are not run and nothing is rolled back. Switching on again starts from
+If a step of the job fails, the steps after it are not run and nothing is rolled back. The status then reports `enableFailed` (and
+the class `enable_failed`), and ingress stays off while what the job made stays in the swarm; it is not an incomplete
+switch-off. Switching off removes it. Switching on again starts from
 what is there. Only one operation runs on an environment at a time: while a stack deploy or another ingress job holds the
 environment, the call answers `operation_locked` (409) and writes nothing.
 

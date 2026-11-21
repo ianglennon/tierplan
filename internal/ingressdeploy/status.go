@@ -35,8 +35,11 @@ type Status struct {
 	}
 	// PendingWipes is the number of certificate cache volumes still to be wiped on nodes that could not be reached.
 	PendingWipes int
-	// DisablingIncomplete is true when ingress is off while an ingress object remains in the swarm.
+	// DisablingIncomplete is true when ingress is off while an ingress object remains in the swarm after a switch-off.
 	DisablingIncomplete bool
+	// EnableFailed is true when ingress is off while the objects a failed enable made remain in the swarm. A switch-off removes
+	// them, and so does an enable that succeeds.
+	EnableFailed bool
 	// TokenDisabled is true when the join token was disabled, so no further node can enrol.
 	TokenDisabled bool
 	// Redeploy lists the stacks that must be redeployed to be attached to the ingress network, ordered by name.
@@ -116,7 +119,9 @@ func (s *Service) Status(ctx context.Context, envID string) (Status, error) {
 			st.Objects.Network = ok && ingress.OwnsNetwork(net.Name, net.Labels)
 			st.Objects.Service = l.service != nil && ingress.OwnsService(l.service.Name, l.service.Labels)
 			st.Objects.Secret = len(staleSecrets(l.secrets, envID, "")) > 0
-			st.DisablingIncomplete = !st.Enabled && (st.Objects.Network || st.Objects.Service || st.Objects.Secret)
+			left := !st.Enabled && (st.Objects.Network || st.Objects.Service || st.Objects.Secret)
+			st.EnableFailed = left && state.EnsureError == EnsureEnableFailed
+			st.DisablingIncomplete = left && !st.EnableFailed
 		}
 	}
 

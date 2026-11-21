@@ -11185,7 +11185,11 @@
             "type": "boolean"
           },
           "disablingIncomplete": {
-            "description": "True when ingress is off but an ingress object remains in the swarm",
+            "description": "True when ingress is off but an ingress object remains in the swarm after a switch-off that did not finish. Switch ingress off again to remove it",
+            "type": "boolean"
+          },
+          "enableFailed": {
+            "description": "True when ingress is off because switching it on failed, and the objects that attempt made remain in the swarm. Switch ingress on again to carry on, or off to remove them",
             "type": "boolean"
           },
           "enabled": {
@@ -11242,6 +11246,7 @@
           "lastEnsure",
           "pendingWipes",
           "disablingIncomplete",
+          "enableFailed",
           "tokenDisabled",
           "redeploy"
         ],
@@ -11255,7 +11260,7 @@
             "type": "string"
           },
           "class": {
-            "description": "How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes)",
+            "description": "How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, enable_failed (switching ingress on failed and ingress is still off), url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes)",
             "type": "string"
           }
         },

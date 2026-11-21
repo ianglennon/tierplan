@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 
@@ -335,10 +336,35 @@ func (s *Service) runEnable(ctx context.Context, r *jobs.Reporter, release func(
 				code, detail = se.code, se.detail
 			}
 			s.log().Warn("an ingress enable step failed", "environment", envID, "step", st.item, "code", code, "error", err)
+			s.noteEnableFailed(ctx, envID)
+			r.Output("Ingress is still off. Switch it on again to carry on from what was made, or switch it off to remove it.")
 			run.stop(st.item, jobs.ItemFailed, code, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
 			return
 		}
+	}
+}
+
+// noteEnableFailed records that an enable failed on an environment whose ingress is still off, so the status does not read the
+// objects it left as an incomplete switch-off (IN-11). An environment whose ingress is on keeps the loop's own record.
+func (s *Service) noteEnableFailed(ctx context.Context, envID string) {
+	state, err := s.d.Store.DeployState(ctx, envID)
+	if err != nil || state.Enabled {
+		return
+	}
+	if err := s.d.Store.RecordEnsure(ctx, envID, s.d.Clock.Now(), EnsureEnableFailed); err != nil {
+		s.log().Warn("could not record a failed ingress enable", "environment", envID, "error", err)
+	}
+}
+
+// clearEnableFailed takes the failed-enable record away, with no pass time: a successful enable and a switch-off both end it.
+func (s *Service) clearEnableFailed(ctx context.Context, envID string) {
+	state, err := s.d.Store.DeployState(ctx, envID)
+	if err != nil || state.EnsureError != EnsureEnableFailed {
+		return
+	}
+	if err := s.d.Store.RecordEnsure(ctx, envID, time.Time{}, EnsureOK); err != nil {
+		s.log().Warn("could not clear a failed ingress enable", "environment", envID, "error", err)
 	}
 }
 
@@ -452,6 +478,7 @@ func (e *enableRun) enableSwitch(ctx context.Context) error {
 	if _, err := s.d.Store.SetEnabled(ctx, e.envID, true, e.actor.ID, hook); err != nil {
 		return fail(CodeEnableSwitchFailed, err)
 	}
+	s.clearEnableFailed(ctx, e.envID)
 	e.release()
 	e.done(ItemSwitch, nil)
 	return nil

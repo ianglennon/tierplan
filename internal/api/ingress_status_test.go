@@ -38,6 +38,7 @@ type statusResp struct {
 	} `json:"lastEnsure"`
 	PendingWipes        int  `json:"pendingWipes"`
 	DisablingIncomplete bool `json:"disablingIncomplete"`
+	EnableFailed        bool `json:"enableFailed"`
 	TokenDisabled       bool `json:"tokenDisabled"`
 	Redeploy            []struct {
 		StackID, StackName string
@@ -75,7 +76,7 @@ func TestIngressStatusRoute(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want no-store", cc)
 	}
 	st := decodeBody[statusResp](t, rec)
-	if st.Enabled || st.Paused || st.AccessLogs || !st.ObjectsKnown || st.Objects.Network || st.Objects.Service || st.Objects.Secret || st.DisablingIncomplete {
+	if st.Enabled || st.Paused || st.AccessLogs || !st.ObjectsKnown || st.Objects.Network || st.Objects.Service || st.Objects.Secret || st.DisablingIncomplete || st.EnableFailed {
 		t.Errorf("a new environment's status = %+v, want everything off (accessLogs false by default)", st)
 	}
 	if st.Nodes.Expected != 1 || st.Redeploy == nil {

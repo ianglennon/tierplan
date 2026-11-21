@@ -10882,8 +10882,10 @@ export interface components {
         IngressStatusBody: {
             /** @description True while the proxy writes an access log */
             accessLogs: boolean;
-            /** @description True when ingress is off but an ingress object remains in the swarm */
+            /** @description True when ingress is off but an ingress object remains in the swarm after a switch-off that did not finish. Switch ingress off again to remove it */
             disablingIncomplete: boolean;
+            /** @description True when ingress is off because switching it on failed, and the objects that attempt made remain in the swarm. Switch ingress on again to carry on, or off to remove them */
+            enableFailed: boolean;
             /** @description True while ingress is switched on */
             enabled: boolean;
             /** @description The last pass that keeps the ingress objects as wanted */
@@ -10909,7 +10911,7 @@ export interface components {
         IngressStatusEnsure: {
             /** @description When the last pass ended, RFC 3339 UTC; empty when none has run */
             at: string;
-            /** @description How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes) */
+            /** @description How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, enable_failed (switching ingress on failed and ingress is still off), url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes) */
             class: string;
         };
         IngressStatusNodes: {

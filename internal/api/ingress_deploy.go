@@ -55,7 +55,7 @@ type IngressStatusNodes struct {
 // IngressStatusEnsure is the last pass of the loop that keeps the ingress objects as wanted.
 type IngressStatusEnsure struct {
 	At    string `json:"at" doc:"When the last pass ended, RFC 3339 UTC; empty when none has run"`
-	Class string `json:"class" doc:"How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes)"`
+	Class string `json:"class" doc:"How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, enable_failed (switching ingress on failed and ingress is still off), url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes)"`
 }
 
 // IngressStatusBody is an environment's ingress status. It carries counts and names, never a token or a secret.
@@ -68,7 +68,8 @@ type IngressStatusBody struct {
 	Nodes               IngressStatusNodes    `json:"nodes" doc:"How many proxy nodes are expected, enrolled and ready"`
 	LastEnsure          IngressStatusEnsure   `json:"lastEnsure" doc:"The last pass that keeps the ingress objects as wanted"`
 	PendingWipes        int                   `json:"pendingWipes" doc:"Certificate cache volumes still to be wiped on nodes that could not be reached"`
-	DisablingIncomplete bool                  `json:"disablingIncomplete" doc:"True when ingress is off but an ingress object remains in the swarm"`
+	DisablingIncomplete bool                  `json:"disablingIncomplete" doc:"True when ingress is off but an ingress object remains in the swarm after a switch-off that did not finish. Switch ingress off again to remove it"`
+	EnableFailed        bool                  `json:"enableFailed" doc:"True when ingress is off because switching it on failed, and the objects that attempt made remain in the swarm. Switch ingress on again to carry on, or off to remove them"`
 	TokenDisabled       bool                  `json:"tokenDisabled" doc:"True when the join token is disabled, so no further node can enrol"`
 	Redeploy            []IngressRedeployBody `json:"redeploy" doc:"The stacks that must be redeployed to be attached to the ingress network"`
 }
@@ -546,7 +547,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 			Objects:      IngressStatusObjects{Network: st.Objects.Network, Service: st.Objects.Service, Secret: st.Objects.Secret},
 			Nodes:        IngressStatusNodes{Expected: st.Nodes.Expected, Enrolled: st.Nodes.Enrolled, Ready: st.Nodes.Ready},
 			LastEnsure:   IngressStatusEnsure{At: rfc3339(st.LastEnsure.At), Class: st.LastEnsure.Class},
-			PendingWipes: st.PendingWipes, DisablingIncomplete: st.DisablingIncomplete, TokenDisabled: st.TokenDisabled,
+			PendingWipes: st.PendingWipes, DisablingIncomplete: st.DisablingIncomplete, EnableFailed: st.EnableFailed, TokenDisabled: st.TokenDisabled,
 			Redeploy: make([]IngressRedeployBody, 0, len(st.Redeploy)),
 		}
 		for _, r := range st.Redeploy {
