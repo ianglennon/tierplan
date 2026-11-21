@@ -200,7 +200,11 @@ func newDisableFix(t *testing.T, o disableOpts) *disableFix {
 			eng.Engine = d.Engine
 			d.Engine = eng
 			d.Kicker = f.kicker
-			d.NodeRows = d.Tokens.(*ingresshub.Service)
+			rows, ok := d.Tokens.(*ingresshub.Service)
+			if !ok {
+				t.Fatalf("the tokens are %T, want the hub service", d.Tokens)
+			}
+			d.NodeRows = rows
 			d.Clock = f.mux
 			d.Events = func(ctx context.Context) (<-chan envs.HealthEvent, func()) {
 				return f.events, func() {}
