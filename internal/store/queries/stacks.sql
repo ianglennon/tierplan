@@ -191,6 +191,13 @@ VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?);
 UPDATE stack_deploys SET state = ?, ended_at = ?, failed_service = ?, code = ?
 WHERE id = ? AND state = 'running';
 
+-- name: ListInterruptedStacks :many
+-- The stacks that have a deploy, an update or a roll back still running at startup, once each, read before the operations are
+-- ended: the hostname claims such a stack holds go back to its last good revision (D-45).
+SELECT DISTINCT stack_id, env_id FROM stack_deploys
+WHERE state = 'running' AND kind IN ('deploy', 'update', 'rollback')
+ORDER BY env_id, stack_id;
+
 -- name: MarkRunningRevisionsFailed :execrows
 -- A deploy, an update or a roll back that was running when the server stopped did not finish: the
 -- revision it took is failed. Only a revision still pending is touched. A roll back takes a revision of

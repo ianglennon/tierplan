@@ -714,13 +714,15 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The jobs and the operation lock are in memory, so a deploy that was running when the last process
 	// stopped is not running now. It ends interrupted, its revision failed, and its stack reads Deploy
 	// failed and offers a roll back (Open Q5).
+	// The stacks it lists are the ones whose hostname claims may be the failed revision's; they are put back below, once
+	// the ingress store exists (D-45).
 	interrupted, err := stackops.Repo{Store: st, Vault: vlt}.MarkInterrupted(ctx)
 	if err != nil {
 		_ = st.Close()
 		return nil, restoredStateError{fmt.Errorf("mark interrupted stack deploys: %w", err)}
 	}
-	if interrupted > 0 {
-		log.Warn("stack operations that were running when the server stopped were marked interrupted", "count", interrupted)
+	if len(interrupted) > 0 {
+		log.Warn("stack operations that were running when the server stopped were marked interrupted", "count", len(interrupted))
 	}
 
 	// The Compose SDK that deploys a standalone stack keeps process-wide state (its Docker CLI
@@ -1264,6 +1266,11 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		},
 	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, Ingress: ingressStore, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
+	// The claims of a stack whose deploy was cut off go back to its last good revision's before anything is served, so a
+	// crash never leaves a failed revision's hostnames held (D-45). A failure is logged and never stops the start.
+	if err := api.RestoreInterruptedIngressClaims(ctx, stacksDeps, interrupted); err != nil {
+		log.Error("the hostname claims of interrupted stack operations could not all be put back", "error", err)
+	}
 	// The ingress deployer shares the stack routes' operation lock and the job hub, so an enable and a stack operation exclude
 	// each other. Its stack side lists the stacks to redeploy.
 	ingressDeploy := newIngressDeploy(ingressDeployDeps{

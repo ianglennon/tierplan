@@ -1126,9 +1126,9 @@ func TestMarkInterruptedEndsRunningDeploysAndFailsTheirPendingRevisions(t *testi
 		t.Fatal(err)
 	}
 
-	n, err := f.repo.MarkInterrupted(ctx)
-	if err != nil || n != 1 {
-		t.Fatalf("MarkInterrupted = %d, %v, want 1: only the running deploy", n, err)
+	listed, err := f.repo.MarkInterrupted(ctx)
+	if err != nil || len(listed) != 1 || listed[0] != (stackops.InterruptedStack{StackID: run.ID, EnvID: f.envID}) {
+		t.Fatalf("MarkInterrupted = %+v, %v, want only the stack of the running deploy", listed, err)
 	}
 	got, ok, err := f.repo.LatestDeploy(ctx, run.ID)
 	if err != nil || !ok || got.State != stackops.DeployInterrupted || got.Code != "interrupted" || got.EndedAt.IsZero() {
@@ -1143,8 +1143,8 @@ func TestMarkInterruptedEndsRunningDeploysAndFailsTheirPendingRevisions(t *testi
 	if rev, _ := f.repo.Revision(ctx, finished.ID, revDone.Seq); rev.Outcome != stackops.OutcomeGood {
 		t.Errorf("a good revision = %+v, must stay good", rev)
 	}
-	if n, err := f.repo.MarkInterrupted(ctx); err != nil || n != 0 {
-		t.Errorf("MarkInterrupted again = %d, %v, want 0", n, err)
+	if again, err := f.repo.MarkInterrupted(ctx); err != nil || len(again) != 0 {
+		t.Errorf("MarkInterrupted again = %+v, %v, want none", again, err)
 	}
 }
 
@@ -1336,8 +1336,8 @@ func TestMarkInterruptedFailsTheRevisionOfARollBackToo(t *testing.T) {
 	if _, err := f.repo.StartDeploy(ctx, st.ID, f.envID, stackops.DeployKindRollback, cp.Seq, "job-rb", "ada"); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := f.repo.MarkInterrupted(ctx); err != nil || n != 1 {
-		t.Fatalf("MarkInterrupted = %d, %v", n, err)
+	if listed, err := f.repo.MarkInterrupted(ctx); err != nil || len(listed) != 1 || listed[0].StackID != st.ID {
+		t.Fatalf("MarkInterrupted = %+v, %v, want the rolled back stack", listed, err)
 	}
 	if rev, err := f.repo.Revision(ctx, st.ID, cp.Seq); err != nil || rev.Outcome != stackops.OutcomeFailed {
 		t.Errorf("roll back revision = %+v, %v, want failed: it would otherwise stay pending for ever", rev, err)

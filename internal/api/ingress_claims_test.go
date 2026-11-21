@@ -389,3 +389,50 @@ func TestIngressClaimsNotWrittenByStartAndAutoRollback(t *testing.T) {
 	}
 	wantClaimsUntouched(t, s, version, audits)
 }
+
+// The start-up restore goes through the API's adaptor, so each claim write it makes is audited by the system actor (D-45).
+func TestInterruptedIngressClaimsAreAuditedBySystem(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "claims-crash")
+	f.deployGood(t, admin, st.ID, ingressCompose("kept.apps.example.com"))
+	// The next deploy claimed another name and the process stopped before it ended.
+	ctx := testsupport.Context(t)
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+	rev, err := repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.StartDeploy(ctx, st.ID, e.ID, stackops.DeployKindDeploy, rev.Seq, "job-gone-with-the-process", "ada"); err != nil {
+		t.Fatal(err)
+	}
+	decl := ingress.Declaration{Service: "weba", Host: "lost.apps.example.com", Label: "tierplan.ingress.host", Port: 80}
+	if _, err := f.stackDeps.Ingress.ReplaceStackRoutes(ctx, ingressstore.ReplaceInput{EnvID: e.ID, StackID: st.ID, Actor: "ada", Decls: []ingress.Declaration{decl}}); err != nil {
+		t.Fatal(err)
+	}
+	interrupted, err := repo.MarkInterrupted(ctx)
+	if err != nil || len(interrupted) != 1 {
+		t.Fatalf("MarkInterrupted = %+v, %v, want the stack", interrupted, err)
+	}
+	before := claimAudits(t, f, "ingress.claim_replaced")
+
+	if err := api.RestoreInterruptedIngressClaims(ctx, f.stackDeps, interrupted); err != nil {
+		t.Fatalf("RestoreInterruptedIngressClaims: %v", err)
+	}
+
+	if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"kept.apps.example.com"}) {
+		t.Errorf("claims = %v, want the last good revision's host", got)
+	}
+	if n := claimAudits(t, f, "ingress.claim_replaced"); n != before+1 {
+		t.Errorf("ingress.claim_replaced rows = %d, want %d", n, before+1)
+	}
+	var typ, id string
+	if err := f.st.Read.QueryRow(`SELECT actor_type, actor_id FROM audit_log WHERE action = 'ingress.claim_replaced' ORDER BY seq DESC LIMIT 1`).Scan(&typ, &id); err != nil {
+		t.Fatal(err)
+	}
+	if typ != "system" || !strings.HasPrefix(id, "system:") {
+		t.Errorf("actor = %s/%s, want the system actor", typ, id)
+	}
+}

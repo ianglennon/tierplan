@@ -216,3 +216,14 @@ func ingressAttachFor(ctx context.Context, d StacksDeps, envID string, target st
 	}
 	return ops.AttachFor(ctx, envID, target)
 }
+
+// interruptedClaimsActor is the system actor the claim writes of the start-up restore are audited as.
+const interruptedClaimsActor = "system:startup"
+
+// RestoreInterruptedIngressClaims puts the hostname claims of the stacks whose deploy, roll back or update was
+// interrupted by the server stopping back as their last good revision declared them (D-45), audited as
+// ingress.claim_replaced or ingress.claim_released by the system actor. The server calls it once at start, after the
+// interrupted operations were ended and before it serves. It does nothing when the server has no ingress store.
+func RestoreInterruptedIngressClaims(ctx context.Context, d StacksDeps, interrupted []stackops.InterruptedStack) error {
+	return stackops.RestoreInterruptedClaims(ctx, d.repo(), d.ingressOps(), interrupted, interruptedClaimsActor)
+}

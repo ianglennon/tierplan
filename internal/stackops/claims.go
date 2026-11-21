@@ -99,3 +99,36 @@ func LastGoodDeclarations(ctx context.Context, repo Repo, st Stack) ([]ingress.D
 	}
 	return stacks.IngressDeclarations(checked.Loaded.Project, st.Target), true, nil
 }
+
+// RestoreInterruptedClaims puts the claims of every stack whose deploy, roll back or update was interrupted back as its
+// last good revision declared them (D-45). The server calls it once at start, after MarkInterrupted: a crash in the
+// middle of a deploy runs no revert, so the claims of the failed revision would stay. The rule is revertClaims': the last
+// good revision's routes are stored, a stack with no good revision releases every claim, and a restore the store refuses
+// falls back to a release. Each claim write is audited by actor through the Ingress, and one stack's failure is collected
+// while the others go on. A stack that no longer exists is skipped; a stack whose last good revision cannot be read or
+// loaded is left as it is, and reported, because releasing the names of a stack that may be running would be worse than
+// holding them a while longer.
+func RestoreInterruptedClaims(ctx context.Context, repo Repo, in Ingress, interrupted []InterruptedStack, actor string) error {
+	if in == nil {
+		return nil
+	}
+	d := Deps{Ingress: in}
+	var errs []error
+	for _, s := range interrupted {
+		st, err := repo.Stack(ctx, s.EnvID, s.StackID)
+		if errors.Is(err, ErrStackNotFound) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("read stack %s: %w", s.StackID, err))
+			continue
+		}
+		restore, hasGood, err := LastGoodDeclarations(ctx, repo, st)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("read the last good routes of stack %s: %w", st.Name, err))
+			continue
+		}
+		d.revertClaims(ctx, s.EnvID, s.StackID, &ClaimWrite{Restore: restore, HasGood: hasGood, Actor: actor})
+	}
+	return errors.Join(errs...)
+}
