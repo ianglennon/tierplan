@@ -109,3 +109,20 @@ func TestCheckInputLiteralsDecideIngress(t *testing.T) {
 		t.Fatalf("the guard read %d stacks.CheckInput literals, fewer than %d: it checked the wrong tree", checked, minCheckInputLiterals)
 	}
 }
+
+// TestCheckInputGuardFailsFirst runs the scanner over fixtures, so it cannot go quiet unnoticed: the unmarked literal
+// is reported, the decided ones are not, and a registry.CheckInput is not counted.
+func TestCheckInputGuardFailsFirst(t *testing.T) {
+	t.Parallel()
+	// testdata is skipped when walking from a parent, so the walk starts inside it.
+	offenders, checked, err := scanCheckInputs(filepath.Join("testdata", "checkinputguard"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(offenders) != 1 || !strings.Contains(filepath.ToSlash(offenders[0]), "checkinputguard/unmarked.go:") {
+		t.Fatalf("offenders = %v, want exactly the literal of unmarked.go", offenders)
+	}
+	if checked != 3 {
+		t.Fatalf("read %d stacks.CheckInput literals, want 3 (one unmarked, one with an Ingress key, one with the marker)", checked)
+	}
+}
