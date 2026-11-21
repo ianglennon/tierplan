@@ -89,6 +89,12 @@ warning. So in this version the switch is refused with `ingress_http01_conflict`
 DNS-01 first (see [https.md](https.md)), then switch ingress on. A later version lifts this limit.
 When TierPlan runs outside the swarm, nothing conflicts and nothing is shown.
 
+TierPlan decides where it runs from its own Docker socket: the cluster it reports (a manager), or its node (a manager or a
+worker), against the environment's. When its certificate uses HTTP-01 and it cannot tell (no Docker socket is mounted, the
+engine does not answer, or it is a worker whose node the environment does not list), the preview shows
+`ingress_http01_unknown` and the switch goes ahead: check by hand that TierPlan does not run on a node of this swarm, or
+use DNS-01.
+
 ## Existing stacks need a redeploy
 
 Switching ingress on changes no stack. A service joins the `tierplan-ingress` network when the stack is deployed with

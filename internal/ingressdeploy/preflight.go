@@ -452,9 +452,12 @@ func checkTypedSubnet(ctx context.Context, s *Service, in checkInput) ([]Finding
 }
 
 // checkHTTP01 refuses when TierPlan's own certificate uses the HTTP-01 challenge and TierPlan runs on this swarm: the
-// proxies take port 80 on every node, so the renewal would break silently (D-09). What cannot be read is a warning.
+// proxies take port 80 on every node, so the renewal would break silently (D-09). TierPlan is on this swarm when its own
+// engine's cluster is the environment's, or, for a worker (which does not learn the cluster) or a manager the environment
+// does not know the cluster of, when its node is one of the environment's. What cannot be told is a warning, never a
+// silent pass: no Docker socket, an engine that does not answer, or a worker whose node the environment does not list.
 func checkHTTP01(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
-	if s.d.OwnChallenge == nil || s.d.LocalCluster == nil {
+	if s.d.OwnChallenge == nil || s.d.LocalSwarm == nil {
 		return nil, nil
 	}
 	unknown := func() []Finding {
@@ -472,19 +475,39 @@ func checkHTTP01(ctx context.Context, s *Service, in checkInput) ([]Finding, err
 	if challenge != challengeHTTP01 {
 		return nil, nil
 	}
-	local, err := s.d.LocalCluster(ctx)
+	local, err := s.d.LocalSwarm(ctx)
 	if err != nil {
 		s.log().Warn("could not read TierPlan's own swarm for the ingress preflight", "error", err)
 		return unknown(), nil
 	}
-	if local == "" || in.Info.ClusterID == "" || local != in.Info.ClusterID {
+	switch {
+	case !local.Known:
+		return unknown(), nil
+	case !local.Member:
+		// A standalone engine: TierPlan is on no swarm node of its own.
 		return nil, nil
 	}
-	return []Finding{{
-		Code:     CodeHTTP01Conflict,
-		Message:  "TierPlan runs on this swarm and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes on every node. Switch TierPlan's own certificate to DNS-01 first. A later version lifts this limit.",
-		Severity: SeverityError,
-	}}, nil
+	sameCluster := local.ClusterID != "" && in.Info.ClusterID != "" && local.ClusterID == in.Info.ClusterID
+	otherCluster := local.ClusterID != "" && in.Info.ClusterID != "" && local.ClusterID != in.Info.ClusterID
+	ownNode := false
+	for _, n := range in.Info.Nodes {
+		if local.NodeID != "" && n.SwarmNodeID == local.NodeID {
+			ownNode = true
+		}
+	}
+	switch {
+	case sameCluster || ownNode:
+		return []Finding{{
+			Code:     CodeHTTP01Conflict,
+			Message:  "TierPlan runs on this swarm and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes on every node. Switch TierPlan's own certificate to DNS-01 first. A later version lifts this limit.",
+			Severity: SeverityError,
+		}}, nil
+	case otherCluster:
+		return nil, nil
+	}
+	// A worker of some swarm whose node the environment does not list, or a manager of an environment whose cluster is not known:
+	// it may be this swarm and it may not.
+	return unknown(), nil
 }
 
 // checkURL refuses an install that does not know its own address, and an address whose host the ingress routes: the

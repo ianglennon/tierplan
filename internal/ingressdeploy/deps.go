@@ -159,9 +159,10 @@ type Deps struct {
 	AddressSpaces Addressing
 	// AllocationWait is how the read-back of the new network waits on the swarm.
 	AllocationWait dockerx.AllocationWait
-	// LocalCluster is the swarm cluster ID of the server's own engine, "" when it is not a swarm node
-	// (envs.Service.LocalSwarmClusterID). The preflight compares it with the environment's.
-	LocalCluster func(ctx context.Context) (string, error)
+	// LocalSwarm is the swarm membership of the server's own engine (envs.Service.LocalSwarmMembership): the cluster for a
+	// manager, the node for a manager or a worker, and whether it can be told at all. The preflight compares it with the
+	// environment's and says so when it cannot tell.
+	LocalSwarm func(ctx context.Context) (envs.SwarmMembership, error)
 	// OwnChallenge reads the HTTP-01 challenge answer of the server's own address, for the preflight.
 	OwnChallenge func(ctx context.Context) (string, error)
 	// ServerVersion decides the proxy image's tag (IngressImage).

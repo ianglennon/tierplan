@@ -88,7 +88,7 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Audit:         d.Audit,
 		Resolver:      d.Resolver,
 		AddressSpaces: d.AddressSpaces,
-		LocalCluster:  d.Envs.LocalSwarmClusterID,
+		LocalSwarm:    d.Envs.LocalSwarmMembership,
 		OwnChallenge:  d.OwnChallenge,
 		ServerVersion: buildinfo.Get().Version,
 		URL:           d.Instance.IngressEndpoint,
