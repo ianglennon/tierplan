@@ -6,7 +6,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -444,7 +443,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		if d.Service == nil {
 			return nil, unavailable()
 		}
-		canView, err := d.canView(ctx, p, in.EnvID)
+		canView, err := ingressCanView(ctx, d.Checker, p, in.EnvID)
 		if err != nil {
 			return nil, fail(ctx, "read the access for the ingress switch-off preview", err)
 		}
@@ -487,7 +486,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		if d.Service == nil {
 			return nil, unavailable()
 		}
-		canView, err := d.canView(ctx, p, in.EnvID)
+		canView, err := ingressCanView(ctx, d.Checker, p, in.EnvID)
 		if err != nil {
 			return nil, fail(ctx, "read the access for the ingress switch-off", err)
 		}
@@ -650,20 +649,6 @@ func serveIngressJobStream(w http.ResponseWriter, req *http.Request, d IngressDe
 			return nil, false
 		},
 	})
-}
-
-// canView says which environments a message about a held name may name: the caller's own access decides, and with no
-// principal or no checker only the environment itself is visible, as ingressPolicyFor builds it.
-func (d IngressDeployDeps) canView(ctx context.Context, p *rbac.Principal, envID string) (func(string) bool, error) {
-	canView := func(id string) bool { return id == envID }
-	if p != nil && d.Checker != nil {
-		access, err := d.Checker.Access(ctx, p)
-		if err != nil {
-			return nil, fmt.Errorf("read the access of the principal: %w", err)
-		}
-		canView = func(id string) bool { return access.For(id).Role != rbac.RoleNone }
-	}
-	return canView, nil
 }
 
 // ingressDisableProblem is the 409 for a switch-off that was refused: its type is the code of the first finding

@@ -40,7 +40,7 @@ func ingressPolicyFor(ctx context.Context, d StacksDeps, p *rbac.Principal, envI
 	if d.Ingress == nil {
 		return nil, nil
 	}
-	canView, err := ingressCanView(ctx, d, p, envID)
+	canView, err := ingressCanView(ctx, d.Checker, p, envID)
 	if err != nil {
 		return nil, err
 	}
@@ -51,14 +51,15 @@ func ingressPolicyFor(ctx context.Context, d StacksDeps, p *rbac.Principal, envI
 	return &stacks.IngressPolicy{StackID: stackID, World: world}, nil
 }
 
-// ingressCanView says which environments a message about a held name may name: the stack's own, and, for a principal
-// with a role on another, that one too. With no principal, or no checker, only the stack's own environment is visible.
-func ingressCanView(ctx context.Context, d StacksDeps, p *rbac.Principal, envID string) (func(string) bool, error) {
+// ingressCanView says which environments a message about a held name may name: the environment's own, and, for a
+// principal with a role on another, that one too. With no principal, or no checker, only the environment's own is
+// visible. It is the one visibility rule of the stack gate, the claim write and the ingress switch-off.
+func ingressCanView(ctx context.Context, checker *rbac.Checker, p *rbac.Principal, envID string) (func(string) bool, error) {
 	canView := func(id string) bool { return id == envID }
-	if p != nil && d.Checker != nil {
-		access, err := d.Checker.Access(ctx, p)
+	if p != nil && checker != nil {
+		access, err := checker.Access(ctx, p)
 		if err != nil {
-			return nil, fmt.Errorf("read the access of the principal for the ingress policy: %w", err)
+			return nil, fmt.Errorf("read the access of the principal for the ingress names: %w", err)
 		}
 		canView = func(id string) bool { return access.For(id).Role != rbac.RoleNone }
 	}
@@ -99,7 +100,7 @@ func claimWriteFor(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal,
 	if len(decls) == 0 && len(restore) == 0 {
 		return nil, nil
 	}
-	canView, err := ingressCanView(ctx, d, viewer, st.EnvID)
+	canView, err := ingressCanView(ctx, d.Checker, viewer, st.EnvID)
 	if err != nil {
 		return nil, err
 	}
