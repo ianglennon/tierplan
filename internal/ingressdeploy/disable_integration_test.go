@@ -126,3 +126,38 @@ func (e *swarmEnv) auditCount(action string) int {
 	}
 	return n
 }
+
+// TestSwitchOffReachesANodeNoAgentCovers is WR-04 on a real swarm: the worker has no usable agent (its agent was revoked, so the
+// environment's agent list no longer names it), yet it still runs a proxy and holds the cache volume with every private key.
+// The switch-off takes the swarm's own node list from the manager, names the worker as not wiped, and queues a pending wipe
+// keyed by its swarm node ID instead of finishing with the volume left behind unseen.
+func TestSwitchOffReachesANodeNoAgentCovers(t *testing.T) {
+	e := startSwarmEnv(t)
+	requireJobDone(t, e.enable())
+	e.awaitReady()
+	if _, err := e.st.Write.Exec(`UPDATE agents SET status = 'revoked' WHERE id = ?`, e.agents[e.wrk].identity.AgentID); err != nil {
+		t.Fatalf("revoke the worker's agent: %v", err)
+	}
+
+	prev, err := e.deploy.PreviewDisable(testsupport.Context(t), e.envID, func(string) bool { return true })
+	if err != nil {
+		t.Fatalf("PreviewDisable: %v", err)
+	}
+	if len(prev.Removes.Volumes) != 2 || len(prev.Unreachable) != 1 {
+		t.Errorf("the preview names %d volumes and %d unreachable nodes, want both swarm nodes and the one no agent covers", len(prev.Removes.Volumes), len(prev.Unreachable))
+	}
+	job := e.disable()
+	requireJobDone(t, job)
+	for _, it := range job.Items {
+		if it.ID == ingressdeploy.ItemVolumes && (it.Result["wiped"] != "1" || it.Result["pending"] != "1") {
+			t.Errorf("the volumes item says %v, want the manager wiped and the node no agent covers pending", it.Result)
+		}
+	}
+	if present, _ := e.hasCacheVolume(e.wrk); !present {
+		t.Error("the worker's cache volume is gone though nothing could reach it")
+	}
+	pending, err := e.istore.PendingWipes(testsupport.Context(t), e.envID)
+	if err != nil || len(pending) != 1 || pending[0].SwarmNodeID != e.swarmNodeID(e.wrk) {
+		t.Fatalf("pending wipes = %+v, %v; want the worker's, keyed by its swarm node ID", pending, err)
+	}
+}
