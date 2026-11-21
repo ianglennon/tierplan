@@ -11255,7 +11255,7 @@
             "type": "string"
           },
           "class": {
-            "description": "How it ended: empty for success, otherwise unreachable, locked, paused or write_failed",
+            "description": "How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes)",
             "type": "string"
           }
         },

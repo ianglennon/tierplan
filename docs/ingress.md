@@ -107,7 +107,14 @@ the objects, the number of certificate cache volumes still waiting to be wiped (
 
 TierPlan checks the objects once a minute and whenever the ingress state changes, and puts right what differs: a
 missing secret, network or service, or a service that runs a different image than TierPlan's version. It writes only
-when something differs, and never while another operation holds the environment.
+when something differs, and never while another operation holds the environment. It reads the switches and the swarm again
+once it holds the environment, so a switch-off or a restore's pause that comes in while it waits is not written over.
+
+Two results of a pass mean it left the proxy service alone on purpose. `url_unset`: TierPlan has no usable address for the
+proxies to dial (the agent URL and the public URL are both unset, or are not `https://` addresses), so nothing is written and
+the running proxies keep the spec they have. `update_failed`: the swarm rolled back the last update of the proxy service, so
+the same update is not sent again every minute (each try restarts one node's proxy first). It is tried again when the spec
+TierPlan wants changes, and after an hour otherwise.
 
 ## The access log
 

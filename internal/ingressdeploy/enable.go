@@ -423,7 +423,7 @@ func (e *enableRun) service(ctx context.Context) error {
 	if err != nil {
 		return fail(CodeEnableServiceFailed, err)
 	}
-	in := serviceInput{secretID: e.secretID, secretName: e.secretName, accessLog: state.AccessLogs, auth: auth, always: true}
+	in := serviceInput{envID: e.envID, secretID: e.secretID, secretName: e.secretName, accessLog: state.AccessLogs, auth: auth, always: true}
 	err = s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
 		_, err := s.ensureService(ctx, c, in)
 		return err
@@ -569,6 +569,8 @@ func (s *Service) ensureNetwork(ctx context.Context, c *dockerx.Client, envID, r
 
 // serviceInput is what the service step needs to build the proxy service.
 type serviceInput struct {
+	// envID names the environment, for the memory of the last spec written to its service.
+	envID                string
 	secretID, secretName string
 	accessLog            bool
 	// auth is the registry credential the proxy image is sent with, "" for none.
@@ -634,20 +636,29 @@ func (s *Service) ensureService(ctx context.Context, c *dockerx.Client, in servi
 			if len(changes) == 0 {
 				return false, nil
 			}
+			if s.updateHeld(in.envID, &cur, spec) {
+				return false, errUpdateHeld
+			}
 		}
 		raw, err := json.Marshal(spec)
 		if err != nil {
 			return false, err
 		}
-		_, err = c.ServiceUpdate(ctx, cur.ID, cur.Version, raw, in.auth)
-		return err == nil, err
+		if _, err = c.ServiceUpdate(ctx, cur.ID, cur.Version, raw, in.auth); err != nil {
+			return false, err
+		}
+		s.noteWritten(in.envID, spec)
+		return true, nil
 	case errors.Is(err, dockerx.ErrServiceNotFound):
 		raw, err := json.Marshal(spec)
 		if err != nil {
 			return false, err
 		}
-		_, _, err = c.ServiceCreate(ctx, raw, in.auth)
-		return err == nil, err
+		if _, _, err = c.ServiceCreate(ctx, raw, in.auth); err != nil {
+			return false, err
+		}
+		s.noteWritten(in.envID, spec)
+		return true, nil
 	default:
 		return false, err
 	}

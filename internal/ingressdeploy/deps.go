@@ -6,6 +6,7 @@ package ingressdeploy
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
@@ -182,6 +183,10 @@ type Service struct {
 	roundHook func()
 	// wipeHook, when set, is called after every pass of the wipe loop. Only a test sets it (export_test.go).
 	wipeHook func()
+	// written is, by environment, the proxy spec last written to its service, so a rolled-back update is not written again
+	// every pass (WR-07); heldMu guards it.
+	heldMu  sync.Mutex
+	written map[string]updateMemo
 }
 
 // New builds the deployer.

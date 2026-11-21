@@ -5,9 +5,16 @@ package ingressdeploy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"net/url"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/moby/moby/api/types/swarm"
 
 	"golang.org/x/sync/errgroup"
 
@@ -17,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // EnsureTick is how often the ensure loop takes a pass on its own, on the injected clock. A change to the ingress
@@ -41,7 +49,22 @@ const (
 	EnsurePaused = "paused"
 	// EnsureWriteFailed is a pass in which a read or a write inside the lock failed. The next pass is the retry.
 	EnsureWriteFailed = "write_failed"
+	// EnsureURLUnset is a pass that found no usable ingress URL (empty, or not a wss:// address with a host): the proxy
+	// would not start with it, so nothing is written and the running proxies keep the spec they have (WR-06).
+	EnsureURLUnset = "url_unset"
+	// EnsureUpdateFailed is a pass that left the proxy service alone because the update this server wants was written
+	// before and the swarm rolled it back (WR-07). It is tried again when the wanted spec changes or after UpdateRetryAfter.
+	EnsureUpdateFailed = "update_failed"
 )
+
+// UpdateRetryAfter is how long, on the injected clock, the loop leaves a proxy service alone after the swarm rolled back an
+// update to the spec the loop still wants. The update is stop-first, so each try takes one node's proxy down for the
+// swarm's monitor period; an hour keeps a cause that has gone (a registry that was down) from being held against the proxy
+// for ever, and keeps a spec that can never start from being tried every minute.
+const UpdateRetryAfter = time.Hour
+
+// errUpdateHeld is what ensureService answers when it would write an update the swarm rolled back already.
+var errUpdateHeld = errors.New("the update was rolled back and is held back")
 
 // ensureHolder says who holds the operation lock during a pass.
 const ensureHolder = "system:ingress"
@@ -131,8 +154,10 @@ func (s *Service) pass(ctx context.Context, envID string) {
 }
 
 // ensure decides one environment's pass and returns its class. record is false for an environment the pass leaves
-// alone altogether. The lock is taken only when there is something to write, is never waited for, and is given back
-// before the class is recorded; no write is retried and nothing waits for a rollout.
+// alone altogether. The plan is made lock-free; when there is something to write the lock is taken, never waited for,
+// and the plan is made again under it, from the state and the swarm as they are then, before anything is written: a
+// switch-off, a restore's pause or another writer may have come in between (WR-05). The lock is given back before the
+// class is recorded; no write is retried and nothing waits for a rollout.
 func (s *Service) ensure(ctx context.Context, envID string, state ingressstore.DeployState) (class string, record bool) {
 	if state.Paused {
 		return s.observePaused(ctx, envID, state)
@@ -148,21 +173,12 @@ func (s *Service) ensure(ctx context.Context, envID string, state ingressstore.D
 	if !info.ManagerConnected {
 		return EnsureUnreachable, true
 	}
-	var l live
-	if err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
-		l, err = readLive(ctx, c)
-		return err
-	}); err != nil {
-		s.log().Warn("the ingress ensure loop could not read a swarm", "environment", envID, "error", err)
-		return EnsureUnreachable, true
+	p, class := s.survey(ctx, envID, state)
+	if class != "" {
+		return class, true
 	}
-	work, err := s.needsWrite(ctx, envID, state, l)
-	if err != nil {
-		s.log().Warn("the ingress ensure loop could not compare a swarm with what it wants", "environment", envID, "error", err)
-		return EnsureWriteFailed, true
-	}
-	if !work {
-		return EnsureOK, true
+	if !p.work {
+		return p.class(), true
 	}
 	release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
 		Kind: stackops.HolderKindIngress, By: ensureHolder, Workload: "ingress", Started: s.d.Clock.Now(),
@@ -172,11 +188,88 @@ func (s *Service) ensure(ctx context.Context, envID string, state ingressstore.D
 		return EnsureLocked, true
 	}
 	defer release()
-	if err := s.repair(ctx, envID, state, l); err != nil {
+	// Under the lock, which an enable, a switch-off, a stack operation and an Admin's token rotation hold too: the switches
+	// and the swarm are read again, and whatever changed since the plan decides what is written.
+	state, err = s.d.Store.DeployState(ctx, envID)
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not read an environment's state under the lock", "environment", envID, "error", err)
+		return EnsureWriteFailed, true
+	}
+	if !state.Enabled {
+		return "", false
+	}
+	if state.Paused {
+		return s.observePaused(ctx, envID, state)
+	}
+	if p, class = s.survey(ctx, envID, state); class != "" {
+		return class, true
+	}
+	if !p.work {
+		return p.class(), true
+	}
+	held2, err := s.repair(ctx, envID, state, p.l)
+	if err != nil {
 		s.log().Warn("the ingress ensure loop could not put the ingress objects right", "environment", envID, "error", err)
 		return EnsureWriteFailed, true
 	}
+	if held2 {
+		return EnsureUpdateFailed, true
+	}
 	return EnsureOK, true
+}
+
+// ensurePlan is what one reading of the swarm says a pass has to do.
+type ensurePlan struct {
+	l live
+	// work is true when something has to be written: an object is missing, the service differs from what this server
+	// wants, or old token secrets are to go.
+	work bool
+	// held is true when the service differs but the update to the wanted spec was rolled back already, so it is not written.
+	held bool
+}
+
+// class is the class of a pass that writes nothing more than the plan says.
+func (p ensurePlan) class() string {
+	if p.held {
+		return EnsureUpdateFailed
+	}
+	return EnsureOK
+}
+
+// survey reads the swarm and makes the plan. A class that is not empty says why it could not: the ingress URL is unusable,
+// the swarm cannot be read or the comparison failed; nothing has been written in any of them.
+func (s *Service) survey(ctx context.Context, envID string, state ingressstore.DeployState) (ensurePlan, string) {
+	if !validIngressURL(s.url()) {
+		return ensurePlan{}, EnsureURLUnset
+	}
+	var l live
+	if err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
+		l, err = readLive(ctx, c)
+		return err
+	}); err != nil {
+		s.log().Warn("the ingress ensure loop could not read a swarm", "environment", envID, "error", err)
+		return ensurePlan{}, EnsureUnreachable
+	}
+	p, err := s.needsWrite(ctx, envID, state, l)
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not compare a swarm with what it wants", "environment", envID, "error", err)
+		return ensurePlan{}, EnsureWriteFailed
+	}
+	return p, ""
+}
+
+// validIngressURL is whether raw is an address the proxy's supervisor accepts as TIERPLAN_INGRESS_URL: wss://, a host, and no
+// user name, query or fragment. The supervisor refuses anything else at start, so a spec carrying it would stop the proxy
+// from coming up.
+func validIngressURL(raw string) bool {
+	if raw == "" || strings.Contains(raw, "#") {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Scheme, "wss") {
+		return false
+	}
+	return u.Hostname() != "" && u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == ""
 }
 
 // observePaused is the pass over an environment a restore paused: it writes nothing and issues no token. The first
@@ -196,13 +289,15 @@ func (s *Service) observePaused(ctx context.Context, envID string, state ingress
 	return EnsurePaused, true
 }
 
-// needsWrite is whether a pass has anything to write, judged from the swarm as read: no secret for the current token,
-// no network, no service or one that differs from what this server wants, or old token secrets to take away. It
-// writes nothing, so a pass over a swarm that is as wanted never takes the lock.
-func (s *Service) needsWrite(ctx context.Context, envID string, state ingressstore.DeployState, l live) (bool, error) {
+// needsWrite makes the plan from the swarm as read: no secret for the current token, no network, no service or one that
+// differs from what this server wants, or old token secrets to take away. It writes nothing, so a pass over a swarm that is
+// as wanted never takes the lock. A service whose update to the wanted spec was rolled back is not a thing to write (held),
+// though the old secrets may still be.
+func (s *Service) needsWrite(ctx context.Context, envID string, state ingressstore.DeployState, l live) (ensurePlan, error) {
+	p := ensurePlan{l: l}
 	st, err := s.d.Tokens.TokenStatus(ctx, envID)
 	if err != nil {
-		return false, err
+		return p, err
 	}
 	var cur dockerx.SecretRow
 	have := false
@@ -211,77 +306,92 @@ func (s *Service) needsWrite(ctx context.Context, envID string, state ingresssto
 		cur, have = l.secret(SecretName(envID, st.Generation, st.ID))
 	}
 	if !have && (!st.Exists || !st.Disabled) {
-		return true, nil
+		p.work = true
+		return p, nil
 	}
 	if _, ok := l.network(); !ok {
-		return true, nil
+		p.work = true
+		return p, nil
 	}
 	if !have {
 		// A disabled token with no secret is an admin's decision, and nothing is left to run the proxy with.
-		return false, nil
+		return p, nil
 	}
 	if l.service == nil {
-		return true, nil
+		p.work = true
+		return p, nil
 	}
-	changes, err := serviceChanges(s.desiredService(serviceInput{secretID: cur.ID, secretName: cur.Name, accessLog: state.AccessLogs}), l.service.Spec, l.networks)
+	desired := s.desiredService(serviceInput{secretID: cur.ID, secretName: cur.Name, accessLog: state.AccessLogs})
+	changes, err := serviceChanges(desired, l.service.Spec, l.networks)
 	if err != nil {
-		return false, err
+		return p, err
 	}
 	if len(changes) > 0 {
-		return true, nil
+		if !s.updateHeld(envID, l.service, desired) {
+			p.work = true
+			return p, nil
+		}
+		p.held = true
 	}
-	return serviceSettled(l.service) && len(staleSecrets(l.secrets, envID, cur.Name)) > 0, nil
+	p.work = serviceSettled(l.service) && len(staleSecrets(l.secrets, envID, cur.Name, liveSecretNames(l.service)...)) > 0
+	return p, nil
 }
 
 // repair runs the shared steps one write at a time, each of which writes only on a difference, and then takes the
-// token secrets of earlier generations away. The caller holds the operation lock.
-func (s *Service) repair(ctx context.Context, envID string, state ingressstore.DeployState, l live) error {
+// token secrets of earlier generations away. The caller holds the operation lock. held is true when the service was left
+// alone because its update to the wanted spec was rolled back already.
+func (s *Service) repair(ctx context.Context, envID string, state ingressstore.DeployState, l live) (held bool, err error) {
 	var secretID, secretName string
 	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) (err error) {
 		secretID, secretName, err = s.ensureSecret(ctx, c, audit.SystemIngress, envID, false)
 		return err
 	}); err != nil {
-		return err
+		return false, err
 	}
 	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
 		_, err := s.ensureNetwork(ctx, c, envID, "")
 		return err
 	}); err != nil {
-		return err
+		return false, err
 	}
 	if secretName == "" {
 		// A disabled token whose secret is gone: there is nothing to run the proxy with, and the loop does not undo the disable.
-		return nil
+		return false, nil
 	}
 	auth, err := s.authFor(ctx, envID, IngressImage(s.d.ServerVersion))
 	if err != nil {
-		return err
+		return false, err
 	}
-	in := serviceInput{secretID: secretID, secretName: secretName, accessLog: state.AccessLogs, auth: auth}
+	in := serviceInput{envID: envID, secretID: secretID, secretName: secretName, accessLog: state.AccessLogs, auth: auth}
 	wrote := false
 	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) (err error) {
 		wrote, err = s.ensureService(ctx, c, in)
 		return err
 	}); err != nil {
-		return err
+		if !errors.Is(err, errUpdateHeld) {
+			return false, err
+		}
+		held = true
 	}
 	// Earlier generations' secrets go only once the service names the current one and its last update has settled, so
-	// a rollback of that update still finds the secret it needs.
+	// a rollback of that update still finds the secret it needs. A rolled-back update has settled too: the secrets the
+	// service still references stay, whichever generation they are.
 	if wrote || l.service == nil || !serviceSettled(l.service) {
-		return nil
+		return held, nil
 	}
-	return s.removeStaleSecrets(ctx, envID, secretName)
+	return held, s.removeStaleSecrets(ctx, envID, secretName, liveSecretNames(l.service))
 }
 
-// removeStaleSecrets removes the token secrets of this environment other than the current one. A secret the manager
+// removeStaleSecrets removes the token secrets of this environment other than the current one and the ones in keep, which
+// the live service still references. A secret the manager
 // still holds a service reference to, or that is already gone, is left for the next pass.
-func (s *Service) removeStaleSecrets(ctx context.Context, envID, current string) error {
+func (s *Service) removeStaleSecrets(ctx context.Context, envID, current string, keep []string) error {
 	return s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
 		rows, err := c.SecretList(ctx)
 		if err != nil {
 			return err
 		}
-		for _, row := range staleSecrets(rows, envID, current) {
+		for _, row := range staleSecrets(rows, envID, current, keep...) {
 			if err := c.SecretRemove(ctx, row.ID); err != nil && !errors.Is(err, dockerx.ErrObjectInUse) && !errors.Is(err, dockerx.ErrObjectNotFound) {
 				return err
 			}
@@ -290,20 +400,93 @@ func (s *Service) removeStaleSecrets(ctx context.Context, envID, current string)
 	})
 }
 
-// staleSecrets are the join token secrets of the environment other than the current one: TierPlan's by label and
-// prefix, and this environment's by the tag its secret names carry.
-func staleSecrets(rows []dockerx.SecretRow, envID, current string) []dockerx.SecretRow {
+// staleSecrets are the join token secrets of the environment other than the current one and the ones in keep: TierPlan's by
+// label and prefix, and this environment's by the tag its secret names carry.
+func staleSecrets(rows []dockerx.SecretRow, envID, current string, keep ...string) []dockerx.SecretRow {
 	tag := "-" + agents.SecretTag(envID) + "-"
 	var out []dockerx.SecretRow
 	for _, r := range rows {
-		if r.Name != current && ingress.OwnsSecret(r.Name, r.Labels) && strings.Contains(r.Name, tag) {
+		if r.Name != current && !slices.Contains(keep, r.Name) && ingress.OwnsSecret(r.Name, r.Labels) && strings.Contains(r.Name, tag) {
 			out = append(out, r)
 		}
 	}
 	return out
 }
 
-// serviceSettled is whether the proxy service has no update under way: it never had one, or the last one completed.
+// serviceSettled is whether the proxy service has no update under way: it never had one, the last one completed, or the
+// swarm rolled it back and is done doing so.
 func serviceSettled(d *dockerx.ServiceDetail) bool {
-	return d.UpdateStatus == nil || d.UpdateStatus.State == "completed"
+	return d.UpdateStatus == nil || d.UpdateStatus.State == "completed" || d.UpdateStatus.State == updateRollbackCompleted
+}
+
+// The update states of a service the loop reads.
+const (
+	updateRollbackCompleted = "rollback_completed"
+	updatePaused            = "paused"
+)
+
+// liveSecretNames are the names of the secrets the live proxy service's spec references, none for a spec that cannot be read.
+func liveSecretNames(d *dockerx.ServiceDetail) []string {
+	if d == nil {
+		return nil
+	}
+	var spec swarm.ServiceSpec
+	if json.Unmarshal(d.Spec, &spec) != nil || spec.TaskTemplate.ContainerSpec == nil {
+		return nil
+	}
+	var out []string
+	for _, ref := range spec.TaskTemplate.ContainerSpec.Secrets {
+		if ref != nil {
+			out = append(out, ref.SecretName)
+		}
+	}
+	return out
+}
+
+// updateMemo is the proxy spec the loop (or an enable) last wrote to an environment's service, and when.
+type updateMemo struct {
+	hash string
+	at   time.Time
+}
+
+// specHash identifies a wanted proxy spec: the swarm's defaults applied and the force-update counter, which the swarm owns,
+// left out.
+func specHash(spec swarm.ServiceSpec) string {
+	spec.TaskTemplate.ForceUpdate = 0
+	b, err := json.Marshal(stacks.NormalizeSpec(spec))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// noteWritten remembers the spec just written to the environment's proxy service, so a later pass can tell a service the
+// swarm rolled back from one that is simply behind.
+func (s *Service) noteWritten(envID string, spec swarm.ServiceSpec) {
+	s.heldMu.Lock()
+	defer s.heldMu.Unlock()
+	if s.written == nil {
+		s.written = map[string]updateMemo{}
+	}
+	s.written[envID] = updateMemo{hash: specHash(spec), at: s.d.Clock.Now()}
+}
+
+// updateHeld is whether writing spec to the service would repeat an update the swarm rolled back: the last update ended
+// rolled back (or paused), the spec is the one the loop wrote last, and UpdateRetryAfter has not passed since. The memory is
+// the process's own, so a restart of the server allows one more try.
+func (s *Service) updateHeld(envID string, d *dockerx.ServiceDetail, spec swarm.ServiceSpec) bool {
+	if d == nil || d.UpdateStatus == nil {
+		return false
+	}
+	if st := d.UpdateStatus.State; st != updateRollbackCompleted && st != updatePaused {
+		return false
+	}
+	s.heldMu.Lock()
+	memo, ok := s.written[envID]
+	s.heldMu.Unlock()
+	if !ok || memo.hash == "" || memo.hash != specHash(spec) {
+		return false
+	}
+	return s.d.Clock.Now().Before(memo.at.Add(UpdateRetryAfter))
 }

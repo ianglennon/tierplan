@@ -55,7 +55,7 @@ type IngressStatusNodes struct {
 // IngressStatusEnsure is the last pass of the loop that keeps the ingress objects as wanted.
 type IngressStatusEnsure struct {
 	At    string `json:"at" doc:"When the last pass ended, RFC 3339 UTC; empty when none has run"`
-	Class string `json:"class" doc:"How it ended: empty for success, otherwise unreachable, locked, paused or write_failed"`
+	Class string `json:"class" doc:"How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes)"`
 }
 
 // IngressStatusBody is an environment's ingress status. It carries counts and names, never a token or a secret.
