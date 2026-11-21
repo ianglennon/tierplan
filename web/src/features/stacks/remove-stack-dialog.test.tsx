@@ -31,6 +31,7 @@ interface Preview {
   externals: string[];
   notReporting: string[];
   hasDraft: boolean;
+  hostnames?: string[] | null;
 }
 
 const emptyPreview = (): Preview => ({
@@ -610,5 +611,70 @@ describe("RemoveStackDialog: keeping the definition and the draft", () => {
 
     await screen.findByRole("table");
     expect(screen.queryByText(/saved draft/)).toBeNull();
+  });
+});
+
+describe("RemoveStackDialog: hostnames released", () => {
+  const NOTE =
+    "Another stack can claim these names once the removal succeeds. If the removal fails, the stack keeps them.";
+
+  it("lists the hostnames the removal releases in mono text, with the note under them", async () => {
+    preview.hostnames = ["a.example.com", "b.example.com"];
+    mount();
+
+    const label = await screen.findByText("Hostnames released");
+    const row = label.closest("section") as HTMLElement;
+    const a = within(row).getByText("a.example.com");
+    expect(a.className).toContain("font-mono");
+    expect(a.className).toContain("text-xs");
+    expect(a.className).toContain("break-all");
+    expect(within(row).getByText("b.example.com")).toBeTruthy();
+    const note = within(row).getByText(NOTE);
+    expect(note.className).toContain("text-muted-foreground");
+    expect(within(row).queryByText(/and \d+ more/)).toBeNull();
+  });
+
+  it("shows ten of thirteen hostnames and says how many more", async () => {
+    preview.hostnames = Array.from({ length: 13 }, (_, i) => `h${i}.example.com`);
+    mount();
+
+    await screen.findByText("Hostnames released");
+    expect(screen.getByText("h9.example.com")).toBeTruthy();
+    expect(screen.queryByText("h10.example.com")).toBeNull();
+    expect(screen.getByText("and 3 more")).toBeTruthy();
+  });
+
+  it("shows exactly ten hostnames with no more line", async () => {
+    preview.hostnames = Array.from({ length: 10 }, (_, i) => `h${i}.example.com`);
+    mount();
+
+    await screen.findByText("Hostnames released");
+    expect(screen.getByText("h9.example.com")).toBeTruthy();
+    expect(screen.queryByText(/and \d+ more/)).toBeNull();
+  });
+
+  it.each([
+    ["an empty list", []],
+    ["a missing list", undefined],
+    ["a null list", null],
+  ])("draws no row and no note for %s", async (_name, hostnames) => {
+    preview.hostnames = hostnames;
+    mount();
+
+    await screen.findByRole("table");
+    expect(screen.queryByText("Hostnames released")).toBeNull();
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+
+  it("writes a 120-character hostname whole, wrapping and never truncated", async () => {
+    const host = `${"a".repeat(60)}.${"b".repeat(56)}.io`;
+    expect(host).toHaveLength(120);
+    preview.hostnames = [host];
+    mount();
+
+    const cell = await screen.findByText(host);
+    expect(cell.textContent).toBe(host);
+    expect(cell.className).toContain("break-all");
+    expect(cell.className).not.toContain("truncate");
   });
 });

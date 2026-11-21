@@ -101,6 +101,11 @@
       "title": "Removing {{name}}",
       "complete": "Removal complete",
       "announce": "Removal complete."
+    },
+    "hostnames": {
+      "label": "Hostnames released",
+      "more": "and {{count}} more",
+      "note": "Another stack can claim these names once the removal succeeds. If the removal fails, the stack keeps them."
     }
   }
 }
