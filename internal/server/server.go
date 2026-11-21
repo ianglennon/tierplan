@@ -1265,11 +1265,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, Ingress: ingressStore, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
 	// The ingress deployer shares the stack routes' operation lock and the job hub, so an enable and a stack operation exclude
-	// each other. Its stack side (the stacks to redeploy) is wired by a later plan.
+	// each other. Its stack side lists the stacks to redeploy.
 	ingressDeploy := newIngressDeploy(ingressDeployDeps{
 		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc,
 		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
 		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
+		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead),
 		CurrentBundle: func(envID string) (string, bool) {
 			b, ok := ingressRecon.Current(envID)
 			return b.ID, ok
