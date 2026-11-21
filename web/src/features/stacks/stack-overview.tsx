@@ -21,6 +21,7 @@ import { DriftAlert } from "@/features/stack-drift/drift-alert";
 import { AdoptedBanner } from "@/features/stacks/adopted-banner";
 import { StackDetailsCard } from "@/features/stacks/stack-details-card";
 import { StackJanitorCard } from "@/features/stacks/stack-janitor-card";
+import { StackRoutes } from "@/features/stacks/stack-routes";
 import { StackServicesCard } from "@/features/stacks/stack-services-card";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -102,6 +103,8 @@ export function StackOverview({ envId, stackId }: StackOverviewProps) {
         )}
         <div className="flex min-w-0 flex-col gap-6">
           <StackDetailsCard stack={data} drift={drift} />
+          {/* A stack's routes sit between its details and the janitor; an unmanaged stack has no claims (D-24). */}
+          {data.unmanaged ? null : <StackRoutes envId={envId} stack={data} />}
           {/* An unmanaged stack is not TierPlan's to exclude, and has no card (D-10). */}
           {data.unmanaged || !data.janitor ? null : <StackJanitorCard envId={envId} stack={data} />}
         </div>

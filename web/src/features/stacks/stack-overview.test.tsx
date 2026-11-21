@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { routesKey } from "@/api/stack-routes";
 import {
   STACK_SERVICES_POLL_BUSY_MS,
   STACK_SERVICES_POLL_MS,
@@ -36,6 +37,7 @@ let job: Json;
 let services: Json | "fail";
 let client: QueryClient;
 let servicesCalls: number;
+let routes: Json[];
 
 function swarmService(over: Json = {}): Json {
   return {
@@ -74,6 +76,7 @@ beforeEach(() => {
     rollback: { available: false, deployedAt: "", deployedBy: "" },
   };
   services = { items: [swarmService()] };
+  routes = [];
   role = "operator";
   job = {
     id: "j1",
@@ -101,6 +104,7 @@ beforeEach(() => {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
       if (path === `/api/env/${ENV}/stacks/s1`) return Response.json(detail);
+      if (path === `/api/env/${ENV}/stacks/s1/routes`) return Response.json({ routes });
       if (path === `/api/env/${ENV}/stacks/s1/deploys/j1`) return Response.json(job);
       if (path === `/api/env/${ENV}/stacks/s1/services`) {
         servicesCalls++;
@@ -310,6 +314,37 @@ describe("StackOverview services card on a swarm", () => {
     const card = await screen.findByRole("region", { name: "Services" });
     expect(await within(card).findByText("Nothing is running.")).toBeTruthy();
     expect(within(card).queryByRole("table")).toBeNull();
+  });
+});
+
+describe("StackOverview routes card", () => {
+  const route = {
+    hostname: "app.example.com",
+    path: "/",
+    reason: "",
+    service: "web",
+    state: "serving",
+    stopped: false,
+  };
+
+  it("sits between the Details and Janitor cards", async () => {
+    detail = { ...detail, janitor: { excluded: false, declared: false } };
+    routes = [route];
+    mount();
+    const routesCard = await screen.findByRole("region", { name: "Routes" });
+    const janitor = await screen.findByRole("region", { name: "Janitor" });
+    const details = await screen.findByRole("region", { name: "Details" });
+    const order = (a: Element, b: Element) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(order(details, routesCard)).toBe(true);
+    expect(order(routesCard, janitor)).toBe(true);
+  });
+
+  it("draws no card for a stack with no routes", async () => {
+    mount();
+    await screen.findByRole("region", { name: "Details" });
+    await waitFor(() => expect(client.getQueryState(routesKey(ENV, "s1"))?.status).toBe("success"));
+    expect(screen.queryByRole("region", { name: "Routes" })).toBeNull();
   });
 });
 

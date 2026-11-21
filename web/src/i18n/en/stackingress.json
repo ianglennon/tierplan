@@ -93,7 +93,11 @@
       "error": "Couldn't read the routes.",
       "retry": "Retry reading routes",
       "showAll": "Show all {{count}}",
-      "showFewer": "Show fewer"
+      "showFewer": "Show fewer",
+      "reason": {
+        "no_certificate": "No certificate has been issued for this hostname yet.",
+        "certificate_not_ready": "A certificate exists but can't be served yet."
+      }
     }
   },
   "ingress": {
