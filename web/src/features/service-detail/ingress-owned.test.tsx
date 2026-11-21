@@ -244,7 +244,12 @@ describe("the header actions of the ingress proxy (UI-SPEC S3)", () => {
       expect(screen.queryByRole("dialog")).toBeNull();
     }
     expect((await screen.findAllByText(REASON)).length).toBeGreaterThan(0);
-    expect(state.sent.filter((s) => s.method !== "GET")).toEqual([]);
+    // The page records the environment as recently opened with a PUT of its own; that is not an action of the control under test.
+    expect(
+      state.sent.filter(
+        (s) => s.method !== "GET" && !s.path.startsWith("/api/me/recent-environments/"),
+      ),
+    ).toEqual([]);
   });
 
   it("leaves a plain service's actions as they were", async () => {
