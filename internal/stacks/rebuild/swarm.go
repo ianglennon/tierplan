@@ -19,6 +19,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -669,13 +670,18 @@ func (b *builder) declareOwnedNetwork(key, name string, info NetworkInfo) {
 }
 
 // serviceNetworks rebuilds a service's attachments. A service that joins only the stack's default network says
-// nothing, as a hand-written file does.
+// nothing, as a hand-written file does. TierPlan's ingress attachment is dropped (D-20).
 func (b *builder) serviceNetworks(short string, atts []swarm.NetworkAttachmentConfig) map[string]*types.ServiceNetworkConfig {
 	if len(atts) == 0 {
 		return nil
 	}
 	out := map[string]*types.ServiceNetworkConfig{}
 	for _, att := range atts {
+		if att.Target == ingress.NetworkName {
+			// The attachment is TierPlan's, added at deploy time (D-19) and never part of the user's file: the
+			// network is not declared and the service does not list it (D-20).
+			continue
+		}
 		key := b.networkKey(att.Target)
 		var cfg *types.ServiceNetworkConfig
 		var aliases []string
@@ -689,6 +695,9 @@ func (b *builder) serviceNetworks(short string, atts []swarm.NetworkAttachmentCo
 			cfg = &types.ServiceNetworkConfig{Aliases: aliases, DriverOpts: types.Options(maps.Clone(att.DriverOpts))}
 		}
 		out[key] = cfg
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	if cfg, only := out[defaultKey]; only && len(out) == 1 && cfg == nil && b.implicitDefault() {
 		return nil
