@@ -230,7 +230,9 @@ func TestCreateServiceRefusesComponentLabel(t *testing.T) {
 			spec["Labels"] = map[string]any{ingress.LabelComponent: ingress.ComponentIngress}
 		},
 		"on the container": func(spec map[string]any) {
-			spec["TaskTemplate"].(map[string]any)["ContainerSpec"].(map[string]any)["Labels"] = map[string]any{ingress.LabelComponent: "x"}
+			task, _ := spec["TaskTemplate"].(map[string]any)
+			container, _ := task["ContainerSpec"].(map[string]any)
+			container["Labels"] = map[string]any{ingress.LabelComponent: "x"}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
