@@ -19,6 +19,7 @@ supported yet.
 - [TierPlan's own certificate and HTTP-01](#tierplans-own-certificate-and-http-01)
 - [Existing stacks need a redeploy](#existing-stacks-need-a-redeploy)
 - [The status](#the-status)
+- [The join token](#the-join-token)
 - [The access log](#the-access-log)
 - [Switching off](#switching-off)
 - [Nodes that were away](#nodes-that-were-away)
@@ -121,6 +122,17 @@ proxies to dial (the agent URL and the public URL are both unset, or are not `ht
 the running proxies keep the spec they have. `update_failed`: the swarm rolled back the last update of the proxy service, so
 the same update is not sent again every minute (each try restarts one node's proxy first). It is tried again when the spec
 TierPlan wants changes, and after an hour otherwise.
+
+## The join token
+
+The proxies enrol with a join token that the deployer keeps as a swarm secret. `POST /api/env/{envId}/ingress/join-token`
+rotates it, and on a swarm whose ingress is on it stores the new token as that secret in the same call, under the
+environment's operation lock. The deployer then moves the proxy service to the new secret and removes the one before, and does
+not make a token of its own, so the token you were given is the one that enrols. A rotation is refused, and no token is made,
+while another operation holds the environment (`operation_locked`), while a restore's pause stands (`ingress_paused`) and while
+no manager is connected (`ingress_no_manager`). If the swarm refuses the secret the answer is `502 ingress_token_not_stored`
+and no token is handed out. Nodes that are enrolled already do not use the token, so a rotation changes nothing for them. While
+ingress is off the route only makes the token; switching on then makes its own.
 
 ## The access log
 

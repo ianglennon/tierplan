@@ -1400,7 +1400,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		IngressConnect: ingressHub.Handler(),
 		IngressDeploy:  api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log},
 		IngressNodes: api.IngressNodesDeps{
-			Service: ingressSvc, Live: ingressHub.Live,
+			Service: ingressSvc, Live: ingressHub.Live, Issuer: ingressDeploy,
 			CurrentBundle: func(envID string) (string, bool) {
 				b, ok := ingressRecon.Current(envID)
 				return b.ID, ok
