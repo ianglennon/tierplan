@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -471,5 +472,167 @@ func TestLastGoodDeclarations(t *testing.T) {
 	decls, ok, err = stackops.LastGoodDeclarations(testsupport.Context(t), f.repo, st)
 	if err != nil || !ok || len(decls) != 1 || decls[0].Host != "a.example.com" || decls[0].Service != "web" {
 		t.Fatalf("with a good revision: %v, %v, %v, want the one route of a.example.com", decls, ok, err)
+	}
+}
+
+func TestStandaloneClaimsFollowLastGood(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refused", func(t *testing.T) {
+		t.Parallel()
+		f := newClaimFix(t, true, nil)
+		stand := &upStandIn{}
+		f.rig.deps.Up = stand.up
+		holder := f.newStack(t, "holder", stacks.TargetStandalone, routedStandalone("taken.example.com"))
+		f.claim(t, holder, declsOf(t, routedStandalone("taken.example.com"), stacks.TargetStandalone))
+		st := f.newStack(t, "web", stacks.TargetStandalone, routedStandalone("taken.example.com"))
+		in := standaloneInput("web", routedStandalone("taken.example.com"))
+		in.Stack = st
+		in.Ingress = f.write(t, st, routedStandalone("taken.example.com"))
+
+		res, job := f.rig.deployStandalone(t, in)
+
+		if res.OK() || res.Code != stackops.CodeIngressRefused || res.Wrote {
+			t.Fatalf("result = %+v, want ingress_refused with nothing written", res)
+		}
+		if got := itemStates(job); got[stackops.ItemCheck] != "failed:ingress_refused" || got[stackops.ItemServices] != "skipped:not_run" {
+			t.Errorf("items = %v, want the check failed and the rest not run", got)
+		}
+		if stand.calls != 0 || len(f.rig.fake.Writes()) != 0 {
+			t.Errorf("SDK calls %d, writes %v, want nothing sent to the host", stand.calls, f.rig.fake.Writes())
+		}
+		wantHeld(t, f, st)
+	})
+
+	t.Run("failure after the write restores the last good claims", func(t *testing.T) {
+		t.Parallel()
+		f := newClaimFix(t, true, nil)
+		stand := &upStandIn{err: errors.New("compose up failed")}
+		f.rig.deps.Up = stand.up
+		st := f.newStack(t, "web", stacks.TargetStandalone, routedStandalone("a.example.com"))
+		f.makeGood(t, st)
+		in := standaloneInput("web", routedStandalone("b.example.com"))
+		in.Stack = st
+		in.Ingress = f.write(t, st, routedStandalone("b.example.com"))
+
+		res, _ := f.rig.deployStandalone(t, in)
+
+		if res.OK() || stand.calls != 1 {
+			t.Fatalf("result = %+v after %d SDK calls, want the SDK to run and fail", res, stand.calls)
+		}
+		wantHeld(t, f, st, "a.example.com")
+	})
+
+	t.Run("a first deploy that fails releases every claim", func(t *testing.T) {
+		t.Parallel()
+		f := newClaimFix(t, true, nil)
+		stand := &upStandIn{err: errors.New("compose up failed")}
+		f.rig.deps.Up = stand.up
+		st := f.newStack(t, "web", stacks.TargetStandalone, routedStandalone("b.example.com"))
+		in := standaloneInput("web", routedStandalone("b.example.com"))
+		in.Stack = st
+		in.Ingress = f.write(t, st, routedStandalone("b.example.com"))
+
+		if res, _ := f.rig.deployStandalone(t, in); res.OK() {
+			t.Fatalf("result = %+v, want the deploy to fail", res)
+		}
+		wantHeld(t, f, st)
+	})
+
+	t.Run("nil writes and reverts nothing", func(t *testing.T) {
+		t.Parallel()
+		f := newClaimFix(t, true, nil)
+		stand := &upStandIn{err: errors.New("compose up failed")}
+		f.rig.deps.Up = stand.up
+		st := f.newStack(t, "web", stacks.TargetStandalone, routedStandalone("a.example.com"))
+		f.makeGood(t, st)
+		in := standaloneInput("web", routedStandalone("b.example.com"))
+		in.Stack = st
+
+		if res, _ := f.rig.deployStandalone(t, in); res.OK() {
+			t.Fatalf("result = %+v, want the deploy to fail", res)
+		}
+		wantHeld(t, f, st, "a.example.com")
+
+		stand.err = nil
+		if res, _ := f.rig.deployStandalone(t, in); !res.OK() {
+			t.Fatalf("result = %+v, want the deploy to succeed", res)
+		}
+		wantHeld(t, f, st, "a.example.com") // the claim is only ever written by a deploy that asks for it
+	})
+}
+
+func TestSecondClaimOfAHostnameIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, true, nil)
+	stand := &upStandIn{}
+	f.rig.deps.Up = stand.up
+	compose := routedStandalone("c.example.com")
+	first := f.newStack(t, "first", stacks.TargetStandalone, compose)
+	second := f.newStack(t, "second", stacks.TargetStandalone, compose)
+	// Both were reviewed while c.example.com was free: the policy the review read said yes to each.
+	inFirst, inSecond := standaloneInput("first", compose), standaloneInput("second", compose)
+	inFirst.Stack, inSecond.Stack = first, second
+	inFirst.Ingress, inSecond.Ingress = f.write(t, first, compose), f.write(t, second, compose)
+
+	if res, _ := f.rig.deployStandalone(t, inFirst); !res.OK() {
+		t.Fatalf("first deploy = %+v, want it to claim the name", res)
+	}
+	calls := stand.calls
+	res, job := f.rig.deployStandalone(t, inSecond)
+
+	if res.OK() || res.Code != stackops.CodeIngressRefused {
+		t.Fatalf("second deploy = %+v, want ingress_refused", res)
+	}
+	if got := itemStates(job)[stackops.ItemCheck]; got != "failed:ingress_refused" {
+		t.Errorf("check item = %q, want failed:ingress_refused", got)
+	}
+	if stand.calls != calls {
+		t.Errorf("SDK calls = %d, want the loser to write nothing to the host", stand.calls-calls)
+	}
+	wantHeld(t, f, first, "c.example.com")
+	wantHeld(t, f, second)
+}
+
+func TestUnchangedClaimsNotifyNobody(t *testing.T) {
+	t.Parallel()
+	f := newClaimFix(t, true, nil)
+	stand := &upStandIn{}
+	f.rig.deps.Up = stand.up
+	compose := routedStandalone("a.example.com")
+	st := f.newStack(t, "web", stacks.TargetStandalone, compose)
+	in := standaloneInput("web", compose)
+	in.Stack = st
+	in.Ingress = f.write(t, st, compose)
+
+	if res, _ := f.rig.deployStandalone(t, in); !res.OK() {
+		t.Fatalf("first deploy = %+v", res)
+	}
+	versionOf := func() int64 {
+		all, err := f.ing.Versions(testsupport.Context(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range all {
+			if v.EnvID == f.rig.envID {
+				return v.ConfigVersion
+			}
+		}
+		t.Fatal("the environment has no ingress version")
+		return 0
+	}
+	before := versionOf()
+	sub := f.notifier.Subscribe()
+	defer sub.Close()
+
+	if res, _ := f.rig.deployStandalone(t, in); !res.OK() {
+		t.Fatalf("second deploy = %+v", res)
+	}
+
+	if after := versionOf(); after != before {
+		t.Errorf("config_version = %d after a deploy that changed nothing, want %d", after, before)
+	}
+	if pending := sub.Pending(); len(pending) != 0 {
+		t.Errorf("notified %v, want nobody told", pending)
 	}
 }
