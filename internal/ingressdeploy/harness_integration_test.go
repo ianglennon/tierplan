@@ -464,17 +464,18 @@ func (e *swarmEnv) proxyService() (dockerx.ServiceDetail, bool) {
 }
 
 // hasCacheVolume says whether the node holds the certificate cache volume, and whether TierPlan's component label is on it.
+// It is one listing, so a wipe that runs while a test polls cannot fall between a question and its follow-up.
 func (e *swarmEnv) hasCacheVolume(n *dockertest.Node) (present, labelled bool) {
 	e.t.Helper()
-	out, err := n.Sh(testsupport.Context(e.t), "docker volume ls -q --filter name=^"+ingress.VolumeName+"$")
+	out, err := n.Sh(testsupport.Context(e.t), "docker volume ls --filter name=^"+ingress.VolumeName+"$ --format '{{.Name}} {{.Label \""+ingress.LabelComponent+"\"}}'")
 	if err != nil {
 		e.t.Fatalf("list the volumes of %s: %v", n.Hostname, err)
 	}
-	if strings.TrimSpace(out) == "" {
+	f := strings.Fields(out)
+	if len(f) == 0 {
 		return false, false
 	}
-	lbl := e.sh(n, "docker volume inspect -f '{{index .Labels \""+ingress.LabelComponent+"\"}}' "+ingress.VolumeName)
-	return true, strings.TrimSpace(lbl) == ingress.ComponentIngress
+	return true, len(f) == 2 && f[1] == ingress.ComponentIngress
 }
 
 // objects counts, on the swarm, what ingress leaves behind: the proxy service, the network and the join token secrets.
