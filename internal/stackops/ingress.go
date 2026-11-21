@@ -40,3 +40,20 @@ func (d Deps) attachFor(ctx context.Context, envID string, t stacks.Target) (*st
 	}
 	return d.Ingress.AttachFor(ctx, envID, t)
 }
+
+// ClaimWrite is how a deploy puts a stack's hostname claims in the ingress store (D-15, D-16, D-17). Nil on a
+// deploy input means no claim is written and none is reverted: a start, the automatic roll back after a failed
+// image update, an adopt and a rebuild leave the claims as they are.
+type ClaimWrite struct {
+	// Decls are the routes of the revision being deployed.
+	Decls []ingress.Declaration
+	// Restore are the routes of the stack's last good revision. HasGood false means the stack has no good revision
+	// (a first deploy): a failed deploy then releases every claim.
+	Restore []ingress.Declaration
+	HasGood bool
+	// Actor names who the write is audited as: a user id, or "system:..." for a deploy nobody started.
+	Actor string
+	// CanView says which environments the caller may see, for the message of a refusal that names a holder; nil
+	// names none.
+	CanView func(envID string) bool
+}

@@ -105,6 +105,7 @@ var codeMessages = map[string]string{
 	CodePolicyUnavailable:   "The host-access policy could not be applied, so nothing was deployed.",
 	CodeNoFreeSubnet:        "A network of the stack can't get a small subnet: no block of the size chosen for this environment is free. Free up space, or choose a smaller size in this environment's settings.",
 	CodePinsInvalid:         "The images in the request don't match what the deploy would use. Review the stack again.",
+	CodeIngressRefused:      "A hostname this stack asks for is taken or not allowed. Nothing was changed.",
 }
 
 // CodeMessage is the sentence for a deploy code, empty for a code it does not know. A pull failure code
@@ -167,6 +168,10 @@ type SwarmDeployInput struct {
 	// (Snapshot.Subnets): a network the rollback has to create again takes its recorded subnet while that is
 	// still free, else the next free block.
 	RestoredSubnets map[string]string
+	// Ingress, when not nil, is how the deploy stores the stack's hostname claims (D-15): at the end of the check item,
+	// before the engine is touched, and put back as the last good revision declared them when the deploy does not end
+	// well (D-16). Nil writes and reverts nothing (D-17).
+	Ingress *ClaimWrite
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
 	OnDone func(DeployResult)
@@ -250,7 +255,14 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	// detail is the engine's own words about the failure, set by the step that has them before it
 	// fails; failWith puts them on the item that failed and in the output.
 	var detail string
+	// claimsWritten says this deploy stored the stack's claims, so a deploy that does not end well puts them back.
+	var claimsWritten bool
 	defer func() {
+		// The claims go back first, with the operation lock still held: a hostname only the failed revision asked for
+		// is free for the next deploy the moment the lock is let go (D-16, D-45).
+		if claimsWritten && !res.OK() {
+			d.revertClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
+		}
 		if in.OnDone != nil {
 			in.OnDone(res)
 		}
@@ -411,6 +423,20 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	for _, sp := range planned.Services {
 		prog.addService(sp)
 	}
+	// The claims are stored last of all, under the lock and after every check passed, so a refusal leaves the engine
+	// and everything else as it was (D-15).
+	if ctx.Err() != nil {
+		return fail(ItemCheck, CodeCancelled, "")
+	}
+	written, refusal, cerr := d.writeClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
+	switch {
+	case cerr != nil:
+		d.log().Error("a stack's hostname claims could not be stored before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", cerr)
+		return failWith(ItemCheck, CodePolicyUnavailable, "", "The hostnames of the stack could not be checked, so nothing was deployed.")
+	case refusal != "":
+		return failWith(ItemCheck, CodeIngressRefused, "", in.Masker.Mask(CodeMessage(CodeIngressRefused)+" "+refusal))
+	}
+	claimsWritten = written
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
 	// 2. Look up images: decide which image each service is sent with. A service that runs the
