@@ -23289,6 +23289,10 @@
               "null"
             ]
           },
+          "ingress": {
+            "$ref": "#/components/schemas/StackReviewIngressBody",
+            "description": "Left out unless there is something to say: set when the deploy adds, keeps or releases a route, has a certificate to report or moves a service on or off the shared ingress network. A stack with no route and no claim has none. The warnings and the policy's errors are in problems"
+          },
           "needsAdmin": {
             "description": "The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it",
             "items": {
@@ -23573,6 +23577,153 @@
           "current",
           "state",
           "note"
+        ],
+        "type": "object"
+      },
+      "StackReviewIngressBody": {
+        "additionalProperties": false,
+        "properties": {
+          "certificates": {
+            "description": "The certificate of each hostname the stack will hold, ordered by hostname",
+            "items": {
+              "$ref": "#/components/schemas/StackReviewIngressCertificateBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "network": {
+            "description": "The services that join or leave the shared ingress network, ordered by service. Empty for a standalone host",
+            "items": {
+              "$ref": "#/components/schemas/StackReviewIngressNetworkBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "routes": {
+            "description": "The routes the deploy adds, keeps and releases, ordered by hostname, then path",
+            "items": {
+              "$ref": "#/components/schemas/StackReviewIngressRouteBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "routes",
+          "certificates",
+          "network"
+        ],
+        "type": "object"
+      },
+      "StackReviewIngressCertificateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "hostname": {
+            "description": "The hostname",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Left out unless set: for waiting, why, as a sentence",
+            "type": "string"
+          },
+          "state": {
+            "description": "reused: a certificate that can be served exists. will_issue: there is none yet, so one is ordered. waiting: an order exists and nothing can be served yet. A certificate that is not ready never stops a deploy",
+            "enum": [
+              "reused",
+              "will_issue",
+              "waiting"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname",
+          "state"
+        ],
+        "type": "object"
+      },
+      "StackReviewIngressNetworkBody": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "joins: the deploy puts the service on the shared ingress network. leaves: the deploy takes it off, because the service no longer declares a route",
+            "enum": [
+              "joins",
+              "leaves"
+            ],
+            "type": "string"
+          },
+          "replacesTasks": {
+            "description": "True when the change replaces the running tasks of the service (a change of a service's networks does), false for a service that does not exist yet",
+            "type": "boolean"
+          },
+          "service": {
+            "description": "The service, by its name in the compose file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "change",
+          "replacesTasks"
+        ],
+        "type": "object"
+      },
+      "StackReviewIngressRouteBody": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "added: the deploy claims it. kept: the stack holds it now and the deploy leaves it as it is (the same hostname, path, service, port and scheme). released: the stack holds it now and the deploy lets it go",
+            "enum": [
+              "added",
+              "kept",
+              "released"
+            ],
+            "type": "string"
+          },
+          "hostname": {
+            "description": "The hostname the route answers on",
+            "type": "string"
+          },
+          "note": {
+            "description": "Left out unless set: a sentence for the row. A route of a standalone host says it is not served on that host yet",
+            "type": "string"
+          },
+          "path": {
+            "description": "The path prefix the route matches, / for the whole hostname",
+            "type": "string"
+          },
+          "port": {
+            "description": "The port of the service the proxy connects to",
+            "format": "int64",
+            "type": "integer"
+          },
+          "scheme": {
+            "description": "How the proxy speaks to the service",
+            "enum": [
+              "http",
+              "https"
+            ],
+            "type": "string"
+          },
+          "service": {
+            "description": "The service of the compose file the route goes to",
+            "type": "string"
+          }
+        },
+        "required": [
+          "change",
+          "hostname",
+          "path",
+          "service",
+          "port",
+          "scheme"
         ],
         "type": "object"
       },

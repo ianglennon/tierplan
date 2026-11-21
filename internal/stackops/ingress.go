@@ -31,6 +31,29 @@ type Ingress interface {
 	// Notify wakes the reconciler of the environment, for a change the store did not make itself (a stack deleted,
 	// whose claims went with its row).
 	Notify(envID string)
+	// HeldRoutes are the routes the stack holds now, with their hostnames: the "before" of a review (D-22). A stack
+	// that holds nothing has none.
+	HeldRoutes(ctx context.Context, envID, stackID string) ([]ingress.Route, error)
+	// CertStates says, for each hostname, whether the environment can serve a certificate for it now, has none yet or
+	// is waiting on one (D-22, D-40). It answers the state and a reason only, never the certificate or its key. A
+	// hostname it cannot say anything about is left out of the answer.
+	CertStates(ctx context.Context, envID string, hostnames []string) (map[string]CertState, error)
+}
+
+// The states of a hostname's certificate in a review.
+const (
+	// CertReused: a certificate that can be served exists, so the deploy reuses it.
+	CertReused = "reused"
+	// CertWillIssue: the environment has no certificate for the hostname yet, so one will be ordered.
+	CertWillIssue = "will_issue"
+	// CertWaiting: there is a certificate order for the hostname and none can be served yet; Reason says why.
+	CertWaiting = "waiting"
+)
+
+// CertState is the state of the certificate of one hostname. Reason is set for CertWaiting only.
+type CertState struct {
+	State  string
+	Reason string
 }
 
 // attachFor is the attachment a conversion of st's project for target carries: nil, nil when no Ingress is wired.

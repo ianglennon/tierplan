@@ -27,6 +27,11 @@ type fakeIngress struct {
 	attach *stacks.IngressAttach
 	err    error
 	asks   int
+	// held and states are what the review reads of the stack's routes and the certificates of its hostnames.
+	held      []ingress.Route
+	heldErr   error
+	states    map[string]stackops.CertState
+	statesErr error
 }
 
 func (f *fakeIngress) AttachFor(context.Context, string, stacks.Target) (*stacks.IngressAttach, error) {
@@ -44,6 +49,14 @@ func (f *fakeIngress) ReplaceStackRoutes(context.Context, ingressstore.ReplaceIn
 
 func (f *fakeIngress) ReleaseStack(context.Context, string, string, string) error { return nil }
 func (f *fakeIngress) Notify(string)                                              {}
+
+func (f *fakeIngress) HeldRoutes(context.Context, string, string) ([]ingress.Route, error) {
+	return f.held, f.heldErr
+}
+
+func (f *fakeIngress) CertStates(context.Context, string, []string) (map[string]stackops.CertState, error) {
+	return f.states, f.statesErr
+}
 
 // routedGlobal is a stack whose one service declares a route and runs globally, so a stop removes it and a start
 // makes it again from the revision.

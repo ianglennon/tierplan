@@ -15785,6 +15785,8 @@ export interface components {
             git?: components["schemas"]["StackReviewGitBody"];
             /** @description One row for each service with an image, by name */
             images: components["schemas"]["StackReviewImageBody"][] | null;
+            /** @description Left out unless there is something to say: set when the deploy adds, keeps or releases a route, has a certificate to report or moves a service on or off the shared ingress network. A stack with no route and no claim has none. The warnings and the policy's errors are in problems */
+            ingress?: components["schemas"]["StackReviewIngressBody"];
             /** @description The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it */
             needsAdmin: string[] | null;
             /** @description The other resources: networks, secrets and configs */
@@ -15891,6 +15893,61 @@ export interface components {
              * @enum {string}
              */
             state: "pinned" | "new" | "as_written" | "local" | "unreachable" | "unresolved";
+        };
+        StackReviewIngressBody: {
+            /** @description The certificate of each hostname the stack will hold, ordered by hostname */
+            certificates: components["schemas"]["StackReviewIngressCertificateBody"][] | null;
+            /** @description The services that join or leave the shared ingress network, ordered by service. Empty for a standalone host */
+            network: components["schemas"]["StackReviewIngressNetworkBody"][] | null;
+            /** @description The routes the deploy adds, keeps and releases, ordered by hostname, then path */
+            routes: components["schemas"]["StackReviewIngressRouteBody"][] | null;
+        };
+        StackReviewIngressCertificateBody: {
+            /** @description The hostname */
+            hostname: string;
+            /** @description Left out unless set: for waiting, why, as a sentence */
+            reason?: string;
+            /**
+             * @description reused: a certificate that can be served exists. will_issue: there is none yet, so one is ordered. waiting: an order exists and nothing can be served yet. A certificate that is not ready never stops a deploy
+             * @enum {string}
+             */
+            state: "reused" | "will_issue" | "waiting";
+        };
+        StackReviewIngressNetworkBody: {
+            /**
+             * @description joins: the deploy puts the service on the shared ingress network. leaves: the deploy takes it off, because the service no longer declares a route
+             * @enum {string}
+             */
+            change: "joins" | "leaves";
+            /** @description True when the change replaces the running tasks of the service (a change of a service's networks does), false for a service that does not exist yet */
+            replacesTasks: boolean;
+            /** @description The service, by its name in the compose file */
+            service: string;
+        };
+        StackReviewIngressRouteBody: {
+            /**
+             * @description added: the deploy claims it. kept: the stack holds it now and the deploy leaves it as it is (the same hostname, path, service, port and scheme). released: the stack holds it now and the deploy lets it go
+             * @enum {string}
+             */
+            change: "added" | "kept" | "released";
+            /** @description The hostname the route answers on */
+            hostname: string;
+            /** @description Left out unless set: a sentence for the row. A route of a standalone host says it is not served on that host yet */
+            note?: string;
+            /** @description The path prefix the route matches, / for the whole hostname */
+            path: string;
+            /**
+             * Format: int64
+             * @description The port of the service the proxy connects to
+             */
+            port: number;
+            /**
+             * @description How the proxy speaks to the service
+             * @enum {string}
+             */
+            scheme: "http" | "https";
+            /** @description The service of the compose file the route goes to */
+            service: string;
         };
         StackReviewObjectBody: {
             /**

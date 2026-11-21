@@ -4,9 +4,14 @@
 package stackops_test
 
 import (
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -86,4 +91,129 @@ func hasCode(ps stacks.Problems, code string) bool {
 		}
 	}
 	return false
+}
+
+// The review lists what a deploy does to ingress (plan 24-22, D-22, DEP-03): the routes it adds, keeps and releases,
+// read against the routes the stack holds now.
+
+// routedTwo declares a.example.com (kept) and b.example.com (added) on one service; the stack held a.example.com and
+// c.example.com before.
+const routedTwo = `services:
+  web:
+    image: nginx:1.27
+    deploy:
+      labels:
+        tierplan.ingress.a.host: a.example.com
+        tierplan.ingress.a.port: "80"
+        tierplan.ingress.b.host: b.example.com
+        tierplan.ingress.b.port: "80"
+`
+
+// heldRoute is a route as the store holds it.
+func heldRoute(host, path, service string, port int, scheme ingress.Scheme) ingress.Route {
+	return ingress.Route{Hostname: host, PathPrefix: path, Service: service, Port: port, Scheme: scheme}
+}
+
+// reviewWith reviews a compose file of a swarm stack with the ingress model fake.
+func reviewWith(t *testing.T, fake *fakeIngress, name, compose string) stackops.Review {
+	t.Helper()
+	r := newSwarmRig(t, nil)
+	r.deps.Ingress = fake
+	rv, err := r.deps.Review(testsupport.Context(t), r.reviewInput(t, name, compose, nil))
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	return rv
+}
+
+func TestReviewIngressRoutes(t *testing.T) {
+	t.Parallel()
+	fake := &fakeIngress{held: []ingress.Route{
+		heldRoute("c.example.com", "/", "web", 80, ingress.SchemeHTTP),
+		heldRoute("a.example.com", "/", "web", 80, ingress.SchemeHTTP),
+	}}
+	rv := reviewWith(t, fake, "shop", routedTwo)
+	if rv.Ingress == nil {
+		t.Fatal("review has no ingress section")
+	}
+	want := []stackops.IngressRouteRow{
+		{Change: stackops.IngressRouteKept, Hostname: "a.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
+		{Change: stackops.IngressRouteAdded, Hostname: "b.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
+		{Change: stackops.IngressRouteReleased, Hostname: "c.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
+	}
+	if !slices.Equal(rv.Ingress.Routes, want) {
+		t.Errorf("routes = %+v, want %+v", rv.Ingress.Routes, want)
+	}
+}
+
+// A route that is unchanged in hostname, path, service, port and scheme is one kept row; two routes on one hostname with
+// different paths are two rows, ordered by path; a change of port is a release and an add.
+func TestReviewIngressRouteAdjacency(t *testing.T) {
+	t.Parallel()
+	fake := &fakeIngress{held: []ingress.Route{
+		heldRoute("a.example.com", "/api", "web", 80, ingress.SchemeHTTP),
+		heldRoute("a.example.com", "/", "web", 80, ingress.SchemeHTTP),
+		heldRoute("z.example.com", "", "web", 80, ""),
+	}}
+	rv := reviewWith(t, fake, "shop", `services:
+  web:
+    image: nginx:1.27
+    deploy:
+      labels:
+        tierplan.ingress.root.host: a.example.com
+        tierplan.ingress.root.port: "80"
+        tierplan.ingress.api.host: a.example.com
+        tierplan.ingress.api.port: "8080"
+        tierplan.ingress.api.path: /api
+        tierplan.ingress.z.host: z.example.com
+        tierplan.ingress.z.port: "80"
+`)
+	if rv.Ingress == nil {
+		t.Fatal("review has no ingress section")
+	}
+	var got []string
+	for _, r := range rv.Ingress.Routes {
+		got = append(got, fmt.Sprintf("%s %s %s %d", r.Change, r.Hostname, r.Path, r.Port))
+	}
+	want := []string{
+		"kept a.example.com / 80",
+		"added a.example.com /api 8080",
+		"released a.example.com /api 80",
+		"kept z.example.com / 80", // an empty held path and scheme read as / and http
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("rows = %q, want %q", got, want)
+	}
+}
+
+func TestReviewIngressEmpty(t *testing.T) {
+	t.Parallel()
+	// No label and no claim: no section, and no ingress problem of any kind.
+	rv := reviewWith(t, &fakeIngress{}, "plain", `services:
+  web:
+    image: nginx:1.27
+`)
+	if rv.Ingress != nil {
+		t.Errorf("ingress = %+v, want none for a stack with no route and no claim", rv.Ingress)
+	}
+	for _, p := range rv.Problems {
+		if strings.HasPrefix(p.Code, "ingress_") {
+			t.Errorf("problem %+v, want no ingress problem", p)
+		}
+	}
+	// A first deploy lists every route as added.
+	rv = reviewWith(t, &fakeIngress{}, "shop", routedTwo)
+	if rv.Ingress == nil || len(rv.Ingress.Routes) != 2 {
+		t.Fatalf("ingress = %+v, want two routes", rv.Ingress)
+	}
+	for _, r := range rv.Ingress.Routes {
+		if r.Change != stackops.IngressRouteAdded {
+			t.Errorf("row = %+v, want added on a first deploy", r)
+		}
+	}
+	// A stack whose claims cannot be read gets no section, not a list that calls every route added.
+	rv = reviewWith(t, &fakeIngress{heldErr: errors.New("db busy")}, "shop", routedTwo)
+	if rv.Ingress != nil {
+		t.Errorf("ingress = %+v, want none when the held routes cannot be read", rv.Ingress)
+	}
 }

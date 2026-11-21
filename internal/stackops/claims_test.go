@@ -68,6 +68,24 @@ func (o *claimOps) ReleaseStack(ctx context.Context, envID, stackID, actor strin
 
 func (o *claimOps) Notify(envID string) { o.st.Notify(envID) }
 
+func (o *claimOps) HeldRoutes(ctx context.Context, envID, stackID string) ([]ingress.Route, error) {
+	snap, err := o.st.Snapshot(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	var out []ingress.Route
+	for _, r := range snap.Routes {
+		if r.StackID == stackID {
+			out = append(out, r.Route)
+		}
+	}
+	return out, nil
+}
+
+func (o *claimOps) CertStates(context.Context, string, []string) (map[string]stackops.CertState, error) {
+	return map[string]stackops.CertState{}, nil
+}
+
 // syncBuf is a log sink two goroutines may write.
 type syncBuf struct {
 	mu sync.Mutex

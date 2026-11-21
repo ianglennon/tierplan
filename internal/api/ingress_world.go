@@ -168,6 +168,27 @@ func (o ingressOps) World(ctx context.Context, envID string, canView func(string
 	return o.d.Ingress.World(ctx, envID, canView)
 }
 
+// HeldRoutes are the routes the stack holds now, read from the environment's snapshot: only the claims of the stack
+// itself, so another stack's routes never reach a review.
+func (o ingressOps) HeldRoutes(ctx context.Context, envID, stackID string) ([]ingress.Route, error) {
+	snap, err := o.d.Ingress.Snapshot(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	var out []ingress.Route
+	for _, r := range snap.Routes {
+		if r.OwnerKind == ingress.OwnerStack && r.StackID == stackID {
+			out = append(out, r.Route)
+		}
+	}
+	return out, nil
+}
+
+// CertStates says nothing yet (task 2 fills it in).
+func (o ingressOps) CertStates(context.Context, string, []string) (map[string]stackops.CertState, error) {
+	return map[string]stackops.CertState{}, nil
+}
+
 // claimActor is the audit actor of a claim write whose caller named itself by a string: a "system:" name is a
 // system actor, anything else a user.
 func claimActor(actor string) audit.Actor {

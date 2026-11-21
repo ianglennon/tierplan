@@ -276,6 +276,9 @@ type Review struct {
 	// RevertsDriftUnavailable says the drift could not be computed, so RevertsDrift is empty for want of knowing and
 	// not because nothing would be reverted.
 	RevertsDriftUnavailable bool
+	// Ingress is what the deploy does to ingress: the routes it adds, keeps and releases, the certificates and the
+	// network attachment (D-22). Nil when there is nothing to say, so a stack with no route and no claim has no section.
+	Ingress *IngressReview
 }
 
 // AdoptionReview is what the first deploy of an adopted stack does that is not in the file: Pending says it is that
@@ -478,6 +481,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 			bump(&rv.Summary.Configs, o.Change)
 		}
 	}
+	d.fillIngressSwarm(ctx, in, &rv, project)
 	rv.Problems = rv.Problems.Sorted()
 	d.addRevertsDrift(ctx, in, &rv, rawSwarmRows(desired, running), masker)
 	return rv, nil

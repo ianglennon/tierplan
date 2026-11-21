@@ -103,6 +103,38 @@ type StackReviewObjectBody struct {
 	SmallSubnetDefault bool   `json:"smallSubnetDefault,omitempty" doc:"True when subnet was chosen by the environment's small stack subnets and not by the file: the row shows the Small-subnet default badge. Absent otherwise"`
 }
 
+// StackReviewIngressRouteBody is one route a deploy adds, keeps or releases.
+type StackReviewIngressRouteBody struct {
+	Change   string `json:"change" enum:"added,kept,released" doc:"added: the deploy claims it. kept: the stack holds it now and the deploy leaves it as it is (the same hostname, path, service, port and scheme). released: the stack holds it now and the deploy lets it go"`
+	Hostname string `json:"hostname" doc:"The hostname the route answers on"`
+	Path     string `json:"path" doc:"The path prefix the route matches, / for the whole hostname"`
+	Service  string `json:"service" doc:"The service of the compose file the route goes to"`
+	Port     int    `json:"port" doc:"The port of the service the proxy connects to"`
+	Scheme   string `json:"scheme" enum:"http,https" doc:"How the proxy speaks to the service"`
+	Note     string `json:"note,omitempty" doc:"Left out unless set: a sentence for the row. A route of a standalone host says it is not served on that host yet"`
+}
+
+// StackReviewIngressCertificateBody is the certificate of one hostname the stack will hold.
+type StackReviewIngressCertificateBody struct {
+	Hostname string `json:"hostname" doc:"The hostname"`
+	State    string `json:"state" enum:"reused,will_issue,waiting" doc:"reused: a certificate that can be served exists. will_issue: there is none yet, so one is ordered. waiting: an order exists and nothing can be served yet. A certificate that is not ready never stops a deploy"`
+	Reason   string `json:"reason,omitempty" doc:"Left out unless set: for waiting, why, as a sentence"`
+}
+
+// StackReviewIngressNetworkBody is a service that joins or leaves the shared ingress network.
+type StackReviewIngressNetworkBody struct {
+	Service       string `json:"service" doc:"The service, by its name in the compose file"`
+	Change        string `json:"change" enum:"joins,leaves" doc:"joins: the deploy puts the service on the shared ingress network. leaves: the deploy takes it off, because the service no longer declares a route"`
+	ReplacesTasks bool   `json:"replacesTasks" doc:"True when the change replaces the running tasks of the service (a change of a service's networks does), false for a service that does not exist yet"`
+}
+
+// StackReviewIngressBody is what a deploy does to ingress.
+type StackReviewIngressBody struct {
+	Routes       []StackReviewIngressRouteBody       `json:"routes" doc:"The routes the deploy adds, keeps and releases, ordered by hostname, then path"`
+	Certificates []StackReviewIngressCertificateBody `json:"certificates" doc:"The certificate of each hostname the stack will hold, ordered by hostname"`
+	Network      []StackReviewIngressNetworkBody     `json:"network" doc:"The services that join or leave the shared ingress network, ordered by service. Empty for a standalone host"`
+}
+
 // StackDiffLineBody is one line of a hunk.
 type StackDiffLineBody struct {
 	Kind string `json:"kind" enum:"context,added,removed" doc:"context (in both texts), added (only in the newer) or removed (only in the older)"`
@@ -192,6 +224,7 @@ type StackReviewBody struct {
 	RevertsDrift            []StackRevertsDriftBody  `json:"revertsDrift" doc:"The changes made outside the stack that this deploy, update or roll back would put back, apart from the draft's own changes: a setting counts when the deployed revision's value differs from what runs and the draft (or the revision rolled back to) has the deployed revision's value. A service of the revision that no longer runs and that is kept, and a service that runs under the stack that neither declares, are listed too. It never blocks a deploy. Empty for a restore, which is the drift itself, and for a stack with no deployed revision"`
 	RevertsDriftUnavailable bool                     `json:"revertsDriftUnavailable" doc:"True when the drift could not be computed, so revertsDrift is empty for want of knowing; the rest of the review is accurate"`
 	Git                     *StackReviewGitBody      `json:"git,omitempty" doc:"Left out unless set: set for a review of the draft of a stack made from a git repository, and says which commit the draft holds and how far it is from the deployed one"`
+	Ingress                 *StackReviewIngressBody  `json:"ingress,omitempty" doc:"Left out unless there is something to say: set when the deploy adds, keeps or releases a route, has a certificate to report or moves a service on or off the shared ingress network. A stack with no route and no claim has none. The warnings and the policy's errors are in problems"`
 }
 
 // StackReviewOutput wraps StackReviewBody for huma.
@@ -467,8 +500,32 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 	if a := rv.Adoption; a != nil {
 		b.Adoption = &StackReviewAdoptionBody{Pending: a.Pending, OwnershipOnly: a.OwnershipOnly}
 	}
+	b.Ingress = ingressBody(rv.Ingress)
 	for _, o := range rv.Objects {
 		b.Objects = append(b.Objects, StackReviewObjectBody{Change: o.Change, Kind: o.Kind, Name: o.Name, Detail: o.Detail, Subnet: o.Subnet, SmallSubnetDefault: o.SmallSubnetDefault})
+	}
+	return b
+}
+
+// ingressBody turns the ingress section of a review into its answer, nil for none. Each list is present, empty when
+// there is nothing.
+func ingressBody(r *stackops.IngressReview) *StackReviewIngressBody {
+	if r == nil {
+		return nil
+	}
+	b := &StackReviewIngressBody{
+		Routes:       make([]StackReviewIngressRouteBody, 0, len(r.Routes)),
+		Certificates: make([]StackReviewIngressCertificateBody, 0, len(r.Certificates)),
+		Network:      make([]StackReviewIngressNetworkBody, 0, len(r.Network)),
+	}
+	for _, x := range r.Routes {
+		b.Routes = append(b.Routes, StackReviewIngressRouteBody{Change: x.Change, Hostname: x.Hostname, Path: x.Path, Service: x.Service, Port: x.Port, Scheme: x.Scheme, Note: x.Note})
+	}
+	for _, x := range r.Certificates {
+		b.Certificates = append(b.Certificates, StackReviewIngressCertificateBody{Hostname: x.Hostname, State: x.State, Reason: x.Reason})
+	}
+	for _, x := range r.Network {
+		b.Network = append(b.Network, StackReviewIngressNetworkBody{Service: x.Service, Change: x.Change, ReplacesTasks: x.ReplacesTasks})
 	}
 	return b
 }
