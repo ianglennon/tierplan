@@ -132,7 +132,9 @@ afterEach(() => {
   document.title = "";
 });
 
-const writes = () => sent.filter((s) => s.method !== "GET");
+// The page records the environment as recently opened with a PUT of its own; that is not an action of the control under test.
+const writes = () =>
+  sent.filter((s) => s.method !== "GET" && !s.path.startsWith("/api/me/recent-environments/"));
 
 function renderAt(path: string) {
   const router = createRouter({
