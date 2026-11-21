@@ -77,6 +77,37 @@ type IngressStatusOutput struct {
 	Body         IngressStatusBody
 }
 
+// IngressAccessLogsRequest is the body of the access-log switch.
+type IngressAccessLogsRequest struct {
+	Enabled bool `json:"enabled" doc:"True to make the proxies write an access log, false to stop"`
+}
+
+// IngressAccessLogsInput is the path and the body of the access-log switch.
+type IngressAccessLogsInput struct {
+	EnvironmentPathInput
+	Body IngressAccessLogsRequest
+}
+
+// IngressAccessLogsBody is the answer to the access-log switch.
+type IngressAccessLogsBody struct {
+	AccessLogs bool   `json:"accessLogs" doc:"The value now stored"`
+	Applies    string `json:"applies" enum:"rolling,when_enabled,when_resumed" doc:"rolling: it applies as each node's proxy restarts. when_enabled: it is stored and applies when ingress is switched on. when_resumed: it is stored and applies once the environment is resumed"`
+}
+
+// IngressAccessLogsOutput wraps IngressAccessLogsBody for huma.
+type IngressAccessLogsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressAccessLogsBody
+}
+
+// IngressResumeOutput is the answer to the resume of a restored environment.
+type IngressResumeOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         struct {
+		Resumed bool `json:"resumed" doc:"True when the environment was paused and is now resumed; false when it was not paused"`
+	}
+}
+
 // IngressDeployDeps are the dependencies of the ingress deploy routes.
 type IngressDeployDeps struct {
 	// Service runs the preview and the enable job. Nil answers 503 ingress_unavailable, so the routes are always
@@ -405,6 +436,57 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 			body.Redeploy = append(body.Redeploy, IngressRedeployBody{StackID: r.ID, StackName: r.Name, HoldsClaims: r.HoldsClaims})
 		}
 		return &IngressStatusOutput{CacheControl: "no-store", Body: body}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "setIngressAccessLogs",
+		Method:      http.MethodPut,
+		Path:        "/api/env/{envId}/ingress/access-logs",
+		Summary:     "Switch the proxy access log of a swarm environment",
+		Description: "Stores whether the proxies write an access log; it is off by default. Switching it restarts each node's proxy in turn, as the proxy service is rolled with " +
+			"the setting changed. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). " +
+			"The answer says when it applies: rolling, or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. " +
+			"409 " + problemIngressStandalone + " on a standalone environment. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressAccessLogsInput) (*IngressAccessLogsOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		res, err := d.Service.SetAccessLogs(ctx, p.AuditActor(), in.EnvID, in.Body.Enabled)
+		if err != nil {
+			return nil, fail(ctx, "switch the ingress access log", err)
+		}
+		return &IngressAccessLogsOutput{CacheControl: "no-store", Body: IngressAccessLogsBody{AccessLogs: res.AccessLogs, Applies: res.Applies}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "resumeIngress",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/ingress/resume",
+		Summary:     "Resume the ingress of an environment a restore paused",
+		Description: "After a restore from a backup, TierPlan only observes each environment's ingress and writes nothing to its swarm until an Admin resumes it here. " +
+			"Resuming clears the marker and the next pass writes the ingress objects again. Resuming an environment that is not paused answers 200 with resumed false and is not audited. " +
+			"409 " + problemIngressStandalone + " on a standalone environment. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressResumeOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		changed, err := d.Service.Resume(ctx, p.AuditActor(), in.EnvID)
+		if err != nil {
+			return nil, fail(ctx, "resume ingress", err)
+		}
+		out := &IngressResumeOutput{CacheControl: "no-store"}
+		out.Body.Resumed = changed
+		return out, nil
 	})
 
 	lim := &streamLimiter{max: d.MaxStreamsPerUser, open: map[string]int{}}

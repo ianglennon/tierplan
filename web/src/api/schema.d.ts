@@ -1428,6 +1428,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/access-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Switch the proxy access log of a swarm environment
+         * @description Stores whether the proxies write an access log; it is off by default. Switching it restarts each node's proxy in turn, as the proxy service is rolled with the setting changed. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). The answer says when it applies: rolling, or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. 409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).
+         */
+        put: operations["setIngressAccessLogs"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/ingress/certificates": {
         parameters: {
             query?: never;
@@ -1782,6 +1802,26 @@ export interface paths {
          * @description The node is disconnected within a second and its key is refused from now on; no other node is touched and nothing on its host is changed. Unless allowReenrol is true, its host is also blocked from enrolling again with the join token still mounted in its container. The answer lists heldHostnames: the names whose private keys this node may still hold and that should be re-issued. rotateTokenRecommended is always true. The optional reason is kept in the audit log. 404 environment_not_found or ingress_node_not_found (a node of another environment is the same 404); 409 ingress_node_already_revoked when it was revoked already. Answered with Cache-Control no-store. Needs environments.revoke on the environment (env Admin or instance admin), the permission that revokes an agent. Audited as ingress.node_revoked.
          */
         post: operations["revokeIngressNode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume the ingress of an environment a restore paused
+         * @description After a restore from a backup, TierPlan only observes each environment's ingress and writes nothing to its swarm until an Admin resumes it here. Resuming clears the marker and the next pass writes the ingress objects again. Resuming an environment that is not paused answers 200 with resumed false and is not audited. 409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["resumeIngress"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10182,6 +10222,19 @@ export interface components {
             /** @description The user's username */
             username: string;
         };
+        IngressAccessLogsBody: {
+            /** @description The value now stored */
+            accessLogs: boolean;
+            /**
+             * @description rolling: it applies as each node's proxy restarts. when_enabled: it is stored and applies when ingress is switched on. when_resumed: it is stored and applies once the environment is resumed
+             * @enum {string}
+             */
+            applies: "rolling" | "when_enabled" | "when_resumed";
+        };
+        IngressAccessLogsRequest: {
+            /** @description True to make the proxies write an access log, false to stop */
+            enabled: boolean;
+        };
         IngressCertAccountBody: {
             /** @description The directories certificates are ordered from, production then staging, with the terms each advertises */
             directories: components["schemas"]["IngressCertAccountDirectoryBody"][] | null;
@@ -10733,6 +10786,10 @@ export interface components {
             hostname: string;
             /** @description The domain's suffix */
             suffix: string;
+        };
+        IngressResumeOutputBody: {
+            /** @description True when the environment was paused and is now resumed; false when it was not paused */
+            resumed: boolean;
         };
         IngressStatusBody: {
             /** @description True while the proxy writes an access log */
@@ -20738,6 +20795,43 @@ export interface operations {
             };
         };
     };
+    setIngressAccessLogs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressAccessLogsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressAccessLogsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listIngressCertificates: {
         parameters: {
             query?: never;
@@ -21514,6 +21608,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevokeIngressNodeBodyOut"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resumeIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressResumeOutputBody"];
                 };
             };
             /** @description Error */

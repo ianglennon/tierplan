@@ -249,3 +249,113 @@ func TestIngressStacksToRedeploy(t *testing.T) {
 		}
 	})
 }
+
+type accessLogsResp struct {
+	AccessLogs bool   `json:"accessLogs"`
+	Applies    string `json:"applies"`
+}
+
+// TestAccessLogsRoute: an Admin switches the access log; the answer says it rolls once ingress is on and that it is stored
+// before; an Operator is refused; the status reads the stored value.
+func TestAccessLogsRoute(t *testing.T) {
+	t.Parallel()
+	f := newDeployFix(t, false)
+	path := "/api/env/" + f.envA + "/ingress/access-logs"
+	status := "/api/env/" + f.envA + "/ingress/status"
+
+	if rec := f.credCall(t, f.operatorA, http.MethodPut, path, `{"enabled":true}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("an Operator's switch = %d, want 403", rec.Code)
+	}
+	if st := decodeBody[statusResp](t, f.credCall(t, f.adminA, http.MethodGet, status, "")); st.AccessLogs {
+		t.Fatal("a new environment's access log is on")
+	}
+
+	rec := f.credCall(t, f.adminA, http.MethodPut, path, `{"enabled":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("switch on while ingress is off: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeBody[accessLogsResp](t, rec); !got.AccessLogs || got.Applies != "when_enabled" {
+		t.Errorf("answer = %+v, want stored for when ingress is switched on", got)
+	}
+	if st := decodeBody[statusResp](t, f.credCall(t, f.adminA, http.MethodGet, status, "")); !st.AccessLogs {
+		t.Error("the status does not read the stored access log")
+	}
+
+	f.enableViaRoute(t)
+	rec = f.credCall(t, f.adminA, http.MethodPut, path, `{"enabled":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("switch off while ingress is on: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeBody[accessLogsResp](t, rec); got.AccessLogs || got.Applies != "rolling" {
+		t.Errorf("answer = %+v, want off and rolling", got)
+	}
+	var rows int
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'ingress.access_logs_changed' AND env_id = ?`, f.envA).Scan(&rows); err != nil || rows != 2 {
+		t.Errorf("audit rows = %d, %v; want 2", rows, err)
+	}
+	if rec := f.credCall(t, f.adminA, http.MethodPut, path, `{"enabled":false}`); rec.Code != http.StatusOK {
+		t.Errorf("a repeat = %d, want 200", rec.Code)
+	}
+	if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'ingress.access_logs_changed' AND env_id = ?`, f.envA).Scan(&rows); err != nil || rows != 2 {
+		t.Errorf("a repeat recorded a row: %d, %v", rows, err)
+	}
+
+	sa := newDeployFix(t, true)
+	if rec := sa.credCall(t, sa.adminA, http.MethodPut, "/api/env/"+sa.envA+"/ingress/access-logs", `{"enabled":true}`); rec.Code != http.StatusConflict {
+		t.Errorf("standalone switch = %d, want 409", rec.Code)
+	}
+}
+
+// TestResumeRoute: an Admin resumes a paused environment, which is audited once and woken; an environment that is not
+// paused answers 200 with no audit row; an Operator is refused.
+func TestResumeRoute(t *testing.T) {
+	t.Parallel()
+	f := newDeployFix(t, false)
+	path := "/api/env/" + f.envA + "/ingress/resume"
+	ctx := testsupport.Context(t)
+
+	if rec := f.credCall(t, f.operatorA, http.MethodPost, path, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("an Operator's resume = %d, want 403", rec.Code)
+	}
+	rec := f.credCall(t, f.adminA, http.MethodPost, path, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume of an unpaused environment: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeBody[struct {
+		Resumed bool `json:"resumed"`
+	}](t, rec); got.Resumed {
+		t.Error("resume of an environment that is not paused says it resumed")
+	}
+	count := func() int {
+		var n int
+		if err := f.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'ingress.deploy_resumed'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if count() != 0 {
+		t.Fatal("an unpaused resume recorded a row")
+	}
+
+	if _, err := f.ingressStore.SetPaused(ctx, f.envA, true, "system:restore", nil); err != nil {
+		t.Fatalf("SetPaused: %v", err)
+	}
+	if st := decodeBody[statusResp](t, f.credCall(t, f.adminA, http.MethodGet, "/api/env/"+f.envA+"/ingress/status", "")); !st.Paused {
+		t.Fatal("the status does not say the environment is paused")
+	}
+	rec = f.credCall(t, f.adminA, http.MethodPost, path, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume: %d %s", rec.Code, rec.Body)
+	}
+	if got := decodeBody[struct {
+		Resumed bool `json:"resumed"`
+	}](t, rec); !got.Resumed {
+		t.Error("resume of a paused environment says it did not resume")
+	}
+	if count() != 1 {
+		t.Errorf("resume audit rows = %d, want 1", count())
+	}
+	if st := decodeBody[statusResp](t, f.credCall(t, f.adminA, http.MethodGet, "/api/env/"+f.envA+"/ingress/status", "")); st.Paused {
+		t.Error("the environment is still paused after the resume")
+	}
+}

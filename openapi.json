@@ -9828,6 +9828,42 @@
         ],
         "type": "object"
       },
+      "IngressAccessLogsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "accessLogs": {
+            "description": "The value now stored",
+            "type": "boolean"
+          },
+          "applies": {
+            "description": "rolling: it applies as each node's proxy restarts. when_enabled: it is stored and applies when ingress is switched on. when_resumed: it is stored and applies once the environment is resumed",
+            "enum": [
+              "rolling",
+              "when_enabled",
+              "when_resumed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "accessLogs",
+          "applies"
+        ],
+        "type": "object"
+      },
+      "IngressAccessLogsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "True to make the proxies write an access log, false to stop",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "type": "object"
+      },
       "IngressCertAccountBody": {
         "additionalProperties": false,
         "properties": {
@@ -11016,6 +11052,19 @@
           "hostname",
           "createdBy",
           "createdAt"
+        ],
+        "type": "object"
+      },
+      "IngressResumeOutputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "resumed": {
+            "description": "True when the environment was paused and is now resumed; false when it was not paused",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "resumed"
         ],
         "type": "object"
       },
@@ -33290,6 +33339,67 @@
         ]
       }
     },
+    "/api/env/{envId}/ingress/access-logs": {
+      "put": {
+        "description": "Stores whether the proxies write an access log; it is off by default. Switching it restarts each node's proxy in turn, as the proxy service is rolled with the setting changed. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). The answer says when it applies: rolling, or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. 409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "setIngressAccessLogs",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngressAccessLogsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressAccessLogsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Switch the proxy access log of a swarm environment",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
     "/api/env/{envId}/ingress/certificates": {
       "get": {
         "description": "Every per-hostname certificate of the environment, live and retired, by hostname: its issuer (staging flagged), source, state and the state in words, whether it is ready to serve, when it was issued and expires, when it renews next and on what basis, its last failure (class, a fixed hint, the capped detail and the time), the failures in a row, when the next attempt is, how long the certificate authority asked TierPlan to wait, why a queued certificate waits (a code, one sentence, the figures and the next slot), who asked for it and when, since when nothing refers to it, and why a retired one was retired. No private key and no sealed value is ever returned. Needs ingress.manage on the environment (its Admin).",
@@ -34598,6 +34708,57 @@
           }
         },
         "summary": "Revoke one ingress node",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/resume": {
+      "post": {
+        "description": "After a restore from a backup, TierPlan only observes each environment's ingress and writes nothing to its swarm until an Admin resumes it here. Resuming clears the marker and the next pass writes the ingress objects again. Resuming an environment that is not paused answers 200 with resumed false and is not audited. 409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "resumeIngress",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressResumeOutputBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Resume the ingress of an environment a restore paused",
         "tags": [
           "ingress"
         ]
