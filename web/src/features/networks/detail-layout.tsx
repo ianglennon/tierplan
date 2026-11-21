@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
-import { Info, Network } from "lucide-react";
+import { Info, Lock, Network } from "lucide-react";
 import { useState } from "react";
 
 import { isNetworkGone, type NetworkDetail, networkDetailQuery } from "@/api/networks";
@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UsedByList } from "@/components/used-by-list";
+import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { DeleteNetworkDialog } from "@/features/networks/delete-network-dialog";
 import { deleteReason } from "@/features/networks/delete-reason";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
@@ -210,6 +211,7 @@ export function NetworkDetailLayout({ envId, networkId, node }: NetworkDetailLay
                     {data.node}
                   </Badge>
                 ) : null}
+                {data.ingress ? <SelfContainerBadge kind="ingress" /> : null}
               </div>
               {line ? <p className="text-sm break-words text-muted-foreground">{line}</p> : null}
             </div>
@@ -229,6 +231,15 @@ export function NetworkDetailLayout({ envId, networkId, node }: NetworkDetailLay
           <Skeleton className="h-8 w-64" />
         )}
       </header>
+      {data?.ingress ? (
+        // Plain status, not a warning and not announced as an alert: an object TierPlan
+        // manages is expected, not a fault (U-03).
+        <Alert role="status">
+          <Lock aria-hidden="true" />
+          <AlertTitle>{t("ingress.owned.alertTitle")}</AlertTitle>
+          <AlertDescription>{t("ingress.owned.objectBody")}</AlertDescription>
+        </Alert>
+      ) : null}
       {data?.builtIn ? (
         <Alert>
           <Info aria-hidden="true" />

@@ -7,6 +7,8 @@ type Translate = (key: string, options?: Record<string, unknown>) => string;
 export interface Attached {
   name: string;
   builtIn: boolean;
+  // TierPlan's own ingress network: not the person's to remove (D-29).
+  ingress?: boolean;
   attachedContainers: number;
   attachedServices: number;
 }
@@ -27,7 +29,8 @@ export function inUseWhat(t: Translate, n: Attached): string {
 }
 
 // deleteReason is why Delete… is unavailable on a network, or undefined when it is
-// available: who may comes first, then what the network is, then what still uses it.
+// available: who may comes first, then whose the network is (TierPlan's ingress network, or
+// the engine's own), then what still uses it.
 // On the network's own page the in-use words do not send the reader to the page they
 // are on.
 export function deleteReason(
@@ -37,6 +40,7 @@ export function deleteReason(
   onOwnPage = false,
 ): string | undefined {
   if (needsReason) return needsReason;
+  if (n.ingress) return t("ingress.owned.reason");
   if (n.builtIn) return t("networks.delete.builtin", { name: n.name });
   if (n.attachedContainers === 0 && n.attachedServices === 0) return undefined;
   const what = inUseWhat(t, n);
