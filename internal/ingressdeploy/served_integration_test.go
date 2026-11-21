@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"slices"
@@ -219,8 +220,8 @@ func (e *swarmEnv) claimsOf(st *stack) []string {
 	}
 	out := []string{}
 	for _, c := range all {
-		if c.Claim.StackID == st.ID {
-			out = append(out, c.Claim.Hostname)
+		if c.StackID == st.ID {
+			out = append(out, c.Hostname)
 		}
 	}
 	slices.Sort(out)
@@ -277,7 +278,7 @@ func (e *swarmEnv) routeStates(st *stack) []stackops.RouteState {
 			prefix := st.Name + "_"
 			for _, r := range cluster.Services {
 				if r.Stack == st.Name && strings.HasPrefix(r.Name, prefix) {
-					in.Running[strings.TrimPrefix(r.Name, prefix)] = int(r.Running)
+					in.Running[strings.TrimPrefix(r.Name, prefix)] = int(min(r.Running, math.MaxInt32))
 				}
 			}
 			for _, ref := range cluster.ServiceRefs {
@@ -390,6 +391,6 @@ func (e *swarmEnv) awaitNotServed(n *dockertest.Node, host string) {
 		if err != nil {
 			return true, ""
 		}
-		return !(status == http.StatusOK && strings.Contains(body, backendBody)), fmt.Sprintf("still served: status %d", status)
+		return status != http.StatusOK || !strings.Contains(body, backendBody), fmt.Sprintf("still served: status %d", status)
 	})
 }
