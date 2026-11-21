@@ -164,7 +164,7 @@ func RegisterShells(r *httpx.Router, d ShellsDeps) {
 			"The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. " +
 			"The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). " +
 			"422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), " +
-			"409 host_read_only on a read-only host, 409 own_container for TierPlan's own server or an agent's container (decided from a fresh inspect), 409 container_not_running, " +
+			"409 host_read_only on a read-only host, 409 own_container for TierPlan's own server, an agent's container or an ingress proxy task (decided from a fresh inspect), 409 container_not_running, " +
 			"502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, " +
 			"503 stream_busy when the host's agent serves as many logs and shells as it can. " +
 			"What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. " +
@@ -264,6 +264,11 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 	if (len(d.SelfContainerID) >= minSelfIDLen && strings.HasPrefix(own.ID, d.SelfContainerID)) ||
 		own.Labels[ownerLabelAgent] == ownerLabelAgentValue {
 		return nil, httpx.Problem(http.StatusConflict, codeOwnContainer, "TierPlan doesn't open shells in its own containers.")
+	}
+	// The ingress proxy's tasks are TierPlan's own too: a shell there reaches the join
+	// token and the certificate keys, which are Admin-level material (D-36, D-41).
+	if isIngressTask(own.Labels) {
+		return nil, httpx.Problem(http.StatusConflict, codeOwnContainer, "TierPlan doesn't open shells in its ingress proxy. Switch ingress off to remove it.")
 	}
 	if !own.Running {
 		return nil, httpx.Problem(http.StatusConflict, problemContainerNotRunning, "The container is not running. Start it to open a shell.")

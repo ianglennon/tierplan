@@ -720,6 +720,28 @@ func TestShellRefusesTierPlansOwnServerAndAnAgentContainerWithOwnContainerFromAF
 	}
 }
 
+func TestShellRefusesAnIngressProxyTaskWithOwnContainerFromAFreshInspect(t *testing.T) {
+	t.Parallel()
+	const proxyID = "ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12cd34ef56ab12"
+	cfg := actionEngine()
+	cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+		ID: proxyID, Names: []string{"/tierplan-ingress.1.x"}, Image: "traefik:v3", State: "running", Status: "Up 1 hour",
+		Labels: map[string]string{
+			"tierplan.component":            "ingress",
+			"com.docker.swarm.service.name": "tierplan-ingress",
+		},
+	})
+	f := newShellFixOn(t, cfg, nil)
+	rec := f.open(t, proxyID, openBody)
+	if rec.code != http.StatusConflict || rec.ptyp != "own_container" {
+		t.Fatalf("%d %q, want 409 own_container: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "ingress") {
+		t.Errorf("body %s does not name ingress", rec.body)
+	}
+	f.refusedNothingStarted(t)
+}
+
 func TestShellRefusesTheNextOpenOverThePerUserCapWith429AndTheLimit(t *testing.T) {
 	t.Parallel()
 	f := newShellFix(t, func(f *envFix) { f.inst.ApplyShellLimits(30, 2) })
