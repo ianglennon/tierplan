@@ -388,6 +388,10 @@ type Agent struct {
 	HostNet string
 	// HostRoutes are the routes AnswerHostNet writes on a host-net stream.
 	HostRoutes []wire.HostRoute
+	// LongLived keeps the connection open until the test ends. By default the connection lives for the minute a
+	// handshake is given, which is all a test of the tunnel itself needs; a test that holds an agent for a whole
+	// swarm operation sets it.
+	LongLived bool
 }
 
 // Conn is a connection after the handshake.
@@ -444,6 +448,10 @@ type Pending struct {
 func (s *Server) Begin(t testing.TB, a Agent) *Pending {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	if a.LongLived {
+		cancel()
+		ctx, cancel = context.WithCancel(context.Background())
+	}
 	t.Cleanup(cancel)
 
 	ws, resp, err := websocket.Dial(ctx, s.URL(), &websocket.DialOptions{ //nolint:bodyclose // a WebSocket upgrade response has no body to close
