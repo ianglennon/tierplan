@@ -68,6 +68,8 @@ type ServiceDetail struct {
 	UpdateStatus *ServiceUpdateStatus
 	// Agent is true for a TierPlan agent service.
 	Agent bool
+	// Ingress is true for the TierPlan ingress proxy service.
+	Ingress bool
 	// Labels are the service's own labels, for the rules that look at who owns it.
 	Labels map[string]string
 	// Replicas is the replica count of a replicated service, zero otherwise.
@@ -105,7 +107,7 @@ func (c *Client) ServiceInspect(ctx context.Context, id string) (ServiceDetail, 
 func serviceDetail(s swarm.Service) (ServiceDetail, error) {
 	d := ServiceDetail{
 		ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), Stack: s.Spec.Labels[stackLabel],
-		Version: s.Version.Index, CreatedAt: s.CreatedAt.UTC(), UpdatedAt: s.UpdatedAt.UTC(), Agent: isAgentService(s),
+		Version: s.Version.Index, CreatedAt: s.CreatedAt.UTC(), UpdatedAt: s.UpdatedAt.UTC(), Agent: isAgentService(s), Ingress: isIngressService(s),
 		Labels: s.Spec.Labels, TemplateHash: specHash(s.Spec.TaskTemplate),
 	}
 	if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {

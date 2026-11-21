@@ -15,6 +15,8 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
+
+	"github.com/ianglennon/tierplan/internal/ingress"
 )
 
 // quorumLossMarker is in the message of the 500 a manager answers every cluster
@@ -47,6 +49,13 @@ const (
 // never looked at; anyone can run it under any name.
 func isAgentService(s swarm.Service) bool {
 	return s.Spec.Name == agentServiceName || s.Spec.Labels[agentServiceLabel] == agentServiceLabelValue
+}
+
+// isIngressService reports whether s is the TierPlan ingress proxy: the component label and the exact
+// reserved name, both (D-41). Unlike the agent rule, a label alone does not make a service the proxy,
+// because the label is user-controlled and this flag backs refusals.
+func isIngressService(s swarm.Service) bool {
+	return ingress.OwnsService(s.Spec.Name, s.Spec.Labels)
 }
 
 // NodeRow is one swarm node as the cluster view shows it.
@@ -88,6 +97,8 @@ type ServiceRow struct {
 	Stack string
 	// Agent is true for a TierPlan agent service (see isAgentService).
 	Agent bool
+	// Ingress is true for the TierPlan ingress proxy service (see isIngressService).
+	Ingress bool
 	// Ports are the ports the service publishes, sorted by published port, then target
 	// port, then protocol. Never nil.
 	Ports []ServicePort
@@ -288,7 +299,7 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		}
 		row := ServiceRow{
 			ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), UpdatedAt: s.UpdatedAt.UTC(),
-			Stack: s.Spec.Labels[stackLabel], Agent: isAgentService(s),
+			Stack: s.Spec.Labels[stackLabel], Agent: isAgentService(s), Ingress: isIngressService(s),
 		}
 		if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
 			row.Image = cs.Image
