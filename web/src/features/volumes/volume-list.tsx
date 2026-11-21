@@ -33,6 +33,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
 import { SearchBox } from "@/features/containers/container-list";
 import { GROUP_VALUES, type GroupBy, MAX_QUERY } from "@/features/containers/list-search";
+import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { type BulkAction, BulkBar } from "@/features/resources/bulk-bar";
 import { useGroupCollapse } from "@/features/resources/group-header-row";
@@ -294,7 +295,9 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
     orderedKeys,
     isEligible: (k) => {
       const r = byKey.get(k);
-      return r !== undefined && !inUse(r);
+      // The ingress cache volume is always in use, and is selectable so that a bulk lists it as
+      // skipped rather than leaving the person to wonder (D-29).
+      return r !== undefined && (r.ingress || !inUse(r));
     },
   });
 
@@ -327,7 +330,12 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
     ? undefined
     : (remove.reason ?? t("needs.extra.volumes.delete"));
   const deleteReason = (v: VolumeRow) =>
-    needReason ?? (inUse(v) ? t("volumes.list.inUseBy", { what: inUseWhat(t, v) }) : undefined);
+    needReason ??
+    (v.ingress
+      ? t("ingress.owned.reason")
+      : inUse(v)
+        ? t("volumes.list.inUseBy", { what: inUseWhat(t, v) })
+        : undefined);
 
   const columns: Column<VolumeRow>[] = [
     {
@@ -345,6 +353,7 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
             <TruncatedText mono>{v.name}</TruncatedText>
           </Link>
           {v.anonymous ? <Badge variant="secondary">{t("volumes.list.anonymous")}</Badge> : null}
+          {v.ingress ? <SelfContainerBadge kind="ingress" /> : null}
         </span>
       ),
     },
@@ -421,7 +430,7 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
       <SelectCheckbox
         checked={selection.isSelected(rowKeyOf(v))}
         label={t("actions.select.row", { name: v.name })}
-        reason={inUse(v) ? t("volumes.list.select.inUse") : undefined}
+        reason={inUse(v) && !v.ingress ? t("volumes.list.select.inUse") : undefined}
         onToggle={(shift) => selection.toggle(rowKeyOf(v), { shift })}
       />
     ),
@@ -434,7 +443,12 @@ export function VolumeList({ envId, search, onSearchChange }: VolumeListProps) {
       id: "delete",
       label: t("volumes.list.bulkDelete"),
       destructive: true,
-      reason: needReason,
+      // Only the ingress cache volume selected: nothing to delete, and the reason says why.
+      reason:
+        needReason ??
+        (selectedRows.length > 0 && selectedRows.every((r) => r.ingress)
+          ? t("ingress.owned.reason")
+          : undefined),
       onClick: () => setDeleting({ rows: selectedRows, open: true }),
     },
   ];
