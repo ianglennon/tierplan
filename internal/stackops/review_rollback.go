@@ -313,6 +313,8 @@ func notDeployableMessage(seq int64, pe *PrepareError) string {
 		reason = ObjectErrorDetail(pe.Err)
 	case PrepareConvert:
 		reason = ConvertDetail(pe.Err) // already guarded by PrepareRollback
+	case PrepareIngress:
+		reason = prepareIngressMessage
 	case PreparePins:
 		var invalid *PinsInvalidError
 		if errors.As(pe.Err, &invalid) {

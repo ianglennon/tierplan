@@ -1355,6 +1355,9 @@ func rollbackPrepareProblem(err error, m stacks.Masker) error {
 		return objectProblem(pe.Err, m)
 	case stackops.PrepareConvert:
 		return convertProblem(pe.Err, m)
+	case stackops.PrepareIngress:
+		// The server could not read the ingress switch; the revision is not at fault.
+		return huma.Error500InternalServerError("could not read whether ingress is on for this environment, so nothing was changed")
 	}
 	var invalid *stackops.PinsInvalidError
 	service := ""
