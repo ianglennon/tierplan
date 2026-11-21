@@ -87,7 +87,7 @@ var Tables = map[string]Class{
 	// ID and registered in vault.SealedColumns, so RewrapAll moves it. The claims and routes are what a
 	// restore must bring back, and nothing in them names a source-install resource the way
 	// acme_dns_records does.
-	"ingress_env":       Included,
+	"ingress_env":       Included, // access_logs, paused and the ensure state (Phase 24) travel too; a restore sets paused (24-13)
 	"ingress_domains":   Included, // token_sealed is re-wrapped by RewrapAll
 	"ingress_reserved":  Included,
 	"ingress_hostnames": Included,
@@ -110,6 +110,13 @@ var Tables = map[string]Class{
 	// after the backup was taken must enrol again. They hold no sealed column, so vault.SealedColumns
 	// does not change. The join token table is classified with the credentials that never travel below.
 	"ingress_nodes": Included,
+
+	// The ingress deployment (Phase 24). The new ingress_env columns, access_logs, paused and the ensure
+	// state, travel with ingress_env above, and a restore sets paused on every environment (24-13), so a
+	// restored install observes before it manages. A pending wipe is a duty: the private keys it names are
+	// still on those nodes after a restore, so a restored install keeps the duty to wipe them. It runs
+	// only once the environment's ingress is resumed (paused is cleared).
+	"ingress_pending_wipes": Included,
 
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
