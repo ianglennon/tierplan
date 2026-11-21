@@ -266,28 +266,6 @@ func (q *Queries) ListIngressPendingWipes(ctx context.Context, envID string) ([]
 	return items, nil
 }
 
-const pauseAllIngressEnvs = `-- name: PauseAllIngressEnvs :exec
-INSERT INTO ingress_env (env_id, paused)
-SELECT e.id, 1 FROM environments e
-WHERE NOT EXISTS (SELECT 1 FROM ingress_env i WHERE i.env_id = e.id)
-`
-
-// The restore's marker (D-42): every environment is put under observation, enabled or not. The first
-// statement gives an environment with no ingress_env row a paused one; the second pauses the rest.
-func (q *Queries) PauseAllIngressEnvs(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, pauseAllIngressEnvs)
-	return err
-}
-
-const pauseExistingIngressEnvs = `-- name: PauseExistingIngressEnvs :exec
-UPDATE ingress_env SET paused = 1 WHERE paused = 0
-`
-
-func (q *Queries) PauseExistingIngressEnvs(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, pauseExistingIngressEnvs)
-	return err
-}
-
 const recordIngressEnsure = `-- name: RecordIngressEnsure :exec
 INSERT INTO ingress_env (env_id, ensure_at, ensure_error) VALUES (?1, ?2, ?3)
 ON CONFLICT (env_id) DO UPDATE SET ensure_at = excluded.ensure_at, ensure_error = excluded.ensure_error

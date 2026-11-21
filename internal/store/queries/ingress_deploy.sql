@@ -24,16 +24,6 @@ INSERT INTO ingress_env (env_id, paused) VALUES (sqlc.arg(env_id), sqlc.arg(paus
 ON CONFLICT (env_id) DO UPDATE SET paused = excluded.paused
 WHERE ingress_env.paused <> excluded.paused;
 
--- name: PauseAllIngressEnvs :exec
--- The restore's marker (D-42): every environment is put under observation, enabled or not. The first
--- statement gives an environment with no ingress_env row a paused one; the second pauses the rest.
-INSERT INTO ingress_env (env_id, paused)
-SELECT e.id, 1 FROM environments e
-WHERE NOT EXISTS (SELECT 1 FROM ingress_env i WHERE i.env_id = e.id);
-
--- name: PauseExistingIngressEnvs :exec
-UPDATE ingress_env SET paused = 1 WHERE paused = 0;
-
 -- name: RecordIngressEnsure :exec
 -- The result of one ensure pass. It changes no route, so config_version stays where it is. Creates the
 -- row when it has none.

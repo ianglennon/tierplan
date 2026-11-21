@@ -377,8 +377,8 @@ func (s *Staged) rewrite(ctx context.Context, st *store.Store, export, target *v
 	// original's ingress state, and its ensure loop would otherwise write to the swarm at the first tick. Every
 	// environment is paused, enabled or not, so a later enable waits too; an Admin resumes each environment (24-17), and
 	// the enable preflight refuses while it is paused (24-12). An environment with no ingress_env row gets a paused one
-	// (the first statement), then every row that is not yet paused is (the second): the two statements of the
-	// PauseAllIngressEnvs and PauseExistingIngressEnvs queries. Written in this transaction, so no restored database
+	// (the first statement), then every row that is not yet paused is (the second). The statements are inline here
+	// and not sqlc queries: the restore sets updated_at too, and a second copy would drift. Written in this transaction, so no restored database
 	// exists without the marker (D-42).
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO ingress_env (env_id, paused, updated_at) SELECT e.id, 1, ? FROM environments e "+
