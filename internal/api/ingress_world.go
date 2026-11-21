@@ -215,10 +215,10 @@ func (o ingressOps) CertStates(ctx context.Context, envID string, hostnames []st
 	}
 	var failures map[string]string
 	for _, c := range serving {
-		switch {
-		case c.Reason == "":
+		switch c.Reason {
+		case "":
 			out[c.Hostname] = stackops.CertState{State: stackops.CertReused}
-		case c.Reason == ingresscert.ReasonNoCertificate:
+		case ingresscert.ReasonNoCertificate:
 			out[c.Hostname] = stackops.CertState{State: stackops.CertWillIssue}
 		default:
 			if failures == nil {
