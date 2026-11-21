@@ -50,6 +50,7 @@ type ServiceSpecBody struct {
 	Stack           string         `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
 	TierPlanStackID string         `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
 	Agent           bool           `json:"agent" doc:"True for a TierPlan agent service"`
+	Ingress         bool           `json:"ingress" doc:"True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): its spec is readable but every change is refused as ingress_owned, so the editor shows it read-only; switch ingress off to remove it"`
 	Masked          bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
 	Spec            map[string]any `json:"spec" doc:"The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden> unless the caller holds secrets.reveal"`
 	PreviousSpec    map[string]any `json:"previousSpec,omitempty" doc:"The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to"`

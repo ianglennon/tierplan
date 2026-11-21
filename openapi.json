@@ -19591,6 +19591,10 @@
             "description": "True for a TierPlan agent service",
             "type": "boolean"
           },
+          "ingress": {
+            "description": "True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): its spec is readable but every change is refused as ingress_owned, so the editor shows it read-only; switch ingress off to remove it",
+            "type": "boolean"
+          },
           "masked": {
             "description": "True when a value was replaced by the placeholder \u003chidden\u003e because the caller may not reveal secrets on this environment",
             "type": "boolean"
@@ -19641,6 +19645,7 @@
           "stack",
           "tierplanStackId",
           "agent",
+          "ingress",
           "masked",
           "spec"
         ],

@@ -263,7 +263,7 @@ func getServiceSpec(ctx context.Context, d ServicesDeps, p *rbac.Principal, envI
 	previous, _ := doc["PreviousSpec"].(map[string]any)
 	return ServiceSpecBody{
 		Version: detail.Version, Name: detail.Name, Mode: detail.Mode, Stack: detail.Stack,
-		TierPlanStackID: loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels), Agent: detail.Agent,
+		TierPlanStackID: loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels), Agent: detail.Agent, Ingress: detail.Ingress,
 		Masked: masked, Spec: spec, PreviousSpec: previous,
 	}, nil
 }

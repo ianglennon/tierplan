@@ -1236,3 +1236,25 @@ describe("creating a service", () => {
     expect(within(dialog).getByText("The service hasn't been created.")).toBeTruthy();
   });
 });
+
+describe("the page for TierPlan's ingress proxy", () => {
+  it("shows the read-only state in place of the form, ahead of the stack's", async () => {
+    state.spec = () => Response.json(specBody({ ingress: true, stack: "shop" }));
+    renderAt();
+    expect(
+      await screen.findByRole("heading", { name: "TierPlan ingress can't be edited here" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Back to service" }).getAttribute("href")).toBe(PAGE);
+    expect(screen.queryByRole("heading", { name: /is managed by stack/ })).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review changes" })).toBeNull();
+  });
+
+  it("still opens the form for a plain service", async () => {
+    renderAt();
+    await ready();
+    expect(
+      screen.queryByRole("heading", { name: "TierPlan ingress can't be edited here" }),
+    ).toBeNull();
+  });
+});

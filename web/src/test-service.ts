@@ -153,6 +153,7 @@ export function specBody(extra: Partial<ServiceSpecBody> = {}): ServiceSpecBody 
     stack: "",
     tierplanStackId: "",
     agent: false,
+    ingress: false,
     masked: true,
     spec: editSpec(),
     ...extra,

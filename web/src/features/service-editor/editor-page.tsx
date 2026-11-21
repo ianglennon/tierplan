@@ -46,6 +46,7 @@ import { ApplyProgress } from "@/features/service-editor/apply-progress";
 import { defaultServiceSpec } from "@/features/service-editor/create-defaults";
 import { editRefusalOf } from "@/features/service-editor/edit-refusal";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
+import { IngressOwnedState } from "@/features/service-editor/ingress-owned-state";
 import { ReviewStep } from "@/features/service-editor/review-step";
 import { ServiceForm } from "@/features/service-editor/service-form";
 import { getPath } from "@/features/service-editor/spec-patch";
@@ -226,6 +227,7 @@ export function ServiceEditorPage({
     stack: "",
     tierplanStackId: "",
     agent: false,
+    ingress: false,
     masked: false,
     spec: defaultServiceSpec(),
   }));
@@ -526,6 +528,18 @@ export function ServiceEditorPage({
           checking={false}
           onReview={() => {}}
         />
+      </div>
+    );
+  }
+
+  // TierPlan's ingress proxy is TierPlan's own: no form, whatever stack label it carries (D-29).
+  if (data.ingress) {
+    return (
+      <div className="flex flex-col gap-6">
+        <header>
+          <Breadcrumb envId={envId} serviceId={serviceId} name={data.name} />
+        </header>
+        <IngressOwnedState envId={envId} serviceId={serviceId} />
       </div>
     );
   }

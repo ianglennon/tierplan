@@ -14235,6 +14235,8 @@ export interface components {
         ServiceSpecBody: {
             /** @description True for a TierPlan agent service */
             agent: boolean;
+            /** @description True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): its spec is readable but every change is refused as ingress_owned, so the editor shows it read-only; switch ingress off to remove it */
+            ingress: boolean;
             /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
             masked: boolean;
             /**

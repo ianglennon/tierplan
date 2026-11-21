@@ -180,6 +180,24 @@ func TestIngressServiceWritesRefusedReadsAllowed(t *testing.T) {
 	}
 }
 
+func TestServiceSpecSaysWhetherItIsTheIngressProxy(t *testing.T) {
+	t.Parallel()
+	f, e := ingressEnv(t)
+	rec := f.get(t, e, "services/svc-ingress/spec")
+	if rec.code != http.StatusOK {
+		t.Fatalf("GET spec = %d %s", rec.code, rec.body)
+	}
+	var spec struct {
+		Ingress bool `json:"ingress"`
+	}
+	if err := json.Unmarshal(rec.body, &spec); err != nil {
+		t.Fatal(err)
+	}
+	if !spec.Ingress {
+		t.Errorf("spec body = %s, want ingress true for the proxy", rec.body)
+	}
+}
+
 func TestForgedLabelIsNotRefused(t *testing.T) {
 	t.Parallel()
 	// A user's own service that carries TierPlan's label under another name is theirs (D-41).
