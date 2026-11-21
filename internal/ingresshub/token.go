@@ -28,6 +28,9 @@ var ErrEnvironmentNotFound = errors.New("ingresshub: no such environment")
 // Token is a newly issued ingress join token. Token is the only place the token ever exists in clear: only
 // its hash is stored. Rotated is true when it replaced an earlier token.
 type Token struct {
+	// ID is the ID of the token's row. It is not secret: it names the token without revealing it, so the
+	// swarm secret that carries the token can be named after it.
+	ID         string
 	Token      string
 	Generation int
 	Rotated    bool
@@ -122,7 +125,7 @@ func (s *Service) IssueToken(ctx context.Context, actor audit.Actor, envID, ip, 
 	if err := tx.Commit(); err != nil {
 		return Token{}, fmt.Errorf("commit: %w", err)
 	}
-	return Token{Token: token, Generation: int(next), Rotated: rotated}, nil
+	return Token{ID: tokenUUID.String(), Token: token, Generation: int(next), Rotated: rotated}, nil
 }
 
 // DisableToken stops the current join token enrolling anyone, until the next IssueToken makes a new one.
@@ -172,7 +175,9 @@ func (s *Service) DisableToken(ctx context.Context, actor audit.Actor, envID, ip
 // and whether it is disabled. It never returns the token, which exists in clear only in IssueToken's result.
 type TokenStatus struct {
 	// Exists is false when the environment has never had a token.
-	Exists     bool
+	Exists bool
+	// ID is the ID of the current token's row, the one Token.ID gave when it was issued.
+	ID         string
 	Generation int
 	CreatedAt  time.Time
 	CreatedBy  string
@@ -194,7 +199,7 @@ func (s *Service) TokenStatus(ctx context.Context, envID string) (TokenStatus, e
 		return TokenStatus{}, fmt.Errorf("load the join token: %w", err)
 	}
 	return TokenStatus{
-		Exists: true, Generation: int(row.Generation), CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
+		Exists: true, ID: row.ID, Generation: int(row.Generation), CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
 		CreatedBy: row.CreatedBy, Disabled: row.DisabledAt != 0,
 	}, nil
 }
