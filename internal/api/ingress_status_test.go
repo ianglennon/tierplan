@@ -186,10 +186,10 @@ func routedStacksFix(t *testing.T, withNetwork bool) *deployFix {
 // status name the same stacks.
 func TestIngressStacksToRedeploy(t *testing.T) {
 	t.Parallel()
-	ctx := testsupport.Context(t)
 
 	t.Run("network absent", func(t *testing.T) {
 		t.Parallel()
+		ctx := testsupport.Context(t)
 		f := routedStacksFix(t, false)
 		refs, err := api.NewIngressStacks(stackops.Repo{Store: f.st, Vault: f.v}, f.ingressStore,
 			func(ctx context.Context, _ string, fn func(*dockerx.Client) error) error { return fn(f.cli) }).WithRoutes(ctx, f.envA)
@@ -233,6 +233,7 @@ func TestIngressStacksToRedeploy(t *testing.T) {
 
 	t.Run("network present", func(t *testing.T) {
 		t.Parallel()
+		ctx := testsupport.Context(t)
 		f := routedStacksFix(t, true)
 		refs, err := api.NewIngressStacks(stackops.Repo{Store: f.st, Vault: f.v}, f.ingressStore,
 			func(ctx context.Context, _ string, fn func(*dockerx.Client) error) error { return fn(f.cli) }).WithRoutes(ctx, f.envA)
