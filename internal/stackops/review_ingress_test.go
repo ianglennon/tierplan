@@ -434,3 +434,113 @@ func TestReviewIngressWarnings(t *testing.T) {
 		t.Errorf("problems = %+v, want ingress_dnsrr to stay", rv.Problems)
 	}
 }
+
+// The standalone review, the roll back review and the restore review carry the same section (D-22).
+
+// standaloneRouted declares x.example.com on the service a standalone stack's labels (not deploy.labels).
+const standaloneRouted = `services:
+  web:
+    image: nginx:1.27
+    labels:
+      tierplan.ingress.x.host: x.example.com
+      tierplan.ingress.x.port: "80"
+      tierplan.ingress.y.host: y.example.com
+      tierplan.ingress.y.port: "80"
+`
+
+func TestReviewIngressStandaloneAndRollback(t *testing.T) {
+	t.Parallel()
+	stored := "nginx:1.27@sha256:" + strings.Repeat("a", 64)
+
+	t.Run("the standalone review lists added and kept routes as not served yet, with no network rows", func(t *testing.T) {
+		t.Parallel()
+		r := newStandaloneRig(t)
+		r.deps.Ingress = &fakeIngress{
+			held:   []ingress.Route{heldRoute("x.example.com", "/", "web", 80, ingress.SchemeHTTP)},
+			states: map[string]stackops.CertState{"x.example.com": {State: stackops.CertReused}, "y.example.com": {State: stackops.CertWillIssue}},
+		}
+		rv, err := r.deps.Review(testsupport.Context(t), r.standaloneReviewInput(t, "demo", standaloneRouted, nil))
+		if err != nil {
+			t.Fatalf("review: %v", err)
+		}
+		if rv.Ingress == nil {
+			t.Fatal("review has no ingress section")
+		}
+		want := []stackops.IngressRouteRow{
+			{Change: stackops.IngressRouteKept, Hostname: "x.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http", Note: stackops.NoteNotServedYet},
+			{Change: stackops.IngressRouteAdded, Hostname: "y.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http", Note: stackops.NoteNotServedYet},
+		}
+		if !slices.Equal(rv.Ingress.Routes, want) {
+			t.Errorf("routes = %+v, want %+v", rv.Ingress.Routes, want)
+		}
+		if len(rv.Ingress.Certificates) != 2 {
+			t.Errorf("certificates = %+v, want the two hostnames", rv.Ingress.Certificates)
+		}
+		if len(rv.Ingress.Network) != 0 {
+			t.Errorf("network = %+v, want none on a standalone host", rv.Ingress.Network)
+		}
+		for _, p := range rv.Problems {
+			if strings.HasPrefix(p.Code, "ingress_") {
+				t.Errorf("problem %+v, want no swarm warning on a standalone host", p)
+			}
+		}
+	})
+
+	held := []ingress.Route{heldRoute("c.example.com", "/", "web", 80, ingress.SchemeHTTP)}
+	wantSwap := []stackops.IngressRouteRow{
+		{Change: stackops.IngressRouteReleased, Hostname: "c.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
+		{Change: stackops.IngressRouteAdded, Hostname: "x.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
+	}
+	for _, mode := range []string{stackops.ReviewModeRollback, stackops.ReviewModeRestore} {
+		t.Run("the swarm "+mode+" review lists the revision's routes against the stack's own", func(t *testing.T) {
+			t.Parallel()
+			r := newSwarmRig(t, nil)
+			r.deps.Ingress = &fakeIngress{held: held}
+			in := r.rollbackReviewInput(t, "shop", routedWeb2, map[string]string{"shop_web": stored})
+			in.Mode = mode
+			rv, err := r.deps.Review(testsupport.Context(t), in)
+			if err != nil {
+				t.Fatalf("review: %v", err)
+			}
+			if rv.Ingress == nil || !slices.Equal(rv.Ingress.Routes, wantSwap) {
+				t.Errorf("ingress = %+v, want routes %+v", rv.Ingress, wantSwap)
+			}
+		})
+	}
+
+	t.Run("the standalone roll back review does too", func(t *testing.T) {
+		t.Parallel()
+		r := newStandaloneRig(t)
+		r.deps.Ingress = &fakeIngress{held: held}
+		in := r.standaloneRollbackInput(t, "demo", standaloneRoutedX, map[string]string{"web": stored})
+		rv, err := r.deps.Review(testsupport.Context(t), in)
+		if err != nil {
+			t.Fatalf("review: %v", err)
+		}
+		want := []stackops.IngressRouteRow{
+			{Change: stackops.IngressRouteReleased, Hostname: "c.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
+			{Change: stackops.IngressRouteAdded, Hostname: "x.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http", Note: stackops.NoteNotServedYet},
+		}
+		if rv.Ingress == nil || !slices.Equal(rv.Ingress.Routes, want) {
+			t.Errorf("ingress = %+v, want routes %+v", rv.Ingress, want)
+		}
+	})
+}
+
+// routedWeb2 and standaloneRoutedX are a revision that declares x.example.com only.
+const routedWeb2 = `services:
+  web:
+    image: nginx:1.27
+    deploy:
+      labels:
+        tierplan.ingress.host: x.example.com
+        tierplan.ingress.port: "80"
+`
+
+const standaloneRoutedX = `services:
+  web:
+    image: nginx:1.27
+    labels:
+      tierplan.ingress.host: x.example.com
+      tierplan.ingress.port: "80"
+`
