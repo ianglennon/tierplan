@@ -11878,6 +11878,8 @@ export interface components {
             created?: string;
             driver: string;
             id: string;
+            /** @description True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description No access to outside networks */
             internal: boolean;
             /** @description The address pools, in the engine's order; empty when the network has none */
@@ -11952,6 +11954,8 @@ export interface components {
             created?: string;
             driver: string;
             id: string;
+            /** @description True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description No access to outside networks */
             internal: boolean;
             /** @description IPv6 is enabled */

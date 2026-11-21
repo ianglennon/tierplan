@@ -13745,6 +13745,10 @@
           "id": {
             "type": "string"
           },
+          "ingress": {
+            "description": "True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it",
+            "type": "boolean"
+          },
           "internal": {
             "description": "No access to outside networks",
             "type": "boolean"
@@ -13827,6 +13831,7 @@
           "attachable",
           "ipv6",
           "builtIn",
+          "ingress",
           "owner",
           "ownerKind",
           "labels",
@@ -13937,6 +13942,10 @@
           "id": {
             "type": "string"
           },
+          "ingress": {
+            "description": "True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it",
+            "type": "boolean"
+          },
           "internal": {
             "description": "No access to outside networks",
             "type": "boolean"
@@ -13993,6 +14002,7 @@
           "scope",
           "subnets",
           "builtIn",
+          "ingress",
           "attachedContainers",
           "attachedServices",
           "owner",

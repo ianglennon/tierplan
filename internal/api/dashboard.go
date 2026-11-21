@@ -20,6 +20,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/updates"
@@ -217,6 +218,7 @@ type NetworkItem struct {
 	Subnets []string `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty when the network has none"`
 	Created string   `json:"created,omitempty" format:"date-time"`
 	BuiltIn bool     `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted"`
+	Ingress bool     `json:"ingress" doc:"True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it"`
 	// AttachedContainers and AttachedServices are what the network cannot be deleted
 	// while any of them exist.
 	AttachedContainers int    `json:"attachedContainers" doc:"Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node"`
@@ -583,7 +585,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				return NetworkItem{
 					AddressesUsed: fullness[n.ID],
 					Node:          n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created),
-					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), AttachedContainers: containers, AttachedServices: services,
+					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), Ingress: ingress.OwnsNetwork(n.Name, n.Labels), AttachedContainers: containers, AttachedServices: services,
 					Owner: owner, OwnerKind: kind, Internal: n.Internal, Attachable: n.Attachable, IPv6: n.IPv6,
 				}
 			})

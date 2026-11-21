@@ -403,6 +403,16 @@ func removeOrphanNetwork(ctx context.Context, d AddressSpaceDeps, p *rbac.Princi
 		o.record(ctx, audit.ActionNetworkRemoved, problemNetworkBuiltin, "")
 		return OrphanDeleteBody{}, httpx.Problem(http.StatusConflict, problemNetworkBuiltin, row.Name+" is built in and can't be deleted.")
 	}
+	// TierPlan's ingress network is changed by switching ingress on or off, never from the orphan list (D-46).
+	owned, err := ingressOwnsNetwork(ctx, d.Aggregator, d.Log, envID, row.NodeID, row.NetworkID, row.Name)
+	if err != nil {
+		o.record(ctx, audit.ActionNetworkRemoved, codeActionFailed, "")
+		return OrphanDeleteBody{}, err
+	}
+	if owned {
+		o.record(ctx, audit.ActionNetworkRemoved, problemIngressOwned, "")
+		return OrphanDeleteBody{}, ingressOwnedError()
+	}
 	var reason string
 	switch class {
 	case netspace.ClassOrphaned:
