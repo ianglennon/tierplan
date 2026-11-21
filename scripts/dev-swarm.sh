@@ -3,13 +3,18 @@
 # SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # A local Docker Swarm for the development loop (D-60): three managers and one
-# worker, each a privileged docker:<engine>-dind container, with the agent built
-# from this source tree loaded on every node. `make dev` is the TierPlan they
-# report to.
+# worker, each a privileged docker:<engine>-dind container, with the agent and the
+# ingress proxy built from this source tree loaded on every node. `make dev` is the
+# TierPlan they report to.
 #
-#   scripts/dev-swarm.sh up      create the swarm and load the agent image
+#   scripts/dev-swarm.sh up      create the swarm and load the agent and ingress images
+#   scripts/dev-swarm.sh load    rebuild both images and reload them on a running dev swarm
 #   scripts/dev-swarm.sh down    remove what `up` created
 #   scripts/dev-swarm.sh dns     print the DNS servers `up` would give the nodes
+#
+# The swarm's containers persist across sessions. After the source changes, `load`
+# rebuilds the agent and the ingress proxy and loads and retags them on the running
+# nodes without recreating the swarm; it refuses when a labelled node is absent.
 #
 # `down` removes only the four containers named tierplan-dev-m1..m3 and
 # tierplan-dev-w1 (and only when they carry the label this script put on them),
@@ -38,8 +43,10 @@
 #                      the two files the default is read from; test hooks for
 #                      scripts/test-scripts.sh, defaults /etc/resolv.conf and
 #                      /run/systemd/resolve/resolv.conf.
+#   DEV_SWARM_DOCKER   the docker command; a test hook for scripts/test-scripts.sh,
+#                      default docker from PATH.
 #
-# Needs Docker (with buildx, for the agent image) and make. Run it through
+# Needs Docker (with buildx, for the agent and ingress images) and make. Run it through
 # `sg docker -c '...'` when your shell predates your docker group membership.
 set -euo pipefail
 
@@ -51,6 +58,8 @@ NETWORK=tierplan-dev-swarm
 LABEL=tierplan.dev-swarm=true
 AGENT_LOCAL=tierplan-agent:dev
 AGENT_EDGE=ghcr.io/ianglennon/tierplan-agent:edge
+INGRESS_LOCAL=tierplan-ingress:dev
+INGRESS_EDGE=ghcr.io/ianglennon/tierplan-ingress:edge
 MANAGERS=(tierplan-dev-m1 tierplan-dev-m2 tierplan-dev-m3)
 WORKERS=(tierplan-dev-w1)
 NODES=("${MANAGERS[@]}" "${WORKERS[@]}")
@@ -74,6 +83,16 @@ node_ip() {
   done
   echo "dev-swarm: unknown node $1" >&2
   return 1
+}
+
+# docker: the one place the docker command is chosen, so scripts/test-scripts.sh can
+# stand a stub in for it (DEV_SWARM_DOCKER) and exercise the refusals without Docker.
+docker() {
+  if [[ -n "${DEV_SWARM_DOCKER:-}" ]]; then
+    "${DEV_SWARM_DOCKER}" "$@"
+  else
+    command docker "$@"
+  fi
 }
 
 # poll DEADLINE_SECONDS WHAT COMMAND...: runs the command once a second until it
@@ -156,6 +175,61 @@ all_nodes_ready() {
   [[ "$(grep -c '^Ready|' <<<"${out}")" == "${#NODES[@]}" ]] && grep -q '|Leader$' <<<"${out}"
 }
 
+# build_and_load_images: builds the agent and the ingress proxy from this tree and loads
+# and retags both on every node. ghcr.io resolves to the node itself (see `up`), so the
+# release image names that the install commands and the ingress service use are satisfied
+# by what is loaded here and no registry is contacted.
+build_and_load_images() {
+  local n
+  make agent-image ingress-image
+  for n in "${NODES[@]}"; do
+    docker save "${AGENT_LOCAL}" | docker exec -i "${n}" docker load >/dev/null
+    docker exec "${n}" docker tag "${AGENT_LOCAL}" "${AGENT_EDGE}"
+    docker save "${INGRESS_LOCAL}" | docker exec -i "${n}" docker load >/dev/null
+    docker exec "${n}" docker tag "${INGRESS_LOCAL}" "${INGRESS_EDGE}"
+  done
+}
+
+# run_hint: the one way to start TierPlan so the dev swarm's agents are accepted.
+run_hint() {
+  cat <<EOF
+Start TierPlan so the nodes can reach it and the agents are accepted:
+       make dev DEV_LISTEN=0.0.0.0:7480 DEV_SWARM_GATEWAY=dev.homelab.org.uk
+     Without both settings the agents are refused: DEV_LISTEN=0.0.0.0:7480 lets the nodes
+     reach the server, and DEV_SWARM_GATEWAY is the name the agents dial (wss://<name>:7480).
+     The nodes see this machine as ${GATEWAY}, which is the DEV_SWARM_GATEWAY default. The
+     setup-token gate still applies, but do not listen on 0.0.0.0 on a network you do not trust.
+EOF
+}
+
+# load: reloads the agent and ingress images on the running dev swarm.
+load() {
+  local n
+  for n in "${NODES[@]}"; do
+    if ! exists "${n}"; then
+      echo "dev-swarm: no dev swarm to load into: container ${n} is missing; run 'make dev-swarm' first" >&2
+      exit 1
+    fi
+    if [[ "$(docker container inspect -f '{{index .Config.Labels "tierplan.dev-swarm"}}' "${n}")" != "true" ]]; then
+      echo "dev-swarm: container ${n} does not carry the ${LABEL} label, so it is not ours; not loading" >&2
+      exit 1
+    fi
+    if [[ "$(docker container inspect -f '{{.State.Running}}' "${n}")" != "true" ]]; then
+      echo "dev-swarm: container ${n} is not running (the swarm survives a reboot but its containers do not restart); run 'docker start ${NODES[*]}' and try again" >&2
+      exit 1
+    fi
+  done
+  build_and_load_images
+  cat <<EOF
+
+The agent (${AGENT_EDGE}) and the ingress proxy (${INGRESS_EDGE}) built from this tree are loaded on every node.
+Services that are already running keep the image they started with; update the service to pick the new one up.
+
+Next:
+  1. $(run_hint)
+EOF
+}
+
 up() {
   local n dns_list
   # Resolved first, so a refused DEV_SWARM_DNS stops the script before anything is
@@ -216,27 +290,19 @@ up() {
   done
   poll 90 "a leader and every node ready" all_nodes_ready
 
-  make agent-image
-  for n in "${NODES[@]}"; do
-    docker save "${AGENT_LOCAL}" | docker exec -i "${n}" docker load >/dev/null
-    docker exec "${n}" docker tag "${AGENT_LOCAL}" "${AGENT_EDGE}"
-  done
+  build_and_load_images
 
   trap - EXIT
   cat <<EOF
 
 The dev swarm is up: ${#MANAGERS[@]} managers and ${#WORKERS[@]} worker on network ${NETWORK} (${SUBNET}), docker:${ENGINE}-dind.
-The agent built from this tree is loaded on every node as ${AGENT_EDGE}.
+The agent and the ingress proxy built from this tree are loaded on every node as ${AGENT_EDGE} and ${INGRESS_EDGE}.
 $(if ((${#dns_servers[@]} > 0)); then echo "The nodes' Docker daemons use DNS server(s): ${dns_servers[*]}"; else echo "No DNS server was found for the nodes: agents there use Docker's fallback 8.8.8.8, which cannot resolve LAN names (set DEV_SWARM_DNS)."; fi)
 
 Next:
-  1. Start TierPlan so the nodes can reach it. The nodes see this machine as ${GATEWAY}:
-       make dev DEV_LISTEN=0.0.0.0:7480
-     (dev-go tells agents to dial wss://${GATEWAY}:7480, and the install command TierPlan
-     shows carries the pin of the certificate the server made for itself, so the agents
-     verify it. DEV_LISTEN=0.0.0.0:7480 is what lets the nodes reach the server and makes
-     it reachable from your network; the setup-token gate still applies, but do not do
-     this on a network you do not trust.)
+  1. $(run_hint)
+     (The install command TierPlan shows carries the pin of the certificate the server
+     made for itself, so the agents verify it.)
   2. In the UI at https://localhost:5173 choose Environments, Add environment, Agent.
      The browser trusts .devdata/dev-tls/ca.pem once, or click through the warning.
      From another machine add DEV_WEB_HOST=0.0.0.0 DEV_PUBLIC_URL=https://<this machine's name>:5173
@@ -273,10 +339,11 @@ down() {
 
 case "${1:-}" in
   up) up ;;
+  load) load ;;
   down) down ;;
   dns) upstream_dns ;;
   *)
-    echo "usage: $0 up|down|dns" >&2
+    echo "usage: $0 up|load|down|dns" >&2
     exit 2
     ;;
 esac

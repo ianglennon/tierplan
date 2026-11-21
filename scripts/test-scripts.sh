@@ -971,6 +971,23 @@ for variant in loopback-only systemd-missing; do
   fi
 done
 
+# --- Dev swarm load (D-36): the subcommand's argument handling and refusals. DEV_SWARM_DOCKER
+# stands a stub in for docker, so nothing here touches a real dev swarm or needs Docker.
+printf '#!/bin/sh\nexit 1\n' >"${scratch}/docker-absent"
+printf '#!/bin/sh\n[ "$1 $2" = "container inspect" ] && [ "$3" = "-f" ] && echo false\nexit 0\n' >"${scratch}/docker-unlabelled"
+chmod +x "${scratch}/docker-absent" "${scratch}/docker-unlabelled"
+expect pass "dev-swarm-syntax" bash -n scripts/dev-swarm.sh
+expect fail "dev-swarm-unknown-subcommand-refused" scripts/dev-swarm.sh reload
+expect_out "dev-swarm-unknown-subcommand names load" "up|load|down|dns"
+expect fail "dev-swarm-no-subcommand-refused" scripts/dev-swarm.sh
+expect fail "dev-swarm-load-without-swarm-refused" env DEV_SWARM_DOCKER="${scratch}/docker-absent" scripts/dev-swarm.sh load
+expect_out "dev-swarm-load-without-swarm says why" "no dev swarm to load into"
+expect_out "dev-swarm-load-without-swarm names the way out" "make dev-swarm"
+expect fail "dev-swarm-load-unlabelled-refused" env DEV_SWARM_DOCKER="${scratch}/docker-unlabelled" scripts/dev-swarm.sh load
+expect_out "dev-swarm-load-unlabelled says it is not ours" "does not carry the tierplan.dev-swarm=true label"
+dev_swarm_loads_ingress() { grep -qF 'ghcr.io/ianglennon/tierplan-ingress:edge' scripts/dev-swarm.sh && grep -qF 'make agent-image ingress-image' scripts/dev-swarm.sh; }
+expect pass "dev-swarm-loads-the-ingress-image" dev_swarm_loads_ingress
+
 # --- Upgrade smoke (D-34): the script parses, refuses to run without its images,
 # and the make target builds the base from a worktree of the ref it is given. The
 # Docker run itself is proved by `make upgrade-smoke`, not here.
