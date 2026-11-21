@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
@@ -97,13 +100,23 @@ type deployFix struct {
 // newDeployFix builds the fixture and the routes over one fake swarm whose ingress network holds 10.0.0.0/24.
 func newDeployFix(t *testing.T, standalone bool) *deployFix {
 	t.Helper()
+	return newDeployFixWith(t, standalone, nil)
+}
+
+// newDeployFixWith is newDeployFix with the fake swarm adjusted by config, for a test that needs something running on it.
+func newDeployFixWith(t *testing.T, standalone bool, config func(*dockertest.FakeConfig)) *deployFix {
+	t.Helper()
 	f := newIngressFix(t)
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+	cfg := dockertest.FakeConfig{
 		SwarmState: "active", SwarmControl: true, SwarmClusterID: "cluster-1",
 		Networks: []dockertest.FakeNetwork{
 			{ID: "ingress-net", Name: "ingress", Driver: "overlay", Scope: "swarm", Ingress: true, Subnets: []string{"10.0.0.0/24"}},
 		},
-	})
+	}
+	if config != nil {
+		config(&cfg)
+	}
+	fake := dockertest.NewFake(t, cfg)
 	cli, err := dockerx.New(fake)
 	if err != nil {
 		t.Fatalf("dockerx.New: %v", err)
@@ -306,5 +319,131 @@ func TestIngressEnableStandalone409(t *testing.T) {
 	}
 	if n := len(f.fake.ServiceCreates()) + len(f.fake.SecretCreates()); n != 0 {
 		t.Errorf("a standalone refusal caused %d writes", n)
+	}
+}
+
+// TestIngressEnableRefusedPreflight409: a swarm where a service publishes port 80 is refused with 409
+// ingress_preflight_refused on the enable route, listing each refusal by its code with the services in the way as the
+// value; the preview of the same swarm answers 200 with the finding, and neither writes nor starts a job (D-07).
+func TestIngressEnableRefusedPreflight409(t *testing.T) {
+	t.Parallel()
+	f := newDeployFixWith(t, false, func(c *dockertest.FakeConfig) {
+		c.ServiceRows = []dockertest.FakeService{{
+			ID: "web", Name: "shop_web", Mode: "replicated", Desired: 1,
+			Ports: []swarm.PortConfig{{Protocol: "tcp", TargetPort: 8080, PublishedPort: 80, PublishMode: "ingress"}},
+		}}
+	})
+	base := "/api/env/" + f.envA + "/ingress"
+
+	rec := f.credCall(t, f.adminA, http.MethodPost, base+"/enable/preview", `{}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body)
+	}
+	pv := decodeBody[previewResp](t, rec)
+	if len(pv.Findings) != 1 || pv.Findings[0].Code != ingressdeploy.CodePortInUse || pv.Findings[0].Severity != "error" {
+		t.Errorf("preview findings = %+v, want ingress_port_in_use as an error", pv.Findings)
+	}
+
+	rec = f.credCall(t, f.adminA, http.MethodPost, base+"/enable", `{}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("enable: %d %s, want 409", rec.Code, rec.Body)
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+		Errors []struct {
+			Location string   `json:"location"`
+			Message  string   `json:"message"`
+			Value    []string `json:"value"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	if p.Type != "ingress_preflight_refused" || !strings.Contains(p.Detail, "Ports 80 and 443 must be free") {
+		t.Errorf("type %q detail %q", p.Type, p.Detail)
+	}
+	if len(p.Errors) != 1 || p.Errors[0].Location != ingressdeploy.CodePortInUse ||
+		len(p.Errors[0].Value) != 1 || p.Errors[0].Value[0] != "shop_web publishes 80 (ingress mode)" {
+		t.Errorf("errors = %+v, want ingress_port_in_use naming the service", p.Errors)
+	}
+	if n := len(f.fake.ServiceCreates()) + len(f.fake.SecretCreates()) + len(f.fake.NetworkCreates()); n != 0 {
+		t.Errorf("a refused enable wrote %d objects", n)
+	}
+	if list := f.hub.List(func(jobs.Job) bool { return true }); len(list) != 0 {
+		t.Errorf("a refused enable started %d jobs", len(list))
+	}
+	if _, held := f.stackLocks.Held(f.envA); held {
+		t.Error("a refused enable left the environment's lock held")
+	}
+}
+
+// TestIngressEnableLocked409: an enable asked for while another operation holds the environment is refused with 409
+// operation_locked, naming who holds it, and is not queued; the preview, which takes no lock, still answers (D-11).
+func TestIngressEnableLocked409(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		holder stackops.Holder
+		detail string
+		errors []string
+	}{
+		{
+			name: "a stack operation",
+			holder: stackops.Holder{StackID: "s1", StackName: "shop", JobID: "job-1", By: "ada",
+				Started: time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC)},
+			detail: "Another stack operation is running on ",
+			errors: []string{"stack=shop", "job=job-1", "started=2026-01-01T08:30:00Z", "stackId=s1"},
+		},
+		{
+			name: "an ingress job",
+			holder: stackops.Holder{Kind: stackops.HolderKindIngress, JobID: "job-2", Workload: "ingress", By: "ada",
+				Started: time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)},
+			detail: "TierPlan is changing ingress on ",
+			errors: []string{"kind=ingress", "job=job-2", "started=2026-01-01T09:00:00Z"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newDeployFix(t, false)
+			base := "/api/env/" + f.envA + "/ingress"
+			release, _, ok := f.stackLocks.TryAcquire(f.envA, tc.holder)
+			if !ok {
+				t.Fatal("the lock was not free")
+			}
+			t.Cleanup(release)
+
+			rec := f.credCall(t, f.adminA, http.MethodPost, base+"/enable", `{}`)
+			var p struct {
+				Type   string                               `json:"type"`
+				Detail string                               `json:"detail"`
+				Errors []struct{ Location, Message string } `json:"errors"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+				t.Fatalf("decode %s: %v", rec.Body, err)
+			}
+			if rec.Code != http.StatusConflict || p.Type != "operation_locked" || !strings.HasPrefix(p.Detail, tc.detail) ||
+				!strings.HasSuffix(p.Detail, "Try again when it finishes.") {
+				t.Fatalf("enable: %d type %q detail %q, want 409 operation_locked: %s", rec.Code, p.Type, p.Detail, tc.detail)
+			}
+			var got []string
+			for _, e := range p.Errors {
+				got = append(got, e.Location+"="+e.Message)
+			}
+			for _, want := range tc.errors {
+				if !slices.Contains(got, want) {
+					t.Errorf("errors = %v, want %s", got, want)
+				}
+			}
+			if n := len(f.fake.ServiceCreates()) + len(f.fake.SecretCreates()) + len(f.fake.NetworkCreates()); n != 0 {
+				t.Errorf("a locked enable wrote %d objects", n)
+			}
+			if list := f.hub.List(func(jobs.Job) bool { return true }); len(list) != 0 {
+				t.Errorf("a locked enable started %d jobs", len(list))
+			}
+			if rec := f.credCall(t, f.adminA, http.MethodPost, base+"/enable/preview", `{}`); rec.Code != http.StatusOK {
+				t.Errorf("preview under the lock: %d %s, want 200", rec.Code, rec.Body)
+			}
+		})
 	}
 }
