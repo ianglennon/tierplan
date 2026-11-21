@@ -195,3 +195,53 @@ func attachIngress(project *types.Project, routed []string, network string) *Inj
 	}
 	return inj
 }
+
+// undoIngress returns a copy of project with the injection taken out: what the user wrote. The
+// project itself is never changed (Render is a view).
+func undoIngress(project *types.Project, inj *InjectedIngress) *types.Project {
+	cp := *project
+	if inj.NetworkAdded {
+		nets := make(types.Networks, len(project.Networks))
+		for k, v := range project.Networks {
+			if k != inj.Network {
+				nets[k] = v
+			}
+		}
+		cp.Networks = nets
+	}
+	services := make(types.Services, len(project.Services))
+	for name, svc := range project.Services {
+		services[name] = svc
+	}
+	for _, name := range inj.Services {
+		svc, ok := services[name]
+		if !ok {
+			continue
+		}
+		nets := make(map[string]*types.ServiceNetworkConfig, len(svc.Networks))
+		for k, v := range svc.Networks {
+			nets[k] = v
+		}
+		delete(nets, inj.injectedKey(project))
+		if slices.Contains(inj.DefaultAdded, name) {
+			delete(nets, defaultNetworkKey)
+		}
+		if len(nets) == 0 {
+			nets = nil
+		}
+		svc.Networks = nets
+		services[name] = svc
+	}
+	cp.Services = services
+	return &cp
+}
+
+// injectedKey is the key the network has in project.
+func (inj *InjectedIngress) injectedKey(project *types.Project) string {
+	for k, n := range project.Networks {
+		if k == inj.Network || n.Name == inj.Network {
+			return k
+		}
+	}
+	return inj.Network
+}
