@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/testsupport"
@@ -51,7 +52,7 @@ func TestInterruptedDeployClaimsRestored(t *testing.T) {
 	}
 	wantHeld(t, f, cut, "b.example.com") // not put back yet: MarkInterrupted only reports
 
-	if err := stackops.RestoreInterruptedClaims(ctx, f.repo, f.ops, interrupted, "system:startup"); err != nil {
+	if err := stackops.RestoreInterruptedClaims(ctx, f.repo, f.ops, interrupted, audit.Actor{Type: audit.ActorSystem, ID: "system:startup", Name: "system:startup"}); err != nil {
 		t.Fatalf("RestoreInterruptedClaims: %v", err)
 	}
 
@@ -59,7 +60,7 @@ func TestInterruptedDeployClaimsRestored(t *testing.T) {
 	wantHeld(t, f, first)
 	wantHeld(t, f, idle, "d.example.com")
 	// Restoring again changes nothing, as a second start must not.
-	if err := stackops.RestoreInterruptedClaims(ctx, f.repo, f.ops, interrupted, "system:startup"); err != nil {
+	if err := stackops.RestoreInterruptedClaims(ctx, f.repo, f.ops, interrupted, audit.Actor{Type: audit.ActorSystem, ID: "system:startup", Name: "system:startup"}); err != nil {
 		t.Fatalf("RestoreInterruptedClaims again: %v", err)
 	}
 	wantHeld(t, f, cut, "a.example.com")
@@ -82,7 +83,7 @@ func TestInterruptedDeployClaimsRestoreFallsBackToRelease(t *testing.T) {
 		t.Fatalf("MarkInterrupted: %v", err)
 	}
 
-	if err := stackops.RestoreInterruptedClaims(ctx, f.repo, f.ops, interrupted, "system:startup"); err != nil {
+	if err := stackops.RestoreInterruptedClaims(ctx, f.repo, f.ops, interrupted, audit.Actor{Type: audit.ActorSystem, ID: "system:startup", Name: "system:startup"}); err != nil {
 		t.Fatalf("RestoreInterruptedClaims: %v", err)
 	}
 

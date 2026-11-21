@@ -107,11 +107,15 @@ func claimWriteFor(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal,
 	return &stackops.ClaimWrite{Decls: decls, Restore: restore, HasGood: hasGood, Actor: claimActorOf(p), CanView: canView}, nil
 }
 
-// claimActorOf is who a claim write is recorded as: the principal's ID, with the system prefix on a system principal.
-func claimActorOf(p *rbac.Principal) string {
-	actor := p.ID
-	if p.Type == rbac.PrincipalSystem && !strings.HasPrefix(actor, "system:") {
-		actor = "system:" + actor
+// claimActorOf is who a claim write is audited as: the principal's audit actor, with its ID and display name, and the
+// system prefix on a system principal's ID.
+func claimActorOf(p *rbac.Principal) audit.Actor {
+	actor := p.AuditActor()
+	if p.Type == rbac.PrincipalSystem && !strings.HasPrefix(actor.ID, "system:") {
+		actor.ID = "system:" + actor.ID
+	}
+	if actor.Name == "" {
+		actor.Name = actor.ID
 	}
 	return actor
 }
@@ -262,29 +266,29 @@ func claimActor(actor string) audit.Actor {
 }
 
 // claimHook records one audit row of a claim write in the write's own transaction. A nil Audit writes none.
-func (o ingressOps) claimHook(action, envID, stackID, actor string) ingressstore.ClaimHook {
+func (o ingressOps) claimHook(action, envID, stackID string, actor audit.Actor) ingressstore.ClaimHook {
 	if o.d.Audit == nil {
 		return nil
 	}
 	return func(ctx context.Context, tx *sql.Tx, p ingress.Plan) error {
 		return o.d.Audit.RecordTx(ctx, tx, audit.Entry{
-			Actor: claimActor(actor), Action: action, TargetType: ingressClaimTarget, TargetID: stackID, EnvID: envID,
+			Actor: actor, Action: action, TargetType: ingressClaimTarget, TargetID: stackID, EnvID: envID,
 			Result: audit.ResultSuccess, Details: map[string]string{"hostnames": strconv.Itoa(len(p.Claims))},
 		})
 	}
 }
 
 // ReplaceStackRoutes stores the stack's claims and audits a change as ingress.claim_replaced.
-func (o ingressOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput) (ingress.Plan, error) {
+func (o ingressOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput, actor audit.Actor) (ingress.Plan, error) {
 	if in.Hook == nil {
-		in.Hook = o.claimHook(audit.ActionIngressClaimReplaced, in.EnvID, in.StackID, in.Actor)
+		in.Hook = o.claimHook(audit.ActionIngressClaimReplaced, in.EnvID, in.StackID, actor)
 	}
 	return o.d.Ingress.ReplaceStackRoutes(ctx, in)
 }
 
 // ReleaseStack lets go of the stack's claims and audits a change as ingress.claim_released.
-func (o ingressOps) ReleaseStack(ctx context.Context, envID, stackID, actor string) error {
-	return o.d.Ingress.ReleaseStack(ctx, envID, stackID, actor, o.claimHook(audit.ActionIngressClaimReleased, envID, stackID, actor))
+func (o ingressOps) ReleaseStack(ctx context.Context, envID, stackID string, actor audit.Actor) error {
+	return o.d.Ingress.ReleaseStack(ctx, envID, stackID, actor.ID, o.claimHook(audit.ActionIngressClaimReleased, envID, stackID, actor))
 }
 
 // Notify wakes the reconciler of the environment.
@@ -309,5 +313,5 @@ const interruptedClaimsActor = "system:startup"
 // ingress.claim_replaced or ingress.claim_released by the system actor. The server calls it once at start, after the
 // interrupted operations were ended and before it serves. It does nothing when the server has no ingress store.
 func RestoreInterruptedIngressClaims(ctx context.Context, d StacksDeps, interrupted []stackops.InterruptedStack) error {
-	return stackops.RestoreInterruptedClaims(ctx, d.repo(), d.ingressOps(), interrupted, interruptedClaimsActor)
+	return stackops.RestoreInterruptedClaims(ctx, d.repo(), d.ingressOps(), interrupted, claimActor(interruptedClaimsActor))
 }

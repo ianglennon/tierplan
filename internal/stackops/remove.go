@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -352,9 +353,9 @@ type RemoveInput struct {
 	KeepDefinition bool
 	Caller         Caller
 	Store          RemoveStore
-	// ClaimActor is who the release of the stack's hostnames is recorded as (the principal's audit actor, "system:..."
-	// for an automatic removal). It falls back to Caller.Actor.
-	ClaimActor string
+	// ClaimActor is who the release of the stack's hostnames is recorded as (the principal's audit actor with its ID
+	// and display name, a "system:..." actor for an automatic removal). The zero value falls back to Caller.Actor.
+	ClaimActor audit.Actor
 	// Masker hides the stack's secret values in every text a remote system sent that the job keeps.
 	Masker stacks.Masker
 	// OnDone, when set, is called once with the result before the job's last item is finished, so a job that
@@ -1087,7 +1088,10 @@ func (x *removal) conclude(ctx context.Context) {
 	// The hostnames are let go only here: every service, network and object is gone from the engine, so nothing can
 	// still answer a name another stack could take (LBL-06, PROH-24-10). A removal that failed anywhere never gets here.
 	if d.Ingress != nil {
-		actor := cmp.Or(in.ClaimActor, in.Caller.Actor)
+		actor := in.ClaimActor
+		if actor == (audit.Actor{}) {
+			actor = audit.Actor{Type: audit.ActorUser, ID: in.Caller.Actor, Name: in.Caller.Actor}
+		}
 		if err := d.Ingress.ReleaseStack(wctx, in.EnvID, in.Stack.ID, actor); err != nil {
 			d.log().Error("could not release a removed stack's hostnames", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 			if !in.KeepDefinition {

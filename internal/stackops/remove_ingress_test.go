@@ -13,6 +13,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -34,10 +35,10 @@ type removeIngress struct {
 	releaseErr error
 	events     []string
 	writesAt   int // engine writes made when the release was called
-	actor      string
+	actor      audit.Actor
 }
 
-func (o *removeIngress) ReleaseStack(_ context.Context, _, stackID, actor string) error {
+func (o *removeIngress) ReleaseStack(_ context.Context, _, stackID string, actor audit.Actor) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.events = append(o.events, "release:"+stackID)
@@ -90,7 +91,7 @@ func TestRemoveReleasesClaimsAfterEngine(t *testing.T) {
 	t.Parallel()
 	rig, ing, store := ingressRemoveRig(t, nil, "app.example.com")
 
-	res, job := rig.remove(t, stackops.RemoveInput{Store: store, ClaimActor: "user:test"})
+	res, job := rig.remove(t, stackops.RemoveInput{Store: store, ClaimActor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}})
 
 	if !res.OK() || job.State != jobs.JobDone || !res.DefinitionDeleted {
 		t.Fatalf("remove = %+v %v, want it done", res, itemStates(job))
@@ -109,8 +110,8 @@ func TestRemoveReleasesClaimsAfterEngine(t *testing.T) {
 			t.Errorf("writes before the release = %v, missing %s", writes[:ing.writesAt], want)
 		}
 	}
-	if ing.actor != "user:test" {
-		t.Errorf("the release was recorded as %q, want user:test", ing.actor)
+	if want := (audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}); ing.actor != want {
+		t.Errorf("the release was recorded as %+v, want %+v", ing.actor, want)
 	}
 }
 

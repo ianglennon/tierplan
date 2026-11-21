@@ -42,6 +42,7 @@ func TestRemoveReleasesClaimsThroughRoute(t *testing.T) {
 	if n := claimAudits(t, f, "ingress.claim_released"); n != released+1 {
 		t.Errorf("ingress.claim_released rows = %d, want %d", n, released+1)
 	}
+	wantNamedActor(t, f, "ingress.claim_released", "envadmin-1")
 
 	// The name is free at once: a second stack deploys with it.
 	other := newStack(t, admin, "takes-the-name")

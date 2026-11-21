@@ -587,12 +587,12 @@ func (o *stackOps) World(ctx context.Context, envID string, canView func(string)
 	return o.st.World(ctx, envID, canView)
 }
 
-func (o *stackOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput) (ingress.Plan, error) {
+func (o *stackOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput, _ audit.Actor) (ingress.Plan, error) {
 	return o.st.ReplaceStackRoutes(ctx, in)
 }
 
-func (o *stackOps) ReleaseStack(ctx context.Context, envID, stackID, actor string) error {
-	return o.st.ReleaseStack(ctx, envID, stackID, actor, nil)
+func (o *stackOps) ReleaseStack(ctx context.Context, envID, stackID string, actor audit.Actor) error {
+	return o.st.ReleaseStack(ctx, envID, stackID, actor.ID, nil)
 }
 
 func (o *stackOps) Notify(envID string) { o.st.Notify(envID) }
@@ -695,7 +695,7 @@ func (e *swarmEnv) deployStack(name, compose string) (*stack, stackops.DeployRes
 	in := stackops.SwarmDeployInput{
 		EnvID: e.envID, Stack: st, Project: loaded.Project, Files: stacks.NewFileSet(copy.Files), Vars: map[string]string{}, Copy: copy,
 		Caller: e.rootCaller(), Pins: e.repo, RevisionID: rev.ID,
-		Ingress: &stackops.ClaimWrite{Decls: stacks.IngressDeclarations(loaded.Project, stacks.TargetSwarm), Restore: restore, HasGood: hasGood, Actor: "user:test"},
+		Ingress: &stackops.ClaimWrite{Decls: stacks.IngressDeclarations(loaded.Project, stacks.TargetSwarm), Restore: restore, HasGood: hasGood, Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}},
 	}
 	var res stackops.DeployResult
 	done := make(chan struct{})
@@ -751,7 +751,7 @@ func (e *swarmEnv) remove(st *stack) stackops.RemoveResult {
 	job, err := e.jobs.Start(jobs.Spec{Kind: "stack_remove", EnvID: e.envID, Owner: "user:test", Items: stackops.RemoveItemSpecs(st.Target, nil, false)},
 		func(jctx context.Context, rep *jobs.Reporter) {
 			defer close(done)
-			res = e.deps.Remove(jctx, stackops.RemoveInput{EnvID: e.envID, Stack: st.Stack, Caller: e.rootCaller(), Store: e.repo, ClaimActor: "user:test"}, rep)
+			res = e.deps.Remove(jctx, stackops.RemoveInput{EnvID: e.envID, Stack: st.Stack, Caller: e.rootCaller(), Store: e.repo, ClaimActor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}}, rep)
 		})
 	if err != nil {
 		t.Fatal(err)

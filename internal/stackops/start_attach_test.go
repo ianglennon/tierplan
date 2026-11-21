@@ -12,6 +12,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
@@ -43,12 +44,12 @@ func (f *fakeIngress) World(context.Context, string, func(string) bool) (ingress
 	return ingress.World{}, nil
 }
 
-func (f *fakeIngress) ReplaceStackRoutes(context.Context, ingressstore.ReplaceInput) (ingress.Plan, error) {
+func (f *fakeIngress) ReplaceStackRoutes(context.Context, ingressstore.ReplaceInput, audit.Actor) (ingress.Plan, error) {
 	return ingress.Plan{}, nil
 }
 
-func (f *fakeIngress) ReleaseStack(context.Context, string, string, string) error { return nil }
-func (f *fakeIngress) Notify(string)                                              {}
+func (f *fakeIngress) ReleaseStack(context.Context, string, string, audit.Actor) error { return nil }
+func (f *fakeIngress) Notify(string)                                                   {}
 
 func (f *fakeIngress) HeldRoutes(context.Context, string, string) ([]ingress.Route, error) {
 	return f.held, f.heldErr

@@ -61,6 +61,43 @@ func claimAudits(t *testing.T, f *envFix, action string) int {
 	return n
 }
 
+// claimActors are the actor ID and the actor name of each audit row of action, oldest first.
+func claimActors(t *testing.T, f *envFix, action string) [][2]string {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT actor_id, actor_name FROM audit_log WHERE action = ? ORDER BY seq`, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out [][2]string
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, [2]string{id, name})
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// wantNamedActor fails the test unless the rows of action are each by the person with their display name, and not
+// by their ID in the name column.
+func wantNamedActor(t *testing.T, f *envFix, action, name string) {
+	t.Helper()
+	rows := claimActors(t, f, action)
+	if len(rows) == 0 {
+		t.Fatalf("no %s row", action)
+	}
+	for _, r := range rows {
+		if r[1] != name || r[0] == "" || r[0] == name {
+			t.Errorf("%s actor (id, name) = %v, want the user's ID and the name %q", action, r, name)
+		}
+	}
+}
+
 // jobOf waits for the job and returns it whole, with the messages of its items.
 func jobOf(t *testing.T, f *envFix, jobID string) jobs.Job {
 	t.Helper()
@@ -125,6 +162,8 @@ func TestIngressClaimsOnManualDeploy(t *testing.T) {
 		if n := claimAudits(t, f, "ingress.claim_replaced"); n != 1 {
 			t.Errorf("ingress.claim_replaced rows = %d, want 1", n)
 		}
+		// The row names the person by their display name as well as their ID.
+		wantNamedActor(t, f, "ingress.claim_replaced", "envadmin-1")
 		creates := f.fake.ServiceCreates()
 		if len(creates) == 0 {
 			t.Fatal("no service was created")

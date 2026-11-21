@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/stacks"
@@ -30,8 +31,8 @@ func (d Deps) writeClaims(ctx context.Context, envID, stackID string, cw *ClaimW
 		return false, "", nil
 	}
 	_, err = d.Ingress.ReplaceStackRoutes(ctx, ingressstore.ReplaceInput{
-		EnvID: envID, StackID: stackID, Actor: cw.Actor, Decls: cw.Decls, CanView: cw.CanView,
-	})
+		EnvID: envID, StackID: stackID, Actor: cw.Actor.ID, Decls: cw.Decls, CanView: cw.CanView,
+	}, cw.Actor)
 	var refused *ingressstore.RefusedError
 	switch {
 	case err == nil:
@@ -68,8 +69,8 @@ func (d Deps) revertClaims(ctx context.Context, envID, stackID string, cw *Claim
 	ctx = context.WithoutCancel(ctx)
 	if cw.HasGood {
 		_, err := d.Ingress.ReplaceStackRoutes(ctx, ingressstore.ReplaceInput{
-			EnvID: envID, StackID: stackID, Actor: cw.Actor, Decls: cw.Restore, CanView: cw.CanView,
-		})
+			EnvID: envID, StackID: stackID, Actor: cw.Actor.ID, Decls: cw.Restore, CanView: cw.CanView,
+		}, cw.Actor)
 		if err == nil {
 			return
 		}
@@ -108,7 +109,7 @@ func LastGoodDeclarations(ctx context.Context, repo Repo, st Stack) ([]ingress.D
 // while the others go on. A stack that no longer exists is skipped; a stack whose last good revision cannot be read or
 // loaded is left as it is, and reported, because releasing the names of a stack that may be running would be worse than
 // holding them a while longer.
-func RestoreInterruptedClaims(ctx context.Context, repo Repo, in Ingress, interrupted []InterruptedStack, actor string) error {
+func RestoreInterruptedClaims(ctx context.Context, repo Repo, in Ingress, interrupted []InterruptedStack, actor audit.Actor) error {
 	if in == nil {
 		return nil
 	}

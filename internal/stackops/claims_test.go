@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
@@ -45,7 +46,7 @@ func (o *claimOps) World(ctx context.Context, envID string, canView func(string)
 	return o.st.World(ctx, envID, canView)
 }
 
-func (o *claimOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput) (ingress.Plan, error) {
+func (o *claimOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput, _ audit.Actor) (ingress.Plan, error) {
 	plan, err := o.st.ReplaceStackRoutes(ctx, in)
 	if err != nil {
 		return plan, err
@@ -62,8 +63,8 @@ func (o *claimOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.Repla
 	return plan, nil
 }
 
-func (o *claimOps) ReleaseStack(ctx context.Context, envID, stackID, actor string) error {
-	return o.st.ReleaseStack(ctx, envID, stackID, actor, nil)
+func (o *claimOps) ReleaseStack(ctx context.Context, envID, stackID string, actor audit.Actor) error {
+	return o.st.ReleaseStack(ctx, envID, stackID, actor.ID, nil)
 }
 
 func (o *claimOps) Notify(envID string) { o.st.Notify(envID) }
@@ -210,7 +211,7 @@ func (f *claimFix) write(t *testing.T, st stackops.Stack, compose string, files 
 		t.Fatalf("LastGoodDeclarations: %v", err)
 	}
 	return &stackops.ClaimWrite{
-		Decls: declsOf(t, compose, st.Target, files...), Restore: restore, HasGood: hasGood, Actor: "user:test",
+		Decls: declsOf(t, compose, st.Target, files...), Restore: restore, HasGood: hasGood, Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"},
 	}
 }
 

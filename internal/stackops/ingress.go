@@ -6,6 +6,7 @@ package stackops
 import (
 	"context"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/stacks"
@@ -23,11 +24,11 @@ type Ingress interface {
 	// environment's holder only where canView allows.
 	World(ctx context.Context, envID string, canView func(string) bool) (ingress.World, error)
 	// ReplaceStackRoutes makes the claims of a stack what its declarations say. It records its own audit row
-	// (ingress.claim_replaced) in the transaction of the change.
-	ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput) (ingress.Plan, error)
+	// (ingress.claim_replaced), as actor, in the transaction of the change.
+	ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput, actor audit.Actor) (ingress.Plan, error)
 	// ReleaseStack lets go of every hostname a stack holds. It records its own audit row
-	// (ingress.claim_released) in the transaction of the change.
-	ReleaseStack(ctx context.Context, envID, stackID, actor string) error
+	// (ingress.claim_released), as actor, in the transaction of the change.
+	ReleaseStack(ctx context.Context, envID, stackID string, actor audit.Actor) error
 	// Notify wakes the reconciler of the environment, for a change the store did not make itself (a stack deleted,
 	// whose claims went with its row).
 	Notify(envID string)
@@ -74,8 +75,9 @@ type ClaimWrite struct {
 	// (a first deploy): a failed deploy then releases every claim.
 	Restore []ingress.Declaration
 	HasGood bool
-	// Actor names who the write is audited as: a user id, or "system:..." for a deploy nobody started.
-	Actor string
+	// Actor is who the write is audited as: the person with their ID and display name, or a system actor
+	// ("system:...") for a deploy nobody started.
+	Actor audit.Actor
 	// CanView says which environments the caller may see, for the message of a refusal that names a holder; nil
 	// names none.
 	CanView func(envID string) bool
