@@ -192,7 +192,9 @@ export function ServiceHeaderActions({ envId, detail }: ServiceHeaderActionsProp
             serviceId={detail.id}
             name={detail.name}
             muted={detail.muted}
-            needs={needs}
+            // A mute is a TierPlan-side alert setting, not a write to the service, so the proxy keeps it for
+            // whoever may control services (D-29 lists the refused writes).
+            needs={controlNeeds}
           />
           <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copyId()}>
             {t("servicedetail.actions.copyId")}

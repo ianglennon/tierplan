@@ -242,7 +242,8 @@ function RowActions({
               serviceId={service.id}
               name={service.name}
               muted={service.restartLoop.state === "muted"}
-              needs={needs}
+              // Not a write to the service: the proxy keeps the mute for whoever may control services.
+              needs={controlNeeds}
             />
           ) : null}
           <UpdateMenuItems

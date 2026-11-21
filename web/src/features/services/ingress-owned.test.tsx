@@ -54,6 +54,13 @@ beforeEach(() => {
       image: "tierplan/ingress:1",
       ingress: true,
       hasPreviousSpec: true,
+      restartLoop: {
+        state: "flagged",
+        count: 4,
+        windowMinutes: 10,
+        latestError: "task: non-zero exit (1)",
+        since: "2026-10-14T09:00:00Z",
+      },
     }),
   ];
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 1 } } });
@@ -146,6 +153,14 @@ describe("the services list: the ingress proxy is read-only", () => {
       expect(item.getAttribute("aria-disabled")).toBe("true");
     }
     expect(screen.getAllByText(REASON).length).toBeGreaterThan(0);
+  });
+
+  it("keeps Mute restart-loop alerts available on the proxy's row, which is not a write", async () => {
+    mount();
+    await openMenu("tierplan-ingress");
+    const mute = await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" });
+    expect(mute.getAttribute("aria-disabled")).toBeNull();
+    expect(mute.hasAttribute("data-disabled")).toBe(false);
   });
 
   it("leaves a plain row's menu enabled", async () => {

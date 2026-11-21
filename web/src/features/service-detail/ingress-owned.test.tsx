@@ -217,6 +217,16 @@ describe("the header actions of the ingress proxy (UI-SPEC S3)", () => {
     expect(screen.getAllByText(REASON).length).toBeGreaterThan(0);
   });
 
+  it("keeps Mute restart-loop alerts available in the menu, which is not a write", async () => {
+    proxy();
+    renderPage();
+    await screen.findByRole("heading", { name: "tierplan-ingress" });
+    await openMore();
+    const mute = await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" });
+    expect(mute.getAttribute("aria-disabled")).toBeNull();
+    expect(mute.hasAttribute("data-disabled")).toBe(false);
+  });
+
   it("opens the reason on focus", async () => {
     proxy();
     renderPage();
