@@ -79,6 +79,7 @@ func (d Deps) RebuildLive(ctx context.Context, envID string, st Stack, o Rebuild
 
 // checkRebuilt is the check every stack passes, held against a rebuilt file: the first error is the rebuild's.
 func checkRebuilt(ctx context.Context, st Stack, res rebuild.Result, beside stacks.WorkingCopy) error {
+	// ingress: unattached, rebuild is never attached (D-20)
 	check := stacks.Check(ctx, stacks.CheckInput{
 		Name: st.Name, Target: st.Target, Copy: composeBeside(beside, res.YAML),
 	})
@@ -317,6 +318,7 @@ func hashLabel(in rebuild.StandaloneInput, o rebuild.Object) string {
 // not hold the object (the default network a file leaves implicit is always held) is a rebuild that cannot be used.
 func hashOfObject(ctx context.Context, st Stack, res rebuild.Result, o rebuild.Object, beside stacks.WorkingCopy) (string, error) {
 	copy := composeBeside(beside, res.YAML)
+	// ingress: unattached, rebuild is never attached (D-20)
 	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: copy})
 	if err != nil {
 		var refused *stacks.NotDeployableError

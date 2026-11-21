@@ -208,6 +208,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.log().Warn("a standalone host could not be written to before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
+	// ingress: unattached, the standalone attach is Phase 25
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy, IngressPolicy: in.IngressPolicy})
 	if checked.Loaded == nil || checked.Problems.Errors() > 0 {
 		d.log().Warn("a standalone stack no longer passes its check at deploy time", "environment", in.EnvID, "stack", in.Stack.Name)

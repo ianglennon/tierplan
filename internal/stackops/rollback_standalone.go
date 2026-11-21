@@ -35,6 +35,7 @@ func (d Deps) PrepareRollbackStandaloneWith(ctx context.Context, st Stack, targe
 	refuse := func(stage string, err error) error {
 		return &PrepareError{Stage: stage, Err: err, Masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
 	}
+	// ingress: unattached, the standalone attach is Phase 25
 	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: target.Copy, IngressPolicy: policy})
 	if err != nil {
 		return RollbackPlan{}, refuse(PrepareLoad, err)

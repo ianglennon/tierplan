@@ -169,6 +169,7 @@ func countServices(rv *Review) {
 // loadRebuilt loads the compose file of a rebuilt definition the way every deploy loads one (stacks.Deployable). A
 // file that does not load is a *RebuildError naming the first problem.
 func loadRebuilt(ctx context.Context, name string, target stacks.Target, copy stacks.WorkingCopy) (*stacks.Loaded, error) {
+	// ingress: unattached, adopt is never attached (D-20)
 	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: name, Target: target, Copy: copy})
 	if err != nil {
 		var refused *stacks.NotDeployableError

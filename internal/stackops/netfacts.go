@@ -103,6 +103,7 @@ func loadFacts(ctx context.Context, check func(context.Context, stacks.CheckInpu
 	if check == nil {
 		check = stacks.Check
 	}
+	// ingress: unattached, an external network adds no subnet
 	res := check(ctx, stacks.CheckInput{Name: s.Name, Target: s.Target, Copy: snap.Copy, Deadline: netFactsCheckDeadline})
 	if ctx.Err() != nil {
 		// A check cut short by the caller says nothing about the stack, and is not remembered.

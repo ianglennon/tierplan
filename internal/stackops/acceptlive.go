@@ -110,6 +110,7 @@ func (d Deps) AcceptLive(ctx context.Context, repo Repo, in AcceptLiveInput) (Ac
 // baseOf is the base a rebuild is made on: the revision's compose file loaded as every deploy loads it, with the
 // values of its secret variables and the text of its images.
 func baseOf(ctx context.Context, st Stack, copy stacks.WorkingCopy) (*rebuild.Base, error) {
+	// ingress: unattached, accepting live state compares without TierPlan's attachment (D-20)
 	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: copy})
 	if err != nil {
 		var refused *stacks.NotDeployableError
