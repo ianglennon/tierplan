@@ -565,6 +565,13 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		}
 	}()
 
+	// Whether ingress is on was read before the lock, and a switch-on or switch-off can land in between. It is read
+	// again now that no other operation can run: a changed answer converts the stack again, so the claims written
+	// below and the services the job makes agree with the environment as it is now.
+	if loaded, err = reloadForAttach(ctx, d, st, draft.Copy, pol, attach, loaded); err != nil {
+		return nil, err
+	}
+
 	// The stack's hostname claims are written by the job, under this lock, with the routes this revision declares and the
 	// last good revision's to put back if it fails (D-15, D-16). They are read now, before the new revision exists.
 	claims, err := claimWriteFor(ctx, d, p, viewer, st, loaded.Project)
@@ -617,6 +624,35 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		return nil, err
 	}
 	return out, nil
+}
+
+// sameAttach says whether two attachments are the same: both none, or the same network.
+func sameAttach(a, b *stacks.IngressAttach) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Network == b.Network
+}
+
+// reloadForAttach reads whether ingress is on again, holding the environment's lock, and loads the draft again when the
+// answer is not the one it was loaded with (was). A read that fails keeps the load it has, as the read before the lock
+// does for a copy that names no ingress label, and refuses a copy that does.
+func reloadForAttach(ctx context.Context, d StacksDeps, st stackops.Stack, copy stacks.WorkingCopy, pol *stacks.IngressPolicy, was *stacks.IngressAttach, loaded *stacks.Loaded) (*stacks.Loaded, error) {
+	now, err := ingressAttachFor(ctx, d, st.EnvID, st.Target)
+	if err != nil {
+		if declaresIngress(copy) {
+			return nil, deployableProblem(d, st.EnvID, err)
+		}
+		return loaded, nil
+	}
+	if sameAttach(was, now) {
+		return loaded, nil
+	}
+	again, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: copy, Deadline: d.CheckDeadline, IngressPolicy: pol, Ingress: now})
+	if err != nil {
+		return nil, deployableProblem(d, st.EnvID, err)
+	}
+	return again, nil
 }
 
 // declaresIngress reports whether the working copy mentions an ingress label (ingress.LabelPrefix) in any file or
@@ -873,6 +909,21 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 			release()
 		}
 	}()
+
+	// The revision was converted with the answer to whether ingress is on that was read before the lock. It is read
+	// again now that no other operation can run, and the revision is prepared again when it changed (a standalone
+	// host has no attachment).
+	if !standalone {
+		attach, aerr := ingressAttachFor(ctx, d, st.EnvID, st.Target)
+		if aerr != nil {
+			return nil, rollbackPrepareProblem(&stackops.PrepareError{Stage: stackops.PrepareIngress, Err: aerr, Masker: masker}, masker)
+		}
+		if !sameAttach(prep.Attach, attach) {
+			if prep, err = d.ops().PrepareRollbackWith(ctx, st, target, pins, pol); err != nil {
+				return nil, rollbackPrepareProblem(err, masker)
+			}
+		}
+	}
 
 	// The review was made against a deployed revision. A deploy that ended after it took the lock off before
 	// the job read as finished, so reading the newest good revision now, holding the lock, is the answer no

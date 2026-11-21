@@ -58,6 +58,9 @@ type RollbackPlan struct {
 	// Platforms are the platforms the revision ran with, by swarm service name, exactly as it recorded them (08-33).
 	// Nil for a revision made before they were recorded.
 	Platforms map[string][]swarm.Platform
+	// Attach is the attachment to the ingress network the project was converted with: nil when none was made. A caller
+	// that takes the operation lock after preparing compares it with a fresh read, and prepares again when it changed.
+	Attach *stacks.IngressAttach
 }
 
 // PrepareRollback checks, loads and converts the revision to restore, and checks that it knows an image for every
@@ -112,7 +115,7 @@ func (d Deps) PrepareRollbackWith(ctx context.Context, st Stack, target Snapshot
 	if _, err := RestoredPins(plan.Services, pins); err != nil {
 		return RollbackPlan{}, refuse(PreparePins, err)
 	}
-	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: plan, Pins: pins, Platforms: target.Platforms}, nil
+	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: plan, Pins: pins, Platforms: target.Platforms, Attach: attach}, nil
 }
 
 // RestoredPins are the images a roll back sends: for each service with an image, the reference the

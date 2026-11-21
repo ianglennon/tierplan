@@ -196,6 +196,9 @@ type authFixture struct {
 	stackDeps  api.StacksDeps
 	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
 	stackBeforeJob func(context.Context)
+	// stackBeforeLock is called just before a stack operation takes the environment's lock, which is after the
+	// operation read everything it judged the request with and before it writes anything (plan 24 review, IN-05).
+	stackBeforeLock func(envID string)
 	// ingressNotifier, when set, is the notifier of the stack routes' ingress store: a test subscribes to hear which
 	// environments the stack pipeline woke the reconciler for (plan 24-25).
 	ingressNotifier *ingress.Notifier
@@ -632,6 +635,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			f.stackLocks = stackops.NewLocks()
 		}
 		stackDeps.Locks, stackDeps.Envs = f.stackLocks, f.envSvc
+		if f.stackBeforeLock != nil {
+			stackDeps.Locks = beforeLock{Locks: f.stackLocks, before: f.stackBeforeLock}
+		}
 		stackDeps = stackDeps.WithDeployCancels() // as the server does, before the deps are copied
 		f.stackDeps = stackDeps
 		// The image update routes deploy a stack through the stack's own engine, so they hold the same deps and the same lock.
@@ -1629,4 +1635,15 @@ func atOnceWait() dockerx.AllocationWait {
 		ch <- time.Time{}
 		return ch
 	}}
+}
+
+// beforeLock is the operation lock with a hook that runs just before an environment's lock is taken.
+type beforeLock struct {
+	*stackops.Locks
+	before func(envID string)
+}
+
+func (l beforeLock) TryAcquire(envID string, h stackops.Holder) (func(), stackops.Holder, bool) {
+	l.before(envID)
+	return l.Locks.TryAcquire(envID, h)
 }
