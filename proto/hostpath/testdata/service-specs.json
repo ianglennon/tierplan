@@ -569,5 +569,89 @@
         }
       }
     }
+  },
+  {
+    "name": "host-mode port 80",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27"}
+      },
+      "EndpointSpec": {
+        "Ports": [{"Protocol": "tcp", "TargetPort": 8080, "PublishedPort": 80, "PublishMode": "host"}]
+      }
+    }
+  },
+  {
+    "name": "host-mode port 443",
+    "escalates": false,
+    "spec": {
+      "Name": "web",
+      "TaskTemplate": {
+        "ContainerSpec": {"Image": "nginx:1.27"}
+      },
+      "EndpointSpec": {
+        "Ports": [{"Protocol": "tcp", "TargetPort": 8443, "PublishedPort": 443, "PublishMode": "host"}]
+      }
+    }
+  },
+  {
+    "name": "tierplan-ingress proxy spec",
+    "escalates": false,
+    "spec": {
+      "Name": "tierplan-ingress",
+      "Labels": {
+        "tierplan.component": "ingress",
+        "tierplan.keep": "true",
+        "tierplan.updates": "ignore"
+      },
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "ghcr.io/ianglennon/tierplan-ingress:edge",
+          "User": "1000:1000",
+          "Labels": {
+            "tierplan.component": "ingress",
+            "tierplan.keep": "true",
+            "tierplan.updates": "ignore"
+          },
+          "Env": [
+            "TIERPLAN_INGRESS_URL=wss://tierplan.example:7480/ingress/connect",
+            "TIERPLAN_INGRESS_PIN=sha256/AAAA",
+            "TIERPLAN_INGRESS_JOIN_TOKEN_FILE=/run/secrets/tierplan-ingress-token",
+            "TIERPLAN_INGRESS_NODE_ID={{.Node.ID}}"
+          ],
+          "StopGracePeriod": 30000000000,
+          "Healthcheck": {"Test": ["CMD", "/usr/local/bin/tierplan-ingress", "healthcheck"]},
+          "Secrets": [{
+            "File": {"Name": "tierplan-ingress-token", "UID": "1000", "GID": "1000", "Mode": 256},
+            "SecretName": "tierplan-ingress-token-g1-abc123def456-0123abcd"
+          }],
+          "Mounts": [{
+            "Type": "volume",
+            "Source": "tierplan-ingress-cache",
+            "Target": "/var/lib/tierplan-ingress",
+            "VolumeOptions": {
+              "Labels": {
+                "tierplan.component": "ingress",
+                "tierplan.keep": "true",
+                "tierplan.updates": "ignore"
+              }
+            }
+          }]
+        },
+        "Networks": [{"Target": "tierplan-ingress"}],
+        "LogDriver": {"Name": "json-file", "Options": {"max-size": "10m", "max-file": "3"}}
+      },
+      "Mode": {"Global": {}},
+      "UpdateConfig": {"Parallelism": 1, "FailureAction": "rollback", "Order": "stop-first", "Monitor": 60000000000},
+      "RollbackConfig": {"Parallelism": 1, "Order": "stop-first", "Monitor": 60000000000},
+      "EndpointSpec": {
+        "Ports": [
+          {"Protocol": "tcp", "TargetPort": 80, "PublishedPort": 80, "PublishMode": "host"},
+          {"Protocol": "tcp", "TargetPort": 443, "PublishedPort": 443, "PublishMode": "host"}
+        ]
+      }
+    }
   }
 ]
