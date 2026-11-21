@@ -12974,6 +12974,8 @@ export interface components {
             externals: string[] | null;
             /** @description True when the stack has a saved draft with changes; a removal deletes it with the definition unless the definition is kept */
             hasDraft: boolean;
+            /** @description The hostnames the removal releases (LBL-06), each once and sorted. Empty when the stack holds none */
+            hostnames: string[] | null;
             /** @description The networks that carry this stack's own labels */
             networks: string[] | null;
             /** @description The nodes that did not answer, whose volumes are left out of the list */

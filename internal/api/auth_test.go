@@ -37,6 +37,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -195,6 +196,9 @@ type authFixture struct {
 	stackDeps  api.StacksDeps
 	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
 	stackBeforeJob func(context.Context)
+	// ingressNotifier, when set, is the notifier of the stack routes' ingress store: a test subscribes to hear which
+	// environments the stack pipeline woke the reconciler for (plan 24-25).
+	ingressNotifier *ingress.Notifier
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
 	stackReadEnv func(context.Context, string) error
 	// stackClock is the clock the waits of a stack deploy run on; nil is the wall clock (plan 12-23).
@@ -615,7 +619,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Updates:   updateSvc,
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
 			// The ingress store of a real server: the editor check and the review judge a stack's hostnames through it, and the tests seed it.
-			Ingress: ingressstore.New(ingressstore.Deps{St: f.st, Vault: f.v, Now: f.clk.now}),
+			Ingress: ingressstore.New(ingressstore.Deps{St: f.st, Vault: f.v, Now: f.clk.now, Notifier: f.ingressNotifier}),
 			// The address reader of a real server, which the editor's check compares an explicit subnet with.
 			AddressSpaces: addressSpaces,
 			GitConns:      gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,

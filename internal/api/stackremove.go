@@ -51,6 +51,7 @@ type RemovalPreviewBody struct {
 	Externals    []string            `json:"externals" doc:"The networks, secrets, configs and volumes the compose file names as external. A removal never touches them"`
 	NotReporting []string            `json:"notReporting" doc:"The nodes that did not answer, whose volumes are left out of the list"`
 	HasDraft     bool                `json:"hasDraft" doc:"True when the stack has a saved draft with changes; a removal deletes it with the definition unless the definition is kept"`
+	Hostnames    []string            `json:"hostnames" doc:"The hostnames the removal releases (LBL-06), each once and sorted. Empty when the stack holds none"`
 }
 
 // RemovalPreviewOutput wraps RemovalPreviewBody for huma.
@@ -163,7 +164,7 @@ func removalPreview(ctx context.Context, d StacksDeps, in *RemovalPreviewInput) 
 	return &RemovalPreviewOutput{CacheControl: "no-store", Body: RemovalPreviewBody{
 		Services: preview.Services, Containers: preview.Containers, Networks: preview.Networks,
 		Secrets: preview.Secrets, Configs: preview.Configs, Volumes: removalVolumes(preview.Volumes),
-		Externals: preview.Externals, NotReporting: preview.NotReporting, HasDraft: preview.HasDraft,
+		Externals: preview.Externals, NotReporting: preview.NotReporting, HasDraft: preview.HasDraft, Hostnames: nonNil(preview.Hostnames),
 	}}, nil
 }
 
@@ -301,6 +302,11 @@ func recordRemoveEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	definition := "kept"
 	if rres.DefinitionDeleted {
 		definition = "deleted"
+		// The stack's claims went with its row if the release had not already taken them: tell the reconciler either way
+		// (D-17), so a name that was held is served by nobody at once.
+		if ops := d.ingressOps(); ops != nil {
+			ops.Notify(st.EnvID)
+		}
 	}
 	details := map[string]string{
 		"stack": st.Name, "volumes": itoa(int64(rres.Volumes)), "kept": itoa(int64(rres.KeptVolumes)),

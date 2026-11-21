@@ -45,6 +45,7 @@ type removalPreviewAnswer struct {
 	} `json:"volumes"`
 	Externals []string `json:"externals"`
 	HasDraft  bool     `json:"hasDraft"`
+	Hostnames []string `json:"hostnames"`
 }
 
 // removeBody is the body of a removal that ticks no volume.
