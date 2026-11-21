@@ -257,6 +257,12 @@ describe("the page frame", () => {
     renderAt();
     expect(await screen.findByText("TierPlan (this instance)")).toBeTruthy();
   });
+
+  it("marks a TierPlan ingress proxy container with the badge", async () => {
+    answer = () => Response.json(detail({ name: "tierplan-ingress.abc.1", selfKind: "ingress" }));
+    renderAt();
+    expect(await screen.findByText("TierPlan ingress")).toBeTruthy();
+  });
 });
 
 describe("the header shows the container's update state (12-08)", () => {
@@ -673,7 +679,7 @@ describe("the Shell tab", () => {
 });
 
 describe("the Shell tab on TierPlan's own containers (plan 04-23, D-36)", () => {
-  it.each(["server", "agent"] as const)(
+  it.each(["server", "agent", "ingress"] as const)(
     "is unavailable for %s containers, with the reason, and still shown",
     async (kind) => {
       me = makeMe({ envs: { [ENV]: "operator" }, extras: { [ENV]: ["containers.exec"] } });

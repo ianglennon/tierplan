@@ -1128,6 +1128,11 @@ describe("StackList: flags on unmanaged stacks", () => {
           {},
           { owner: "agent", adoptable: false, reason: "This stack runs TierPlan's agent." },
         ),
+        unmanaged(
+          "edge",
+          {},
+          { owner: "ingress", adoptable: false, reason: "This stack runs TierPlan's ingress." },
+        ),
         unmanaged("blog"),
       ],
     };
@@ -1137,6 +1142,7 @@ describe("StackList: flags on unmanaged stacks", () => {
     expect(within(own).getByText("Unmanaged")).toBeTruthy();
     expect(within(own).getByText("TierPlan")).toBeTruthy();
     expect(within(rowOfName("agents")).getByText("TierPlan agent")).toBeTruthy();
+    expect(within(rowOfName("edge")).getByText("TierPlan ingress")).toBeTruthy();
     expect(within(rowOfName("blog")).queryByText(/^TierPlan/)).toBeNull();
 
     fireEvent.focus(within(own).getByText("TierPlan"));

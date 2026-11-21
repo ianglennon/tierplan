@@ -699,6 +699,17 @@ describe("container list: columns and cells", () => {
     expect(nameCell("web")).toBe("web");
   });
 
+  it("badges a TierPlan ingress proxy container", async () => {
+    answer = () =>
+      Response.json(body([row("tierplan-ingress.abc.1", { selfKind: "ingress" }), row("web")]));
+    mount({ group: "none" });
+    await screen.findByText("web");
+    const nameCell = (name: string) =>
+      (screen.getByText(name).closest("td") as HTMLElement).textContent;
+    expect(nameCell("tierplan-ingress.abc.1")).toBe("tierplan-ingress.abc.1TierPlan ingress");
+    expect(nameCell("web")).toBe("web");
+  });
+
   it("shows the first two ports and +n for the rest, and a dash for none", async () => {
     answer = () =>
       Response.json(
@@ -978,6 +989,20 @@ describe("container list: selection", () => {
       Response.json(body([row("tierplan", { selfKind: "server", isSelf: true }), ...ROWS]));
     await mountFlat();
     const own = box("tierplan");
+    expect(own.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(own);
+    expect(isOn(own)).toBe("false");
+    expect(selectedCount()).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all containers" }));
+    expect(within(screen.getByRole("toolbar")).getByText("4 selected")).toBeTruthy();
+    expect(isOn(own)).toBe("false");
+  });
+
+  it("gives an ingress proxy container a checkbox that cannot be ticked, and keeps it out of select all", async () => {
+    answer = () =>
+      Response.json(body([row("tierplan-ingress.abc.1", { selfKind: "ingress" }), ...ROWS]));
+    await mountFlat();
+    const own = box("tierplan-ingress.abc.1");
     expect(own.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(own);
     expect(isOn(own)).toBe("false");

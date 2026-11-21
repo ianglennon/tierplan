@@ -600,6 +600,40 @@ describe("ActionDialog on TierPlan's own containers", () => {
   });
 
   it.each([
+    ["stop", "Stop", "Stopping"],
+    ["kill", "Kill", "Killing"],
+    ["restart", "Restart", "Restarting"],
+    ["pause", "Pause", "Pausing"],
+    ["remove", "Remove", "Removing"],
+  ] as const)(
+    "asks for the name of an ingress proxy container to %s it",
+    async (verb, word, gerund) => {
+      mount(
+        [
+          row("tierplan-ingress.abc.1", {
+            selfKind: "ingress",
+            state: verb === "remove" ? "exited" : "running",
+          }),
+        ],
+        {
+          verb,
+        },
+      );
+      const dialog = await dialogOf(`${word} tierplan-ingress.abc.1?`);
+      expect(dialog.textContent).toContain(
+        `This is a TierPlan ingress proxy on node-1. ${gerund} it stops HTTPS routing through node-1 until Swarm replaces it.`,
+      );
+      const confirm = within(dialog).getByRole("button", { name: `${word} proxy` });
+      expect(confirm.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.change(within(dialog).getByLabelText("Type tierplan-ingress.abc.1 to confirm"), {
+        target: { value: "tierplan-ingress.abc.1" },
+      });
+      expect(confirm.getAttribute("aria-disabled")).not.toBe("true");
+      expect(within(dialog).queryByRole("button", { name: "Advanced" })).toBeNull();
+    },
+  );
+
+  it.each([
     ["restart", "Restart tierplan?", "Restarting it", "Restart TierPlan"],
     ["pause", "Pause tierplan?", "Pausing it", "Pause TierPlan"],
     ["remove", "Remove tierplan?", "Removing it", "Remove TierPlan"],

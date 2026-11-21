@@ -238,11 +238,13 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
 }
 
 // UnmanagedName is the Name cell of a stack found on the engine: the name as a link to its read-only page, then the
-// Unmanaged badge and, for TierPlan's own stack or an agent's, the badge that says so. The badges stay after a
-// truncated name. The address is built by the router from the name, never concatenated.
+// Unmanaged badge and, for TierPlan's own stack, an agent's or its ingress proxy's, the badge that says so. The
+// badges stay after a truncated name. The address is built by the router from the name, never concatenated.
 function UnmanagedName({ row }: { row: StackRow }) {
   const t = useT();
-  const owner = row.unmanaged?.owner;
+  // The list's contract names tierplan and agent; the page's also names ingress, which discovery never puts in
+  // the list. Reading it as a string keeps the badge ready for it without a second source of the wording.
+  const owner: string | undefined = row.unmanaged?.owner;
   return (
     <span className="flex min-w-0 items-center gap-2">
       <Link
@@ -253,7 +255,7 @@ function UnmanagedName({ row }: { row: StackRow }) {
         <TruncatedText>{row.name}</TruncatedText>
       </Link>
       <UnmanagedBadge orphan={row.unmanaged?.orphan} />
-      {owner === "tierplan" || owner === "agent" ? (
+      {owner === "tierplan" || owner === "agent" || owner === "ingress" ? (
         <Tooltip>
           <TooltipTrigger asChild>
             <Badge variant="outline" className="shrink-0">

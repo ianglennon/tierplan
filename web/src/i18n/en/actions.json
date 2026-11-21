@@ -212,6 +212,7 @@
     "own": {
       "server": "This is TierPlan's own container. {{gerund}} it cuts TierPlan off from this host, and you can't start it again from here.",
       "agent": "This is the TierPlan agent on {{node}}. {{gerund}} it cuts TierPlan off from {{node}}.",
+      "ingress": "This is a TierPlan ingress proxy on {{node}}. {{gerund}} it stops HTTPS routing through {{node}} until Swarm replaces it.",
       "gerund": {
         "stop": "Stopping",
         "kill": "Killing",
@@ -233,6 +234,13 @@
           "restart": "Restart agent",
           "pause": "Pause agent",
           "remove": "Remove agent"
+        },
+        "ingress": {
+          "stop": "Stop proxy",
+          "kill": "Kill proxy",
+          "restart": "Restart proxy",
+          "pause": "Pause proxy",
+          "remove": "Remove proxy"
         }
       }
     },
