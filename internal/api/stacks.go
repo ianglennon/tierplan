@@ -126,6 +126,10 @@ type StacksDeps struct {
 	// whether one can be served, is still to be issued or is waiting. The review never reads a key or a chain from it.
 	// Nil leaves the certificate rows out of the review.
 	IngressCerts *ingresscert.Store
+	// IngressRoutes is what the state of a stack's routes is read from besides the store and the engine: the reconciler's
+	// current bundle and skipped list, and the ingress nodes (D-24). Nil leaves a route pending once the service runs and
+	// is attached.
+	IngressRoutes RouteSources
 	// Clock and ConvergeTimeout are what a swarm deploy waits on and for: the clock its polls and
 	// its timeout run on (nil is the wall clock), and how long each service gets to settle (zero is
 	// ten minutes; TIERPLAN_STACK_CONVERGE_TIMEOUT).
@@ -488,6 +492,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackResources(r, d)
 	registerStackHistory(r, d, newChangesLimiter())
 	registerStackDrift(r, d, newDriftLimiter())
+	registerStackRoutes(r, d)
 	registerUnmanagedStacks(r, d, registerStackLogs(r, d))
 	registerStackAdopt(r, d, newAdoptCheckLimiter())
 }

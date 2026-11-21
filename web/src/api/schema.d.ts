@@ -3628,6 +3628,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What each route of a stack is doing now
+         * @description Answers each route the stack holds with its hostname, path, service and a state: serving, pending, waiting_certificate (with the reason), backend_not_running (stopped is true when the stack is stopped), not_attached or ingress_off. The first of these that holds is the state, in that order of the list: ingress off, then the backend not running, then not attached, then waiting for a certificate, then pending. The state is worked out when asked from the stored claims, the services on the swarm, the proxy's current bundle and what each active node applied; nothing is stored. A stack that holds no route answers an empty list. The answer never carries a certificate, a key or a token. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackRoutes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/services": {
         parameters: {
             query?: never;
@@ -16234,6 +16254,27 @@ export interface components {
              */
             revision?: number;
         };
+        StackRouteBody: {
+            /** @description The route's hostname */
+            hostname: string;
+            /** @description The path prefix the route serves, / for the whole host */
+            path: string;
+            /** @description For waiting_certificate, why the certificate is not served: no_certificate (none yet) or certificate_not_ready (one exists and cannot be served yet). Empty for every other state */
+            reason: string;
+            /** @description The service's name in the compose file */
+            service: string;
+            /**
+             * @description serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. Derived when read, stored nowhere
+             * @enum {string}
+             */
+            state: "serving" | "pending" | "waiting_certificate" | "backend_not_running" | "not_attached" | "ingress_off";
+            /** @description True when state is backend_not_running because the stack is stopped. A stopped stack keeps its hostnames */
+            stopped: boolean;
+        };
+        StackRoutesBody: {
+            /** @description The routes the stack holds, in hostname then path order; empty when it holds none */
+            routes: components["schemas"]["StackRouteBody"][] | null;
+        };
         StackServiceBody: {
             /** @description The containers of a standalone service, by name; empty on a swarm */
             containers: components["schemas"]["StackContainerBody"][] | null;
@@ -25621,6 +25662,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackDeployBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackRoutes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRoutesBody"];
                 };
             };
             /** @description Error */

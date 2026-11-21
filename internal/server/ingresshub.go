@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/auth"
 	"github.com/ianglennon/tierplan/internal/buildinfo"
@@ -94,3 +95,12 @@ func joinDialHosts(sources ...func() []string) func() []string {
 		return hosts
 	}
 }
+
+// routeSources gives the stack routes what the state of a route is read from: the reconciler's bundle and skipped list,
+// and the hub service's node list (D-24).
+type routeSources struct {
+	*ingressrecon.Reconciler
+	*ingresshub.Service
+}
+
+var _ api.RouteSources = routeSources{}

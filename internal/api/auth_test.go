@@ -199,6 +199,8 @@ type authFixture struct {
 	// ingressNotifier, when set, is the notifier of the stack routes' ingress store: a test subscribes to hear which
 	// environments the stack pipeline woke the reconciler for (plan 24-25).
 	ingressNotifier *ingress.Notifier
+	// stackIngressRoutes is what the stack routes' state is read from besides the store and the engine (plan 24-25).
+	stackIngressRoutes api.RouteSources
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
 	stackReadEnv func(context.Context, string) error
 	// stackClock is the clock the waits of a stack deploy run on; nil is the wall clock (plan 12-23).
@@ -611,9 +613,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
 		}
 		stackDeps := api.StacksDeps{
-			IngressCerts: f.ingressCertStore,
-			Logs:         stackLogs,
-			Aggregator:   f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
+			IngressCerts: f.ingressCertStore, IngressRoutes: f.stackIngressRoutes,
+			Logs:       stackLogs,
+			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
 			Updates:   updateSvc,
