@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/moby/moby/api/types/swarm"
@@ -194,3 +195,88 @@ func TestPrepareRollbackRefusesOnAttachReadError(t *testing.T) {
 		t.Errorf("plan = %+v, want none", plan)
 	}
 }
+
+// routedCompose is one routed service, so the review of it with the attachment gives it the ingress network.
+const routedCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+    deploy:
+      labels:
+        tierplan.ingress.host: app.apps.example.com
+        tierplan.ingress.port: "80"
+`
+
+// unroutedCompose is the same stack after its route was removed from the file.
+const unroutedCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+`
+
+// serviceRow is the review's row of one service by its name in the compose file.
+func serviceRow(t *testing.T, rv stackops.Review, short string) stacks.ServiceChange {
+	t.Helper()
+	for _, s := range rv.Services {
+		if s.Short == short {
+			return s
+		}
+	}
+	t.Fatalf("the review has no row for %q: %+v", short, rv.Services)
+	return stacks.ServiceChange{}
+}
+
+// TestReviewShowsIngressJoinAndLeave is D-21: the review converts with the attachment and does not strip it, so a
+// routed service that lacks the network shows the join and a service that lost its last route shows the network
+// leaving. With no attachment given, networks are not part of any change.
+func TestReviewShowsIngressJoinAndLeave(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+
+	// Join: the stack runs without the network and ingress is now on.
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) { c.Networks = append(c.Networks, ingressNetwork()) })
+	st, _ := rig.deployedStack(t, "shop", routedCompose, nil)
+	in := rig.reviewInput(t, st.Name, routedCompose, nil)
+	in.Stack = st
+
+	plain, err := rig.deps.Review(ctx, in)
+	if err != nil {
+		t.Fatalf("review without the attachment: %v", err)
+	}
+	for _, row := range plain.Services {
+		t.Errorf("with no attachment %q is %s, want the stack unchanged: %s", row.Short, row.Change, row.Next)
+	}
+
+	in.Ingress = attachedBy()
+	joined, err := rig.deps.Review(ctx, in)
+	if err != nil {
+		t.Fatalf("review with the attachment: %v", err)
+	}
+	row := serviceRow(t, joined, "web")
+	if row.Change != stacks.ChangeChanged {
+		t.Errorf("join row change = %q, want %q", row.Change, stacks.ChangeChanged)
+	}
+	if !containsText(row.Next, ingress.NetworkName) || containsText(row.Current, ingress.NetworkName) {
+		t.Errorf("join: current = %s\nnext = %s\nwant the network in next only", row.Current, row.Next)
+	}
+
+	// Leave: the stack runs holding the network, and its file no longer declares a route.
+	held := attachedRig(t, attachedCompose)
+	lin := held.reviewInput(t, "shop", unroutedCompose, nil)
+	// The services carry none of TierPlan's labels, so the stack is one taken over and not yet deployed.
+	lin.Stack.Source = stacks.Source{Kind: stacks.SourceAdopted}
+	lin.Stack.Adoption.Pending = true
+	lin.Ingress = attachedBy()
+	left, err := held.deps.Review(ctx, lin)
+	if err != nil {
+		t.Fatalf("review of a service that lost its route: %v", err)
+	}
+	lrow := serviceRow(t, left, "web")
+	if lrow.Change != stacks.ChangeChanged {
+		t.Errorf("leave row change = %q, want %q", lrow.Change, stacks.ChangeChanged)
+	}
+	if !containsText(lrow.Current, ingress.NetworkName) || containsText(lrow.Next, ingress.NetworkName) {
+		t.Errorf("leave: current = %s\nnext = %s\nwant the network in current only", lrow.Current, lrow.Next)
+	}
+}
+
+// containsText reports whether the raw JSON mentions s.
+func containsText(raw []byte, s string) bool { return strings.Contains(string(raw), s) }

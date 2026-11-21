@@ -157,6 +157,12 @@ type ReviewInput struct {
 	// nothing new. The review route sets it in every mode; the rollback and restore modes pass it on to the revision
 	// they restore (plan 18-13).
 	IngressPolicy *stacks.IngressPolicy
+	// Ingress is how a service that declares a route joins the shared ingress network, set by the review route from
+	// Deps.Ingress.AttachFor: non-nil only for a swarm environment whose ingress is on. The review shows the
+	// attachment as the deploy will send it (D-21), so a routed service that lacks the network is a changed
+	// service and one that lost its last route shows the network leaving. A roll back or a restore reads it from
+	// Deps instead (PrepareRollbackWith).
+	Ingress *stacks.IngressAttach
 	// Audit is the store whose audit log names the causes of the drift a deploy reverts (D-24). Nil leaves them out.
 	Audit *store.Store
 	// SkipReverts leaves the Reverts drift part out and its extra read of the engine: the History tab asks for the
@@ -306,7 +312,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		err = d.reviewRollback(ctx, in, &rv)
 		return rv, err
 	}
-	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy, IngressPolicy: in.IngressPolicy})
+	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy, IngressPolicy: in.IngressPolicy, Ingress: in.Ingress})
 	rv.Problems = res.Problems
 	// The two text views are made from what is known when the review ends, whichever way it ends
 	// without an error: a stack that has problems still shows its rendering, and a deployment

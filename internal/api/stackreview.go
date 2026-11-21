@@ -261,6 +261,13 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	} else {
 		ri.IngressPolicy = policy
 	}
+	// The review shows the attachment of a routed service as the deploy will send it (D-21). A read that fails is
+	// advisory here as the policy's is: the review is still made, without the attachment (a deploy gate refuses).
+	if attach, aerr := ingressAttachFor(ctx, d, env.ID, st.Target); aerr != nil {
+		d.Log.Warn("whether ingress is on for an environment could not be read for a stack review", "environment", env.ID, "error", aerr)
+	} else {
+		ri.Ingress = attach
+	}
 	restore := in.Body.Mode == stackops.ReviewModeRestore
 	rollback := in.Body.Mode == stackops.ReviewModeRollback || restore
 	good, haveGood, err := repo.LatestGoodRevision(ctx, st.ID)

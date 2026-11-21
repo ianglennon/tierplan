@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"net/http"
 	"slices"
 	"testing"
 
@@ -109,5 +110,37 @@ func TestDeployDoesNotAttachWhenIngressOff(t *testing.T) {
 		}) {
 			t.Errorf("%s networks = %v, want none of them the ingress network with ingress off", name, networkTargets(spec))
 		}
+	}
+}
+
+// TestReviewRouteShowsTheIngressJoin is D-21 through the route: a stack deployed while ingress was off, reviewed after
+// ingress is switched on, lists its routed service as changed.
+func TestReviewRouteShowsTheIngressJoin(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, withIngressNetwork)
+	seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "shop")
+	f.deployGood(t, admin, st.ID, attachCompose)
+
+	rows := func() map[string]string {
+		a, code, raw := admin.reviewStack(st.ID, `{}`)
+		if code != http.StatusOK {
+			t.Fatalf("review: %d %s", code, raw)
+		}
+		out := map[string]string{}
+		for _, s := range a.Services {
+			out[s.Short] = s.Change
+		}
+		return out
+	}
+	if got := rows(); len(got) != 0 {
+		t.Fatalf("review with ingress off lists %v, want no change", got)
+	}
+	if _, err := f.stackDeps.Ingress.SetEnabled(testsupport.Context(t), e.ID, true, "admin", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := rows(); got["web"] != "changed" || len(got) != 1 {
+		t.Errorf("review with ingress on lists %v, want only web, changed", got)
 	}
 }

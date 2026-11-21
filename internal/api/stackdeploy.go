@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -485,11 +486,21 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	// lists, and leaves no revision behind. The project it returns is the one that is converted,
 	// rendered and deployed.
 	// A routed service joins the shared ingress network exactly when ingress is on for this swarm environment (D-18,
-	// D-19). A read that fails refuses the deploy: converting without the attachment would take a routed service off
-	// the network.
+	// D-19). A read that fails refuses a copy that names an ingress label: converting it without the attachment would
+	// take a routed service off the network. A copy that names none has no routed service, so, as with the policy
+	// above, an unreadable ingress store never refuses it.
 	attach, err := ingressAttachFor(ctx, d, env.ID, st.Target)
 	if err != nil {
-		return nil, deployableProblem(d, env.ID, err)
+		if declaresIngress(draft.Copy) {
+			return nil, deployableProblem(d, env.ID, err)
+		}
+		lg := d.Log
+		if lg == nil {
+			lg = slog.Default()
+		}
+		lg.WarnContext(ctx, "whether ingress is on could not be read; a stack that names no ingress label is deployed without an attachment",
+			"env", env.ID, "stack", st.ID, "error", err)
+		attach = nil
 	}
 	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol, Ingress: attach})
 	if err != nil {
