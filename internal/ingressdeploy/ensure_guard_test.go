@@ -127,8 +127,11 @@ func TestEnsureReplansUnderTheLock(t *testing.T) {
 type urlVar struct{ v atomic.Value }
 
 func newURLVar(s string) *urlVar { u := &urlVar{}; u.v.Store(s); return u }
-func (u *urlVar) get() string    { return u.v.Load().(string) }
-func (u *urlVar) set(s string)   { u.v.Store(s) }
+func (u *urlVar) get() string {
+	s, _ := u.v.Load().(string)
+	return s
+}
+func (u *urlVar) set(s string) { u.v.Store(s) }
 
 // TestEnsureNeverWritesAnUnusableURL: when the ingress URL is empty or is not a wss:// address with a host, the loop records
 // url_unset and writes nothing, whether the service is gone or running: the running proxies keep the spec they have. Once
