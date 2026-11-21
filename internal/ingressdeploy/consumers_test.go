@@ -28,6 +28,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/updates"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -419,6 +420,43 @@ func consumerRows() []consumerRow {
 				t.Errorf("standalone: discovered %+v, want only the shop project", got)
 			}
 		}},
+		{name: "ServiceWorkloads", covers: []string{"ServiceWorkloads", "ContainerWorkloads"}, run: func(t *testing.T, w consumerWorld) {
+			proxy := dockerx.ServiceRow{
+				ID: "svc-proxy", Name: w.spec.Name, Mode: "global", Running: 3, Desired: 3, Image: w.spec.TaskTemplate.ContainerSpec.Image,
+				Labels: w.spec.Labels, Ingress: true,
+			}
+			control := dockerx.ServiceRow{
+				ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1, Image: "registry.example.com/team/web:1",
+				Labels: map[string]string{"team": "core"},
+			}
+			got := updates.ServiceWorkloads([]dockerx.ServiceRow{proxy, control})
+			if len(got) != 1 || got[0].Name != "web" {
+				t.Fatalf("service workloads = %+v, want only the control: the detector offers no update of the proxy", got)
+			}
+			// The label alone is enough to be skipped, with no flag and under any name.
+			proxy.Ingress = false
+			if got := updates.ServiceWorkloads([]dockerx.ServiceRow{proxy, control}); len(got) != 1 || got[0].Name != "web" {
+				t.Errorf("service workloads without the flag = %+v, want only the control", got)
+			}
+			row := func(id string, labels map[string]string) envs.ContainerRow {
+				return envs.ContainerRow{ContainerRow: dockerx.ContainerRow{ID: id, Name: "/" + id, State: "running", Image: "registry.example.com/team/" + id + ":1", Labels: labels}, NodeID: proxyNode, Node: "node-one"}
+			}
+			agg := envs.Aggregate{Containers: []envs.ContainerRow{row("proxy", w.proxyLabels), row("plain", map[string]string{"team": "core"})}}
+			ws := updates.ContainerWorkloads(agg, func(string) (string, bool) { return "", false })
+			if len(ws) != 1 || ws[0].ID != "plain" {
+				t.Errorf("container workloads = %+v, want only the control", ws)
+			}
+		}},
+		{name: "ApplierUpdatable", covers: []string{"NotUpdatableCode"}, run: func(t *testing.T, w consumerWorld) {
+			proxy := dockerx.ServiceRow{ID: "svc-proxy", Name: w.spec.Name, Mode: "global", Labels: w.spec.Labels, Ingress: true}
+			if code := updates.NotUpdatableCode(proxy); code != updates.NotUpdatableIngress {
+				t.Errorf("proxy: refusal %q, want %q", code, updates.NotUpdatableIngress)
+			}
+			// A control with the same mode and no flag is not refused by the row's own rules.
+			if code := updates.NotUpdatableCode(dockerx.ServiceRow{ID: "svc-web", Name: "web", Mode: "global"}); code != "" {
+				t.Errorf("control: refusal %q, want none: the fixture is not in scope of the rule", code)
+			}
+		}},
 	}
 }
 
@@ -430,14 +468,19 @@ var notConsumers = map[string]string{
 	"PortainerMarked": "reads Portainer's marker labels to flag a group Discover has already built; it is a flag on a listed stack and the proxy carries none of those labels",
 }
 
-// scanFiles are the sources the guard reads, relative to this package: the whole of internal/janitor (a
-// directory, non-test files) and the single files of the other consumers. Plan 24-09 task 2 adds the update
-// detector's two files with their rows.
+// scanFiles are the sources the guard reads, relative to the repository root: the whole of internal/janitor (a
+// directory, non-test files) and the single files of the other consumers, the update detector's and the update
+// path's among them.
 var scanFiles = []string{
-	"../janitor",
-	"../envs/orphans.go",
-	"../stackops/discover.go",
+	"internal/janitor",
+	"internal/envs/orphans.go",
+	"internal/stackops/discover.go",
+	"internal/updates/running.go",
+	"internal/updates/apply.go",
 }
+
+// repoRoot is the repository root, seen from this package's directory.
+const repoRoot = "../.."
 
 // sensitiveTypes are the types that carry engine objects or their labels. A parameter of one of them, or a
 // map[string]string, makes an exported function a candidate consumer.
@@ -473,7 +516,8 @@ func paramTypeName(e ast.Expr) string {
 func sourceFiles(t *testing.T) []string {
 	t.Helper()
 	var out []string
-	for _, p := range scanFiles {
+	for _, rel := range scanFiles {
+		p := filepath.Join(repoRoot, rel)
 		fi, err := os.Stat(p)
 		if err != nil {
 			t.Fatalf("scan target %s: %v", p, err)
@@ -576,5 +620,5 @@ func checkEveryConsumerHasARow(t *testing.T) {
 }
 
 // coveredByHand are the functions a row covers that the scan cannot select by their parameters (they take a
-// keep map or a plain value), kept so a stale row is still reported.
-var coveredByHand = map[string]bool{"IsKept": true}
+// keep map, a plain value or an aggregate), kept so a stale row is still reported.
+var coveredByHand = map[string]bool{"IsKept": true, "ContainerWorkloads": true}
