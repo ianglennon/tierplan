@@ -232,8 +232,8 @@ func (f *claimFix) held(t *testing.T, st stackops.Stack) []string {
 	}
 	out := []string{}
 	for _, c := range all {
-		if c.Claim.StackID == st.ID {
-			out = append(out, c.Claim.Hostname)
+		if c.StackID == st.ID {
+			out = append(out, c.Hostname)
 		}
 	}
 	slices.Sort(out)
