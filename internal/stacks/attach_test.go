@@ -169,3 +169,108 @@ func TestAttachKeepsDefaultNetwork(t *testing.T) {
 		t.Errorf("injected = %+v, want web recorded as default-added", inj)
 	}
 }
+
+func TestComponentLabelIsRefused(t *testing.T) {
+	t.Parallel()
+	check := func(compose string, target stacks.Target) []stacks.Problem {
+		res := stacks.Check(context.Background(), stacks.CheckInput{Name: "probe", Target: target, Copy: copyOf(compose)})
+		var out []stacks.Problem
+		for _, p := range res.Problems {
+			if p.Code == "ingress_component_label" {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	cases := []struct {
+		name, compose string
+		target        stacks.Target
+		line, col     int
+		key           string
+	}{
+		{"service labels", `services:
+  web:
+    image: nginx:1.27
+    labels:
+      tierplan.component: ingress
+`, stacks.TargetStandalone, 5, 7, "services.web.labels.tierplan.component"},
+		{"service deploy labels", `services:
+  web:
+    image: nginx:1.27
+    deploy:
+      labels:
+        tierplan.component: ingress
+`, stacks.TargetSwarm, 6, 9, "services.web.deploy.labels.tierplan.component"},
+		{"service labels as a list", `services:
+  web:
+    image: nginx:1.27
+    labels:
+      - tierplan.component=ingress
+`, stacks.TargetStandalone, 4, 5, "services.web.labels"},
+		{"network", `services:
+  web:
+    image: nginx:1.27
+    networks: [back]
+networks:
+  back:
+    labels:
+      tierplan.component: ingress
+`, stacks.TargetStandalone, 8, 7, "networks.back.labels.tierplan.component"},
+		{"volume", `services:
+  web:
+    image: nginx:1.27
+    volumes: [data:/d]
+volumes:
+  data:
+    labels:
+      tierplan.component: ingress
+`, stacks.TargetStandalone, 8, 7, "volumes.data.labels.tierplan.component"},
+		{"secret", `services:
+  web:
+    image: nginx:1.27
+    secrets: [s]
+secrets:
+  s:
+    external: true
+    labels:
+      tierplan.component: ingress
+`, stacks.TargetSwarm, 9, 7, "secrets.s.labels.tierplan.component"},
+		{"config", `services:
+  web:
+    image: nginx:1.27
+    configs: [c]
+configs:
+  c:
+    content: cfg
+    labels:
+      tierplan.component: ingress
+`, stacks.TargetSwarm, 9, 7, "configs.c.labels.tierplan.component"},
+	}
+	for _, c := range cases {
+		got := check(c.compose, c.target)
+		if len(got) != 1 {
+			t.Errorf("%s: %d component-label problems (%+v), want one", c.name, len(got), got)
+			continue
+		}
+		p := got[0]
+		if p.Severity != stacks.SeverityError || p.Key != c.key || p.Line != c.line || p.Col != c.col {
+			t.Errorf("%s: problem = %+v, want an error at %d:%d for %s", c.name, p, c.line, c.col, c.key)
+		}
+	}
+
+	// The key is matched byte for byte; a file without the label has no problem.
+	const near = `services:
+  web:
+    image: nginx:1.27
+    labels:
+      tierplan.components: x
+      tierplan.component.x: y
+      Tierplan.component: z
+`
+	if got := check(near, stacks.TargetStandalone); len(got) != 0 {
+		t.Errorf("near-miss keys gave %+v, want none", got)
+	}
+	if got := check(routedCompose, stacks.TargetSwarm); len(got) != 0 {
+		t.Errorf("a plain file gave %+v, want none", got)
+	}
+}

@@ -245,3 +245,53 @@ func (inj *InjectedIngress) injectedKey(project *types.Project) string {
 	}
 	return inj.Network
 }
+
+// CodeIngressComponentLabel is a compose file that sets TierPlan's own component label on a service
+// or on a top-level object (D-41): the label marks the objects of the ingress deployment, and a
+// stack must not be able to make its objects look like them.
+const CodeIngressComponentLabel = "ingress_component_label"
+
+// componentLabelProblems reports every place the compose file sets ingress.LabelComponent (the key,
+// byte for byte): a service's labels and deploy.labels, and the labels of a top-level network,
+// volume, secret and config. Each is an error at the label's key, or at the labels block when the
+// labels are a list, for every target.
+func componentLabelProblems(project *types.Project, idx *PositionIndex) Problems {
+	var out Problems
+	report := func(base, block string, labels map[string]string) {
+		if _, ok := labels[ingress.LabelComponent]; !ok {
+			return
+		}
+		paths := []string{base + "." + block + "." + ingress.LabelComponent, base + "." + block, base}
+		n, file := idx.locateAny(paths...)
+		line, col, endLine, endCol := at(n)
+		key := base + "." + block
+		if n != nil && n.Value == ingress.LabelComponent {
+			key = paths[0]
+		}
+		out = append(out, Problem{
+			Severity: SeverityError, Code: CodeIngressComponentLabel, File: file, Key: key,
+			Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+			Message: ingress.LabelComponent + " is TierPlan's own label for its ingress objects; remove it from the compose file.",
+		})
+	}
+	for _, name := range sortedKeys(project.Services) {
+		svc := project.Services[name]
+		report("services."+name, "labels", svc.Labels)
+		if svc.Deploy != nil {
+			report("services."+name, "deploy.labels", svc.Deploy.Labels)
+		}
+	}
+	for _, name := range sortedKeys(project.Networks) {
+		report("networks."+name, "labels", project.Networks[name].Labels)
+	}
+	for _, name := range sortedKeys(project.Volumes) {
+		report("volumes."+name, "labels", project.Volumes[name].Labels)
+	}
+	for _, name := range sortedKeys(project.Secrets) {
+		report("secrets."+name, "labels", project.Secrets[name].Labels)
+	}
+	for _, name := range sortedKeys(project.Configs) {
+		report("configs."+name, "labels", project.Configs[name].Labels)
+	}
+	return out
+}
