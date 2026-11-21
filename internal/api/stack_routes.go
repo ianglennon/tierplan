@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 
@@ -138,7 +139,7 @@ func readRunning(ctx context.Context, d StacksDeps, envID string, st stackops.St
 		prefix := st.Name + "_"
 		for _, row := range cluster.Services {
 			if row.Stack == st.Name && strings.HasPrefix(row.Name, prefix) {
-				in.Running[strings.TrimPrefix(row.Name, prefix)] = int(row.Running)
+				in.Running[strings.TrimPrefix(row.Name, prefix)] = int(min(row.Running, math.MaxInt32))
 			}
 		}
 		for _, ref := range cluster.ServiceRefs {
