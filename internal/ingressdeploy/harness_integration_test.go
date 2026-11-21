@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -128,9 +127,6 @@ func startSwarmEnv(t *testing.T) *swarmEnv {
 		dockertest.LoadImage(t, devIngressImage, n)
 		e.sh(n, "docker tag "+devIngressImage+" "+ingressdeploy.ImageRepository+":edge")
 	}
-	// Registered after the swarm's own cleanup, so it runs first, while the nodes still answer.
-	e.dumpOnFailure()
-
 	e.clock = tunneltest.NewClock(time.Now())
 	e.notifier = ingress.NewNotifier()
 	var istoreRef atomic.Pointer[ingressstore.Store]
@@ -203,6 +199,8 @@ func startSwarmEnv(t *testing.T) *swarmEnv {
 		t.Fatalf("register the domain %s: %v", testDomain, err)
 	}
 	e.startDeploy("dev")
+	// Registered last, so it runs first, while the nodes still answer and the store is open.
+	e.dumpOnFailure()
 	return e
 }
 
@@ -249,6 +247,9 @@ func (e *swarmEnv) dumpOnFailure() {
 		for _, n := range e.sw.Nodes() {
 			out, _ := n.Sh(ctx, "docker volume ls --format '{{.Name}}' 2>&1; docker ps -a --format '{{.Names}} {{.Status}}' 2>&1")
 			e.t.Logf("%s: volumes and containers\n%s", n.Hostname, strings.TrimSpace(out))
+		}
+		if b, ok := e.recon.Current(e.envID); ok {
+			e.t.Logf("the reconciler's current bundle %s holds %d route(s); skipped %v; render failures %v", b.ID, len(b.Manifest.Routes), e.recon.Skipped(e.envID), e.recon.Failures())
 		}
 		if nodes, err := e.srv.Service.ListNodes(ctx, e.envID); err == nil {
 			for _, n := range nodes {
@@ -757,13 +758,6 @@ func (e *swarmEnv) remove(st *stack) stackops.RemoveResult {
 	e.waitJob(job.ID)
 	testsupport.Await(t, "the removal function to return", done)
 	return res
-}
-
-// readAll drains and closes a reader, ignoring errors: for a response the test only needs to have finished.
-func readAll(r io.ReadCloser) string {
-	defer func() { _ = r.Close() }()
-	b, _ := io.ReadAll(io.LimitReader(r, 1<<20))
-	return string(b)
 }
 
 // jsonUnmarshal decodes a service spec read from the engine.
