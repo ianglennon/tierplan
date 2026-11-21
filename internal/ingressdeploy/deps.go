@@ -93,7 +93,7 @@ type Kicker interface {
 
 var _ Kicker = (*ingresshub.Hub)(nil)
 
-// NodeRows removes the ingress node rows of an environment, auditing each: *ingresshub.Service has this method.
+// NodeRows removes the active ingress node rows of an environment, auditing each; revoked rows stay: *ingresshub.Service has this method.
 type NodeRows interface {
 	RemoveEnvNodes(ctx context.Context, actor audit.Actor, envID string) ([]ingresshub.Node, error)
 }

@@ -148,7 +148,7 @@ When nothing refuses, the job:
 2. removes the proxy service and waits, for up to two minutes, until its tasks are gone;
 3. removes the certificate cache volume on each node through that node's agent;
 4. removes the network and the join token secrets;
-5. disables the join token and removes the proxy nodes from the list.
+5. disables the join token and removes the proxy nodes from the list. A node you revoked stays in the list as revoked, so that switching ingress off and on again does not let that host back in.
 
 A step that fails stops the job, and you switch off again to carry on. Certificates are not touched: they belong to the
 hostnames, not to the proxies.

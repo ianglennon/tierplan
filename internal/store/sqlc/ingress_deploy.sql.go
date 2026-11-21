@@ -10,10 +10,11 @@ import (
 )
 
 const deleteIngressNodesByEnv = `-- name: DeleteIngressNodesByEnv :many
-DELETE FROM ingress_nodes WHERE env_id = ? RETURNING id, env_id, name, swarm_node_id, public_key, status, version, schemas, applied_bundle_id, applied_at, rejected_bundle_id, rejected_reason, rejected_at, health, health_at, held_hostnames, last_seen_at, created_at, revoked_at, revoked_by, revoke_reason, reenrol_blocked
+DELETE FROM ingress_nodes WHERE env_id = ? AND status <> 'revoked' RETURNING id, env_id, name, swarm_node_id, public_key, status, version, schemas, applied_bundle_id, applied_at, rejected_bundle_id, rejected_reason, rejected_at, health, health_at, held_hostnames, last_seen_at, created_at, revoked_at, revoked_by, revoke_reason, reenrol_blocked
 `
 
-// Every enrolled proxy node of one environment, active or revoked. The rows come back so the caller can
+// Every active proxy node of one environment. A revoked row stays: it is the only record that blocks the
+// revoked host from enrolling again with a new token (D-20, WR-03). The rows come back so the caller can
 // record what it removed (D-39).
 func (q *Queries) DeleteIngressNodesByEnv(ctx context.Context, envID string) ([]IngressNode, error) {
 	rows, err := q.db.QueryContext(ctx, deleteIngressNodesByEnv, envID)

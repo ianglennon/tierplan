@@ -63,6 +63,7 @@ WHERE h.env_id = ?
 ORDER BY r.hostname, r.path_prefix;
 
 -- name: DeleteIngressNodesByEnv :many
--- Every enrolled proxy node of one environment, active or revoked. The rows come back so the caller can
+-- Every active proxy node of one environment. A revoked row stays: it is the only record that blocks the
+-- revoked host from enrolling again with a new token (D-20, WR-03). The rows come back so the caller can
 -- record what it removed (D-39).
-DELETE FROM ingress_nodes WHERE env_id = ? RETURNING *;
+DELETE FROM ingress_nodes WHERE env_id = ? AND status <> 'revoked' RETURNING *;

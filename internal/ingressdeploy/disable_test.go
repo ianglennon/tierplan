@@ -458,16 +458,17 @@ func TestDisableRemovesEverything(t *testing.T) {
 		t.Error("the switch-off wrote nothing to the swarm")
 	}
 
-	// The token is disabled with its row and audit kept; the node rows are gone, each audited.
+	// The token is disabled with its row and audit kept; the active node row is gone and audited, and the revoked one stays: it
+	// is what keeps that host out when ingress is switched on again (WR-03).
 	tok, err := f.tokens.TokenStatus(ctx, f.envID)
 	if err != nil || !tok.Exists || !tok.Disabled {
 		t.Errorf("TokenStatus = %+v, %v; want a disabled token that still exists", tok, err)
 	}
-	if rows, err := f.tokens.ListNodes(ctx, f.envID); err != nil || len(rows) != 0 {
-		t.Errorf("ListNodes = %+v, %v; want none", rows, err)
+	if rows, err := f.tokens.ListNodes(ctx, f.envID); err != nil || len(rows) != 1 || rows[0].Name != "edge-b" || rows[0].Status != "revoked" {
+		t.Errorf("ListNodes = %+v, %v; want only the revoked edge-b", rows, err)
 	}
 	for action, want := range map[string]int{
-		"ingress.disabled": 1, "ingress.join_token_disabled": 1, "ingress.node_removed": 2, "ingress.wipe_queued": 0,
+		"ingress.disabled": 1, "ingress.join_token_disabled": 1, "ingress.node_removed": 1, "ingress.wipe_queued": 0,
 	} {
 		if got := f.auditCount(action); got != want {
 			t.Errorf("%s audit rows = %d, want %d", action, got, want)

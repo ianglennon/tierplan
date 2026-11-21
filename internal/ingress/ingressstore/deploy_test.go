@@ -323,8 +323,8 @@ func TestLiveRoutesOrderAndScope(t *testing.T) {
 	}
 }
 
-// TestDeleteIngressNodesByEnv removes every node row of one environment, active or revoked, returns
-// them, and leaves the other environment's rows alone.
+// TestDeleteIngressNodesByEnv removes every active node row of one environment and returns them, keeps a revoked row (the
+// record that blocks a revoked host, WR-03), and leaves the other environment's rows alone.
 func TestDeleteIngressNodesByEnv(t *testing.T) {
 	ctx := context.Background()
 	_, st, _ := newTestStore(t)
@@ -351,18 +351,14 @@ func TestDeleteIngressNodesByEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("DeleteIngressNodesByEnv returned %d rows, want 2", len(rows))
+	if len(rows) != 1 || rows[0].ID != "n1" || rows[0].Status != "active" {
+		t.Fatalf("DeleteIngressNodesByEnv returned %+v, want only n1, which was active", rows)
 	}
-	ids := map[string]string{}
-	for _, r := range rows {
-		ids[r.ID] = r.Status
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_nodes WHERE env_id = 'env-a'`); n != 1 {
+		t.Fatalf("%d nodes of env-a remain, want the revoked n2 only", n)
 	}
-	if ids["n1"] != "active" || ids["n2"] != "revoked" {
-		t.Fatalf("returned rows = %v, want n1 active and n2 revoked", ids)
-	}
-	if n := count(t, st, `SELECT COUNT(*) FROM ingress_nodes WHERE env_id = 'env-a'`); n != 0 {
-		t.Fatalf("%d nodes of env-a remain", n)
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_nodes WHERE id = 'n2' AND status = 'revoked'`); n != 1 {
+		t.Fatal("the revoked row n2 was deleted")
 	}
 	if n := count(t, st, `SELECT COUNT(*) FROM ingress_nodes WHERE env_id = 'env-b'`); n != 1 {
 		t.Fatalf("env-b has %d nodes, want 1", n)

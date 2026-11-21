@@ -52,10 +52,12 @@ func (s *Service) ListNodes(ctx context.Context, envID string) ([]Node, error) {
 	return out, nil
 }
 
-// RemoveEnvNodes deletes every ingress node row of the environment, active and revoked, as the last step of switching
-// ingress off (D-39), and records ingress.node_removed for each one in the same transaction, so a row never goes without
-// its audit entry and an audit entry never names a row that stayed. The rows that were removed are returned, oldest first.
-// An environment with no rows removes nothing and records nothing. It closes no session: the caller has kicked them.
+// RemoveEnvNodes deletes every active ingress node row of the environment as the last step of switching ingress off
+// (D-39). A revoked row is kept: it is the only record that keeps a revoked host out (reenrol_blocked), so a switch off
+// followed by a switch on must not re-admit it (WR-03). It records ingress.node_removed for each row it removes in the
+// same transaction, so a row never goes without its audit entry and an audit entry never names a row that stayed. The rows
+// that were removed are returned, oldest first. An environment with no active rows removes nothing and records nothing.
+// It closes no session: the caller has kicked them.
 func (s *Service) RemoveEnvNodes(ctx context.Context, actor audit.Actor, envID string) ([]Node, error) {
 	tx, err := s.st.Write.BeginTx(ctx, nil)
 	if err != nil {
