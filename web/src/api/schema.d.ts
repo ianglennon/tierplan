@@ -16449,10 +16449,10 @@ export interface components {
             /** @description True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack */
             orphan: boolean;
             /**
-             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other
+             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so it is a contract value only), empty for any other
              * @enum {string}
              */
-            owner: "" | "tierplan" | "agent";
+            owner: "" | "tierplan" | "agent" | "ingress";
             /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
             portainer: boolean;
             /** @description Why the stack cannot be adopted; empty when it can */

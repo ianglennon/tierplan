@@ -24830,11 +24830,12 @@
             "type": "boolean"
           },
           "owner": {
-            "description": "tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other",
+            "description": "tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so it is a contract value only), empty for any other",
             "enum": [
               "",
               "tierplan",
-              "agent"
+              "agent",
+              "ingress"
             ],
             "type": "string"
           },

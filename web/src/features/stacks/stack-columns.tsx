@@ -242,9 +242,7 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
 // badges stay after a truncated name. The address is built by the router from the name, never concatenated.
 function UnmanagedName({ row }: { row: StackRow }) {
   const t = useT();
-  // The list's contract names tierplan and agent; the page's also names ingress, which discovery never puts in
-  // the list. Reading it as a string keeps the badge ready for it without a second source of the wording.
-  const owner: string | undefined = row.unmanaged?.owner;
+  const owner = row.unmanaged?.owner;
   return (
     <span className="flex min-w-0 items-center gap-2">
       <Link

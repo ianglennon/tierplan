@@ -287,7 +287,7 @@ type StackItem struct {
 type StackUnmanagedBody struct {
 	Orphan    bool   `json:"orphan" doc:"True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack"`
 	Portainer bool   `json:"portainer" doc:"True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/"`
-	Owner     string `json:"owner" enum:",tierplan,agent" doc:"tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other"`
+	Owner     string `json:"owner" enum:",tierplan,agent,ingress" doc:"tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so it is a contract value only), empty for any other"`
 	Adoptable bool   `json:"adoptable" doc:"False for TierPlan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
 	Reason    string `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
 }
