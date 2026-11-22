@@ -15,6 +15,11 @@ const (
 	ServiceName = "tierplan-ingress"
 	// VolumeName is the named volume that caches certificates on each proxy node.
 	VolumeName = "tierplan-ingress-cache"
+	// ProjectName is the compose project of the standalone host's proxy. It is reserved on standalone
+	// targets: no stack may use it (D-10), so the proxy's containers are never confused with a user's.
+	ProjectName = "tierplan-ingress"
+	// ProxyComposeService is the one service of ProjectName: the proxy.
+	ProxyComposeService = "proxy"
 	// SecretPrefix starts the name of every swarm secret that carries a proxy join token.
 	SecretPrefix = "tierplan-ingress-token-" //nolint:gosec // G101: a name prefix, not a credential
 )
@@ -69,4 +74,20 @@ func OwnsVolume(name string, labels map[string]string) bool {
 // prefix, not exactly.
 func OwnsSecret(name string, labels map[string]string) bool {
 	return HasComponentLabel(labels) && strings.HasPrefix(name, SecretPrefix)
+}
+
+// The compose labels a standalone host's proxy container carries. They are compose's own strings;
+// internal/ingress imports no compose module, so they are spelled out here.
+const (
+	composeLabelProject = "com.docker.compose.project"
+	composeLabelService = "com.docker.compose.service"
+)
+
+// OwnsProxyContainer reports whether a container is the standalone proxy: the component label, the
+// reserved compose project and the proxy's compose service. The label alone is user-controlled, so a
+// write refusal needs all three (D-41).
+func OwnsProxyContainer(labels map[string]string) bool {
+	return HasComponentLabel(labels) &&
+		labels[composeLabelProject] == ProjectName &&
+		labels[composeLabelService] == ProxyComposeService
 }

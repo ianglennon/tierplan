@@ -29,8 +29,8 @@ const (
 	// SkipCertificateNotReady: the hostname has a certificate that is not servable yet (issuing, or
 	// within the renewal margin of its expiry).
 	SkipCertificateNotReady SkipReason = "certificate_not_ready"
-	// SkipNoBackend: the route's backend cannot be named (no owning stack, not a swarm target, no
-	// port, or a scheme that is neither http nor https).
+	// SkipNoBackend: the route's backend cannot be named (a system-owned claim, which has no backend
+	// until Phase 28, no owning stack, no port, or a scheme that is neither http nor https).
 	SkipNoBackend SkipReason = "no_backend"
 )
 
@@ -449,8 +449,9 @@ func checkNoTemplateDelimiters(files []ingressbundle.File) error {
 //     certificate_not_ready); one with no reason but no key bytes is certificate_not_ready too, never
 //     served. The same answer applies to every route of the hostname, so a host is served whole or not
 //     at all and a name with no usable certificate fails at the handshake.
-//  3. A system-owned claim and a standalone target have no backend until Phases 28 and 25, and a stack
-//     with no name cannot be addressed: no_backend. There is no fourth reason code.
+//  3. A system-owned claim has no backend until Phase 28, and a stack with no name cannot be addressed:
+//     no_backend. A swarm stack's service is reached by its service DNS name and a standalone stack's
+//     by its alias on the host's ingress bridge (Phase 25, D-15). There is no fourth reason code.
 func selectRoute(r ingress.SnapshotRoute, claimed map[string]struct{}, certs map[string]HostCert) (HostCert, SkipReason) {
 	if _, ok := claimed[r.Hostname]; !ok {
 		return HostCert{}, SkipNoBackend
@@ -464,7 +465,7 @@ func selectRoute(r ingress.SnapshotRoute, claimed map[string]struct{}, certs map
 	case !cert.servable():
 		return HostCert{}, SkipCertificateNotReady
 	}
-	if r.OwnerKind != ingress.OwnerStack || r.Target != ingress.TargetSwarm || r.StackName == "" {
+	if r.OwnerKind != ingress.OwnerStack || !namesABackend(r.Target) || r.StackName == "" {
 		return HostCert{}, SkipNoBackend
 	}
 	return cert, ""
@@ -483,16 +484,27 @@ const maxPort = 65535
 
 // backendURL is the URL of a route's backend, or false when it cannot be named (including a port outside
 // 1 to 65535). A swarm service is reached by its DNS name, <stack>_<service>, on the proxy's overlay
-// network (D-12).
+// network (D-12); a standalone stack's service by its alias on the host's ingress bridge, the one name
+// the attach gives it (D-15).
 func backendURL(r ingress.SnapshotRoute) (string, bool) {
 	scheme := schemeOf(r)
 	if scheme != ingress.SchemeHTTP && scheme != ingress.SchemeHTTPS {
 		return "", false
 	}
-	if r.Target != ingress.TargetSwarm || r.StackName == "" || r.Service == "" || r.Port <= 0 || r.Port > maxPort {
+	if !namesABackend(r.Target) || r.StackName == "" || r.Service == "" || r.Port <= 0 || r.Port > maxPort {
 		return "", false
 	}
-	return string(scheme) + "://" + r.StackName + "_" + r.Service + ":" + strconv.Itoa(r.Port), true
+	port := strconv.Itoa(r.Port)
+	if r.Target == ingress.TargetStandalone {
+		return string(scheme) + "://" + ingress.Alias(r.StackName, r.Service) + ":" + port, true
+	}
+	return string(scheme) + "://" + r.StackName + "_" + r.Service + ":" + port, true
+}
+
+// namesABackend reports whether a stack route on this target has a backend name: a swarm target and a
+// standalone target do, anything else does not.
+func namesABackend(t ingress.Target) bool {
+	return t == ingress.TargetSwarm || t == ingress.TargetStandalone
 }
 
 // path2name is the file name of a bundle path under certs/.
