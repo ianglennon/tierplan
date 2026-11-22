@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
@@ -604,16 +604,22 @@ export function ReviewPage({
           ) : null}
           {data && (!unchanged || yamlChanged > 0) ? (
             <Tabs value={shown} onValueChange={setTab} className="gap-4">
-              <TabsList variant="line" aria-label={t("stackReview.changes.label")} className="h-9">
-                <TabsTrigger value="changes" className="max-md:h-11">
-                  {t("stackReview.changes.tab")}
-                </TabsTrigger>
-                <TabsTrigger value="yaml" className="max-md:h-11">
-                  {yamlChanged > 0
-                    ? t("stackYamlDiff.tabCount", { count: yamlChanged })
-                    : t("stackYamlDiff.tab")}
-                </TabsTrigger>
-              </TabsList>
+              <TabsScroller>
+                <TabsList
+                  variant="line"
+                  aria-label={t("stackReview.changes.label")}
+                  className="h-9"
+                >
+                  <TabsTrigger value="changes" className="max-md:h-11">
+                    {t("stackReview.changes.tab")}
+                  </TabsTrigger>
+                  <TabsTrigger value="yaml" className="max-md:h-11">
+                    {yamlChanged > 0
+                      ? t("stackYamlDiff.tabCount", { count: yamlChanged })
+                      : t("stackYamlDiff.tab")}
+                  </TabsTrigger>
+                </TabsList>
+              </TabsScroller>
               <TabsContent value="changes" className="flex flex-col gap-4">
                 <ServiceDiffList services={changed} context={ownershipContext.context} />
                 <IngressSection ingress={data.ingress} target={stack.data?.target} />

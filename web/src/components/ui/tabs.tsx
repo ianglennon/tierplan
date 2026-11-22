@@ -51,6 +51,20 @@ function TabsList({
   );
 }
 
+// TabsScroller holds a page's tab bar. A bar with more tabs than fit on a phone scrolls
+// sideways inside it instead of widening the page. The bottom padding keeps the line
+// variant's 2px active indicator, which hangs below the tabs, inside the scrolling box,
+// and the matching negative margin keeps the spacing below the bar unchanged.
+function TabsScroller({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="tabs-scroller"
+      className={cn("-mb-2 max-w-full min-w-0 overflow-x-auto pb-2", className)}
+      {...props}
+    />
+  );
+}
+
 function TabsTrigger({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
   return (
     <TabsPrimitive.Trigger
@@ -77,4 +91,4 @@ function TabsContent({ className, ...props }: React.ComponentProps<typeof TabsPr
   );
 }
 
-export { Tabs, TabsContent, TabsList, TabsTrigger, tabsListVariants };
+export { Tabs, TabsContent, TabsList, TabsScroller, TabsTrigger, tabsListVariants };

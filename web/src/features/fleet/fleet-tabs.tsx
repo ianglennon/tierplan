@@ -10,7 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { EnvFilter } from "@/features/fleet/env-filter";
 import { FleetFailingTable } from "@/features/fleet/fleet-failing-table";
 import { FleetPoolsTable } from "@/features/fleet/fleet-pools-table";
@@ -53,17 +53,19 @@ export function FleetTabs({
       }}
       className="gap-4"
     >
-      <TabsList
-        variant="line"
-        aria-label={t("fleet.tabs.label")}
-        className="max-w-full justify-start overflow-x-auto max-md:h-11"
-      >
-        {FLEET_TABS.map((name) => (
-          <TabsTrigger key={name} value={name} className="max-md:h-11 max-md:px-3">
-            {t(`fleet.tabs.${name}`)}
-          </TabsTrigger>
-        ))}
-      </TabsList>
+      <TabsScroller>
+        <TabsList
+          variant="line"
+          aria-label={t("fleet.tabs.label")}
+          className="max-w-full justify-start overflow-x-auto max-md:h-11"
+        >
+          {FLEET_TABS.map((name) => (
+            <TabsTrigger key={name} value={name} className="max-md:h-11 max-md:px-3">
+              {t(`fleet.tabs.${name}`)}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </TabsScroller>
       <TabsContent value="environments" className="flex flex-col gap-4">
         {environmentsBody}
       </TabsContent>

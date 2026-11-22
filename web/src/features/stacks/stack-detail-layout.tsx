@@ -22,7 +22,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { AutoDeployPausedAlert } from "@/features/stack-git/auto-deploy-paused-alert";
@@ -439,30 +439,32 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
         <FlowCaption step={flow} />
       ) : (
         <Tabs value="" className="gap-4">
-          <TabsList
-            variant="line"
-            aria-label={t("stacks.detail.tabs.label")}
-            className="h-9 max-md:h-11"
-          >
-            {tabsOf(data?.source === "git").map((tab) => (
-              <TabsTrigger
-                key={tab.id}
-                value={tab.id}
-                asChild
-                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-              >
-                <Link
-                  to={tab.to}
-                  params={{ envId, stackId }}
-                  activeOptions={{ exact: tab.exact }}
-                  activeProps={{ "data-active": true }}
-                  inactiveProps={{ "data-active": undefined }}
+          <TabsScroller>
+            <TabsList
+              variant="line"
+              aria-label={t("stacks.detail.tabs.label")}
+              className="h-9 max-md:h-11"
+            >
+              {tabsOf(data?.source === "git").map((tab) => (
+                <TabsTrigger
+                  key={tab.id}
+                  value={tab.id}
+                  asChild
+                  className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
                 >
-                  {t(tab.labelKey)}
-                </Link>
-              </TabsTrigger>
-            ))}
-          </TabsList>
+                  <Link
+                    to={tab.to}
+                    params={{ envId, stackId }}
+                    activeOptions={{ exact: tab.exact }}
+                    activeProps={{ "data-active": true }}
+                    inactiveProps={{ "data-active": undefined }}
+                  >
+                    {t(tab.labelKey)}
+                  </Link>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </TabsScroller>
         </Tabs>
       )}
       {children ?? <Outlet />}
@@ -600,30 +602,32 @@ function UnmanagedDetailLayout({ envId, name, children }: Omit<UnmanagedLayoutPr
         <Skeleton className="h-16 w-full" aria-hidden="true" />
       )}
       <Tabs value="" className="gap-4">
-        <TabsList
-          variant="line"
-          aria-label={t("stacks.detail.tabs.label")}
-          className="h-9 max-md:h-11"
-        >
-          {UNMANAGED_TABS.map((tab) => (
-            <TabsTrigger
-              key={tab.id}
-              value={tab.id}
-              asChild
-              className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-            >
-              <Link
-                to={tab.to}
-                params={{ envId, name }}
-                activeOptions={{ exact: tab.exact }}
-                activeProps={{ "data-active": true }}
-                inactiveProps={{ "data-active": undefined }}
+        <TabsScroller>
+          <TabsList
+            variant="line"
+            aria-label={t("stacks.detail.tabs.label")}
+            className="h-9 max-md:h-11"
+          >
+            {UNMANAGED_TABS.map((tab) => (
+              <TabsTrigger
+                key={tab.id}
+                value={tab.id}
+                asChild
+                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
               >
-                {t(tab.labelKey)}
-              </Link>
-            </TabsTrigger>
-          ))}
-        </TabsList>
+                <Link
+                  to={tab.to}
+                  params={{ envId, name }}
+                  activeOptions={{ exact: tab.exact }}
+                  activeProps={{ "data-active": true }}
+                  inactiveProps={{ "data-active": undefined }}
+                >
+                  {t(tab.labelKey)}
+                </Link>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </TabsScroller>
       </Tabs>
       {children ?? <Outlet />}
     </div>
