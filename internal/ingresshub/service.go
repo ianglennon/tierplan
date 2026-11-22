@@ -190,12 +190,15 @@ func (s *Service) Enrol(ctx context.Context, req EnrolRequest) (EnrolResult, err
 	case topo.Kind == kindAgent && topo.EnvType.Valid && topo.EnvType.String == envTypeSwarm:
 		swarm = true
 	case topo.Kind == kindAgent && topo.EnvType.Valid && topo.EnvType.String == envTypeStandalone:
+	case topo.Kind == kindLocal && req.SwarmNodeID == "":
+		// The local socket is a standalone host for ingress (Phase 25 D-02): its proxy has no swarm node ID
+		// and takes the environment's one NULL-ID slot, which the partial unique index guards.
 	case topo.Kind == kindLocal:
-		// Not retryable: no wait makes it succeed in this version, since the local-socket variant of ingress
-		// is a later phase's decision.
+		// Not retryable: a local socket that is a swarm manager has proxies that present node IDs, which the
+		// single slot cannot hold (Phase 25 A-9), and no wait makes that succeed.
 		return EnrolResult{}, &RefuseError{
 			Code:        ingresswire.RefuseAuthRejected,
-			Detail:      "ingress nodes cannot enrol into TierPlan's local-socket environment",
+			Detail:      "a proxy of TierPlan's local-socket environment enrols without a swarm node ID",
 			AuditReason: "environment_kind_local",
 		}
 	default:
