@@ -5,6 +5,7 @@ package convert_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/moby/moby/api/types/swarm"
@@ -76,5 +77,48 @@ func TestNoAliasOnIngressNetwork(t *testing.T) {
 		if n.Name == ingress.NetworkName && !n.External {
 			t.Errorf("network %s is planned for creation, want an external reference", n.Name)
 		}
+	}
+}
+
+// TestNoFileAliasOnIngressNetwork proves convert drops even the aliases a file gives on the shared
+// ingress network (W-1): the proxy reaches a backend by its <stack>_<service> name, so an alias
+// there could take another stack's backend name. The check refuses such a file first; convert
+// holds the rule too, so no caller that skips the check can carry an alias onto the network.
+func TestNoFileAliasOnIngressNetwork(t *testing.T) {
+	t.Parallel()
+	p, err := plan(t, "shop", `services:
+  web:
+    image: nginx:1.27
+    networks:
+      edge:
+        aliases: [other_web]
+      back:
+        aliases: [api]
+networks:
+  edge:
+    external: true
+    name: tierplan-ingress
+  back: {}
+`)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	var sawIngress, sawBack bool
+	for _, att := range p.Services[0].Spec.TaskTemplate.Networks {
+		switch att.Target {
+		case ingress.NetworkName:
+			sawIngress = true
+			if len(att.Aliases) != 0 {
+				t.Errorf("web on %s has aliases %v, want none", ingress.NetworkName, att.Aliases)
+			}
+		case "shop_back":
+			sawBack = true
+			if !slices.Equal(att.Aliases, []string{"api", "web"}) {
+				t.Errorf("web on shop_back has aliases %v, want [api web]", att.Aliases)
+			}
+		}
+	}
+	if !sawIngress || !sawBack {
+		t.Errorf("web networks = %+v, want %s and shop_back", p.Services[0].Spec.TaskTemplate.Networks, ingress.NetworkName)
 	}
 }

@@ -213,6 +213,7 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	res.Problems = append(res.Problems, ingressProblems(loaded.Project, idx, in)...)
 	res.Problems = append(res.Problems, componentLabelProblems(loaded.Project, idx)...)
 	res.Problems = append(res.Problems, networkReservedProblems(loaded.Project, idx)...)
+	res.Problems = append(res.Problems, networkAliasProblems(loaded.Project, idx)...)
 	res.Problems = res.Problems.Sorted()
 	return res
 }

@@ -300,6 +300,40 @@ func networkReservedProblems(project *types.Project, idx *PositionIndex) Problem
 	return out
 }
 
+// CodeIngressNetworkAlias is a compose file that gives a service aliases on the shared ingress network
+// (W-1): the proxy reaches each routed backend by its <stack>_<service> name on that network, so an alias
+// there could take another stack's backend name and receive its traffic.
+const CodeIngressNetworkAlias = "ingress_network_alias"
+
+// networkAliasProblems reports each service that gives aliases on the shared ingress network, whatever
+// key the file reaches the network by. The error is at the service's aliases for that network, for every
+// target.
+func networkAliasProblems(project *types.Project, idx *PositionIndex) Problems {
+	var out Problems
+	for _, name := range sortedKeys(project.Services) {
+		svc := project.Services[name]
+		for _, key := range sortedKeys(svc.Networks) {
+			cfg := svc.Networks[key]
+			if cfg == nil || len(cfg.Aliases) == 0 {
+				continue
+			}
+			n, declared := project.Networks[key]
+			if key != ingress.NetworkName && (!declared || n.Name != ingress.NetworkName) {
+				continue
+			}
+			path := "services." + name + ".networks." + key + ".aliases"
+			node, file := idx.locateAny(path, "services."+name+".networks."+key, "services."+name)
+			line, col, endLine, endCol := at(node)
+			out = append(out, Problem{
+				Severity: SeverityError, Code: CodeIngressNetworkAlias, File: file, Key: path,
+				Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+				Message: "Services may not have aliases on " + ingress.NetworkName + ". Every routed service of every stack shares that network, so an alias there could take another stack's name. Remove the aliases, or put them on a network of your own.",
+			})
+		}
+	}
+	return out
+}
+
 // CodeIngressComponentLabel is a compose file that sets TierPlan's own component label on a service
 // or on a top-level object (D-41): the label marks the objects of the ingress deployment, and a
 // stack must not be able to make its objects look like them.

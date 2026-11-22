@@ -104,6 +104,11 @@ Switching ingress on changes no stack. A service joins the `tierplan-ingress` ne
 ingress on, and only a service that declares a route joins; the rest of the stack stays off the network. So a stack that
 already asked for a route before you switched ingress on has to be redeployed once.
 
+On that network a service has no alias, not even its own name: every routed service of every stack shares it, and the
+proxy reaches each one by its `<stack>_<service>` name. A compose file that gives a service `aliases:` on
+`tierplan-ingress` (declared as an external network) is refused with `ingress_network_alias`; put the aliases on a
+network of your own.
+
 The preview and the status list those stacks (`ingress_redeploy_needed`, a warning), and until a stack is redeployed
 its routes read "not attached" on its page. The redeploy is yours to choose, because it replaces the stack's tasks.
 

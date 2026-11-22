@@ -6,7 +6,9 @@ package stacks_test
 import (
 	"context"
 	"reflect"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -272,6 +274,90 @@ configs:
 	}
 	if got := check(routedCompose, stacks.TargetSwarm); len(got) != 0 {
 		t.Errorf("a plain file gave %+v, want none", got)
+	}
+}
+
+// A service may not give aliases on the shared ingress network (W-1): the proxy reaches each backend by
+// its <stack>_<service> name, so an alias there could take another stack's backend name. The error is at
+// the service's aliases for that network, under whatever key the file reaches the network by.
+func TestIngressNetworkAliasesRefused(t *testing.T) {
+	t.Parallel()
+	refused := func(compose string, target stacks.Target) []stacks.Problem {
+		in := stacks.CheckInput{Name: "shop", Target: target, Copy: copyOf(compose)}
+		if target == stacks.TargetSwarm {
+			in.Ingress = &stacks.IngressAttach{Network: ingress.NetworkName}
+		}
+		var out []stacks.Problem
+		for _, p := range stacks.Check(context.Background(), in).Problems {
+			if p.Code == stacks.CodeIngressNetworkAlias {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	cases := []struct {
+		name, compose string
+		keys          []string
+	}{
+		{"alias on the network by its key", `services:
+  web:
+    image: nginx:1.27
+    networks:
+      tierplan-ingress:
+        aliases: [other_web]
+networks:
+  tierplan-ingress:
+    external: true
+`, []string{"services.web.networks.tierplan-ingress.aliases"}},
+		{"alias on the network under another key", `services:
+  web:
+    image: nginx:1.27
+    networks:
+      edge:
+        aliases: [other_web, again]
+  api:
+    image: nginx:1.27
+    networks:
+      edge:
+        aliases: [x]
+networks:
+  edge:
+    external: true
+    name: tierplan-ingress
+`, []string{"services.api.networks.edge.aliases", "services.web.networks.edge.aliases"}},
+		{"ingress network with no alias", `services:
+  web:
+    image: nginx:1.27
+    networks: [tierplan-ingress]
+networks:
+  tierplan-ingress:
+    external: true
+`, nil},
+		{"aliases on another network", `services:
+  web:
+    image: nginx:1.27
+    networks:
+      back:
+        aliases: [api]
+networks:
+  back: {}
+`, nil},
+	}
+	for _, tc := range cases {
+		for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+			got := refused(tc.compose, target)
+			var keys []string
+			for _, p := range got {
+				if p.Severity != stacks.SeverityError || p.Line == 0 || !strings.Contains(p.Message, ingress.NetworkName) {
+					t.Errorf("%s (%s): problem %+v, want an error at a line naming %s", tc.name, target, p, ingress.NetworkName)
+				}
+				keys = append(keys, p.Key)
+			}
+			slices.Sort(keys)
+			if !slices.Equal(keys, tc.keys) {
+				t.Errorf("%s (%s): keys %v, want %v", tc.name, target, keys, tc.keys)
+			}
+		}
 	}
 }
 
