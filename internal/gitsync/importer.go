@@ -227,6 +227,7 @@ func (s *Service) read(ctx context.Context, req ImportRequest, held string) (Imp
 		return Import{}, err
 	}
 	copy.Files = stacks.MarkSecretFilesFor(checkFiles, nil, composeFiles)
+	// ingress: unattached, the git import judges the file as written
 	res := stacks.Check(ctx, stacks.CheckInput{Name: req.Name, Target: req.Target, Copy: copy})
 	problems = append(problems, res.Problems...)
 

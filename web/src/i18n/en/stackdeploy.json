@@ -140,6 +140,7 @@
         "tooMany": "You already have 5 jobs running. Wait for one to finish.",
         "target": "This environment is no longer the kind of target this stack was created for.",
         "clash": "Something TierPlan does not manage already uses this stack's name on this environment.",
+        "refused": "A hostname in that version is taken or not allowed now. Nothing was changed.",
         "lost": "TierPlan couldn't tell whether the roll back started. Open the stack to see where it stands.",
         "generic": "Couldn't start the roll back. Try again."
       }
@@ -155,6 +156,7 @@
       "stopped": "TierPlan stopped: {{reason}}",
       "pullAt": "TierPlan couldn't pull the image for {{service}}, so nothing was changed. {{reason}}",
       "pull": "TierPlan couldn't pull an image, so nothing was changed. {{reason}}",
+      "ingressRefused": "TierPlan stopped before changing anything. A hostname this stack asks for is taken or not allowed. Open the console for which one.",
       "interrupted": "The deploy was interrupted when TierPlan stopped. The swarm may be partly updated.",
       "interruptedRollback": "The roll back was interrupted when TierPlan stopped. The swarm may be partly updated.",
       "openConsole": "Open console",
@@ -193,6 +195,7 @@
         "external_missing": "A network, secret or config the stack names as external does not exist.",
         "stack_name_clash": "A stack of that name already exists here that TierPlan does not manage.",
         "engine_error": "The engine could not complete the request.",
+        "ingress_refused": "A hostname this stack asks for is taken or not allowed.",
         "default": "The deploy didn't finish."
       }
     }

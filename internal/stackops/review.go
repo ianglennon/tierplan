@@ -125,6 +125,10 @@ type ReviewInput struct {
 	DraftVersion int64
 	Mode         string
 	Services     []string
+	// IngressOff says the environment's ingress is switched off, so the routes of a swarm stack are claimed but not
+	// served until it is on and the stack is redeployed (D-13): the review warns of it. False when ingress is on and
+	// when it could not be read.
+	IngressOff bool
 	// Rendering is the masked rendering stored with the stack's last good revision, which the
 	// Rendered YAML tab compares the draft's rendering with. Empty means none: the draft is
 	// compared with an empty document.
@@ -157,6 +161,12 @@ type ReviewInput struct {
 	// nothing new. The review route sets it in every mode; the rollback and restore modes pass it on to the revision
 	// they restore (plan 18-13).
 	IngressPolicy *stacks.IngressPolicy
+	// Ingress is how a service that declares a route joins the shared ingress network, set by the review route from
+	// Deps.Ingress.AttachFor: non-nil only for a swarm environment whose ingress is on. The review shows the
+	// attachment as the deploy will send it (D-21), so a routed service that lacks the network is a changed
+	// service and one that lost its last route shows the network leaving. A roll back or a restore reads it from
+	// Deps instead (PrepareRollbackWith).
+	Ingress *stacks.IngressAttach
 	// Audit is the store whose audit log names the causes of the drift a deploy reverts (D-24). Nil leaves them out.
 	Audit *store.Store
 	// SkipReverts leaves the Reverts drift part out and its extra read of the engine: the History tab asks for the
@@ -270,6 +280,9 @@ type Review struct {
 	// RevertsDriftUnavailable says the drift could not be computed, so RevertsDrift is empty for want of knowing and
 	// not because nothing would be reverted.
 	RevertsDriftUnavailable bool
+	// Ingress is what the deploy does to ingress: the routes it adds, keeps and releases, the certificates and the
+	// network attachment (D-22). Nil when there is nothing to say, so a stack with no route and no claim has no section.
+	Ingress *IngressReview
 }
 
 // AdoptionReview is what the first deploy of an adopted stack does that is not in the file: Pending says it is that
@@ -306,7 +319,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		err = d.reviewRollback(ctx, in, &rv)
 		return rv, err
 	}
-	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy, IngressPolicy: in.IngressPolicy})
+	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy, IngressPolicy: in.IngressPolicy, Ingress: in.Ingress})
 	rv.Problems = res.Problems
 	// The two text views are made from what is known when the review ends, whichever way it ends
 	// without an error: a stack that has problems still shows its rendering, and a deployment
@@ -472,6 +485,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 			bump(&rv.Summary.Configs, o.Change)
 		}
 	}
+	d.fillIngressSwarm(ctx, in, &rv, project, plan.Services, desired, running, live)
 	rv.Problems = rv.Problems.Sorted()
 	d.addRevertsDrift(ctx, in, &rv, rawSwarmRows(desired, running), masker)
 	return rv, nil

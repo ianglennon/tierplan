@@ -23,6 +23,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/redact"
 )
@@ -126,7 +127,7 @@ type VolumeDeleteResult struct {
 	NodeID string `json:"nodeId" doc:"The node ID the request named"`
 	Name   string `json:"name" doc:"The volume name the request named"`
 	Result string `json:"result" enum:"done,failed" doc:"done: the engine removed the volume. failed: it was refused or could not be sent; code says why"`
-	Code   string `json:"code,omitempty" enum:"volume_in_use,not_found,node_unreachable,host_read_only,agent_policy_denied,action_failed" doc:"Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
+	Code   string `json:"code,omitempty" enum:"volume_in_use,not_found,node_unreachable,host_read_only,agent_policy_denied,ingress_owned,action_failed" doc:"Why a target failed. ingress_owned: the volume is TierPlan's ingress cache (the component label and the reserved name); nothing was removed, and switching ingress off removes it. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
 	Detail string `json:"detail,omitempty" doc:"A plain sentence, or for action_failed the engine's message, at most 300 characters"`
 }
 
@@ -214,6 +215,7 @@ type VolumeDetailBody struct {
 	// a caller without secrets.reveal.
 	Options []redact.OptionVar `json:"options" doc:"The driver options the volume was created with, by name. The values can be credentials: a caller without secrets.reveal on the environment gets each with masked true and no value"`
 	Labels  map[string]string  `json:"labels" doc:"Every label of the volume"`
+	Ingress bool               `json:"ingress" doc:"True for the proxy's certificate cache volume (the component label and the reserved name tierplan-ingress-cache): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it"`
 
 	UsedBy           []VolumeUsedByBody `json:"usedBy" doc:"Every container on the volume's node, running or not, and every swarm service whose spec mounts a volume of this name. Containers first, by name, then services, by name"`
 	UsedByContainers int                `json:"usedByContainers" doc:"How many entries of usedBy are containers"`
@@ -484,6 +486,7 @@ func getVolume(ctx context.Context, d VolumesDeps, envID string, reveal bool, in
 		Anonymous:    dockerx.IsAnonymousVolume(detail.Name, detail.Labels),
 		Options:      redact.Options(detail.Options, reveal),
 		Labels:       detail.Labels,
+		Ingress:      ingress.OwnsVolume(detail.Name, detail.Labels),
 		UsedBy:       []VolumeUsedByBody{},
 		NotReporting: agg.NotReporting,
 	}
@@ -571,6 +574,10 @@ func serviceState(row dockerx.ServiceRow, known bool) string {
 // name is free there, creates the volume once and audits the attempt.
 func createVolume(ctx context.Context, d VolumesDeps, p *rbac.Principal, envID string, in *VolumeCreateInput) (*VolumeCreateOutput, error) {
 	body := in.Body
+	// The component label is TierPlan's own mark on its ingress objects (D-41): a create never sets it.
+	if hasComponentLabel(body.Labels) {
+		return nil, componentLabelError()
+	}
 	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, envID, err)
@@ -733,6 +740,9 @@ func (e *volumeBusyError) Error() string {
 	return "api: volume is in use by " + strings.Join(e.users, ", ")
 }
 
+// errVolumeIngressOwned is what the delete closure answers for the proxy's cache volume.
+var errVolumeIngressOwned = errors.New("api: the volume is TierPlan's ingress cache")
+
 // errServicesUnread is what a delete answers when the services of a swarm could not be
 // read, so whether one of them mounts the volume is not known.
 var errServicesUnread = errors.New("api: could not read the swarm services")
@@ -772,6 +782,17 @@ func deleteOneVolume(ctx context.Context, d VolumesDeps, envID string, swarm boo
 		if !exists {
 			return errVolumeGone
 		}
+		// The proxy's cache is removed by switching ingress off, never by hand (D-46). The decision is
+		// from a fresh inspect: the component label and the reserved name together (D-41).
+		if t.Name == ingress.VolumeName {
+			detail, _, e := c.VolumeDetail(writeCtx, t.Name)
+			if e != nil {
+				return e
+			}
+			if ingress.OwnsVolume(detail.Name, detail.Labels) {
+				return errVolumeIngressOwned
+			}
+		}
 		containers, e := c.VolumeUsers(writeCtx, t.Name)
 		if e != nil {
 			return e
@@ -788,6 +809,9 @@ func deleteOneVolume(ctx context.Context, d VolumesDeps, envID string, swarm boo
 		}
 		return c.VolumeRemove(writeCtx, t.Name)
 	})
+	if errors.Is(err, errVolumeIngressOwned) {
+		return fail(problemIngressOwned, ingressOwnedMessage), driver, true
+	}
 	if err != nil {
 		code, detail := volumeRemoveError(t.Name, err)
 		// A volume that is not there has nothing to record about.

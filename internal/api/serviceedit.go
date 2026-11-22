@@ -219,7 +219,7 @@ const (
 
 // registerServiceEdit mounts the review and apply routes.
 func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
-	const problems = "Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; " +
+	const problems = "Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 409 ingress_owned for TierPlan's ingress proxy service; 404 service_not_found; 409 not_a_swarm for a standalone host; " +
 		"422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; " +
 		"422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; " +
 		"403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). " +
@@ -258,6 +258,7 @@ func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
 			"A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. " +
 			"Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. " + problems +
 			"No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. " +
+			"A spec that sets the label tierplan.component, on the service or on its container, and a staged secret or config that sets it, are refused 422 ingress_component_label before anything is created: the label is TierPlan's own for its ingress objects. " +
 			"Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusAccepted, MaxBodyBytes: maxApplyBody,
 	}, rbac.Requirement{Perm: rbac.PermServicesControl, Scope: rbac.ScopeEnvironment},
@@ -286,6 +287,9 @@ func swarmopsDeps(d ServicesDeps) swarmops.Deps {
 // reviewServiceUpdate judges a spec inside one cluster read: it only reads, so a read that has to be
 // run again on another manager is safe.
 func reviewServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceEditInput) (ServiceReviewBody, error) {
+	if _, sets := specSetsComponentLabel(in.Body.Spec); sets {
+		return ServiceReviewBody{}, componentLabelError()
+	}
 	if err := requireSwarm(ctx, d, envID); err != nil {
 		return ServiceReviewBody{}, err
 	}
@@ -392,12 +396,17 @@ func stagedObjects(in []ServiceStagedObject) ([]swarmops.StagedObject, error) {
 				so.Subnet, so.CreateAnyway = o.Subnet, o.CreateAnyway
 			}
 		case swarmops.KindSecret:
-			if so.Data, err = decodeSecretValue(o.Data); err == nil {
+			// The component label is TierPlan's own for its ingress objects, as on the secrets route (D-41).
+			if hasComponentLabel(o.Labels) {
+				err = componentLabelError()
+			} else if so.Data, err = decodeSecretValue(o.Data); err == nil {
 				err = validateSecretLabels(o.Labels)
 			}
 			so.Labels = o.Labels
 		case swarmops.KindConfig:
-			if so.Templating, _, err = configTemplating(o.Templating); err == nil {
+			if hasComponentLabel(o.Labels) {
+				err = componentLabelError()
+			} else if so.Templating, _, err = configTemplating(o.Templating); err == nil {
 				if so.Data, err = decodeConfigValue(o.Data); err == nil {
 					err = validateSecretLabels(o.Labels)
 				}
@@ -489,6 +498,10 @@ func applyDeps(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, us
 // applyServiceUpdate sends a spec once. The write is sent and seen through, so a browser that goes
 // away while it runs does not turn an update that happened into a failure.
 func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID string, in *ServiceApplyInput) (ServiceApplyBody, error) {
+	if _, sets := specSetsComponentLabel(in.Body.Spec); sets {
+		// Refused before anything is read, staged or sent, like a create (D-41).
+		return ServiceApplyBody{}, componentLabelError()
+	}
 	objects, err := stagedObjects(in.Body.Objects)
 	if err != nil {
 		return ServiceApplyBody{}, err
@@ -622,6 +635,8 @@ func serviceWriteProblem(ctx context.Context, d ServicesDeps, envID, failed stri
 		taken    *swarmops.NameTakenError
 	)
 	switch {
+	case errors.Is(err, swarmops.ErrIngressOwned):
+		return problemIngressOwned, ingressOwnedError()
 	case errors.As(err, &invalid):
 		return problem(http.StatusUnprocessableEntity, problemSpecInvalid, "The service spec can't be read: "+invalid.Message+".",
 			&huma.ErrorDetail{Location: "spec", Message: invalid.Message})

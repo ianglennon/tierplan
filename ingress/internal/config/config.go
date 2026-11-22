@@ -22,25 +22,19 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 	"github.com/ianglennon/tierplan/proto/ingresswire"
 )
 
+// The variable names are the proto module's, so the server's deployer and this supervisor share one copy
+// of each string (D-47). They stay exported here so callers do not change.
 const (
-	// EnvURL is the full address of the server's ingress channel, for example
-	// wss://tierplan.example:7480/ingress/connect (D-33).
-	EnvURL = "TIERPLAN_INGRESS_URL"
-	// EnvPin is the pin of the server's certificate, or several separated by
-	// commas, as "sha256/" and a base64 SPKI hash (D-32). Without it the server
-	// must present a certificate the system trusts.
-	EnvPin = "TIERPLAN_INGRESS_PIN"
-	// EnvJoinTokenFile is the path of a Docker secret holding the join token. It
-	// wins over EnvJoinToken.
-	EnvJoinTokenFile = "TIERPLAN_INGRESS_JOIN_TOKEN_FILE" //nolint:gosec // the name of a variable, not a credential
-	// EnvJoinToken is the join token itself.
-	EnvJoinToken = "TIERPLAN_INGRESS_JOIN_TOKEN" //nolint:gosec // the name of a variable, not a credential
-	// EnvNodeID is the swarm node ID of the host the supervisor runs on. A
-	// standalone node has none, so it is optional (D-22).
-	EnvNodeID = "TIERPLAN_INGRESS_NODE_ID"
+	EnvURL           = ingressbundle.EnvURL
+	EnvPin           = ingressbundle.EnvPin
+	EnvJoinTokenFile = ingressbundle.EnvJoinTokenFile
+	EnvJoinToken     = ingressbundle.EnvJoinToken
+	EnvNodeID        = ingressbundle.EnvNodeID
+	EnvAccessLog     = ingressbundle.EnvAccessLog
 )
 
 // Config is what the supervisor needs to start. The join token is not a field
@@ -53,6 +47,9 @@ type Config struct {
 	Pins []string
 	// NodeID is the swarm node ID, or "" on a standalone node.
 	NodeID string
+	// AccessLog is true when TIERPLAN_INGRESS_ACCESS_LOG is 1: the supervisor writes the static file with
+	// Traefik's JSON access log on stdout, headers dropped (D-31, D-32). Off by default (RTE-05).
+	AccessLog bool
 
 	tokenFile, token string
 }
@@ -66,6 +63,7 @@ type Config struct {
 //	TIERPLAN_INGRESS_NODE_ID          optional, the swarm node ID
 //	TIERPLAN_INGRESS_JOIN_TOKEN_FILE  path of a Docker secret holding the token; wins over the variable
 //	TIERPLAN_INGRESS_JOIN_TOKEN       the token itself
+//	TIERPLAN_INGRESS_ACCESS_LOG       optional, 1 switches the access log on; unset or empty is off
 //
 // Load does not read the token variables' values into a check and never opens the
 // token file; see Config.JoinToken.
@@ -85,7 +83,22 @@ func Load(env func(string) string) (Config, error) {
 	if cfg.NodeID, err = parseNodeID(env(EnvNodeID)); err != nil {
 		return Config{}, err
 	}
+	if cfg.AccessLog, err = parseAccessLog(env(EnvAccessLog)); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// parseAccessLog reads the access-log switch: empty is off and 1 is on. Anything else is refused, so a typo
+// such as "yes" or "true" fails loudly instead of silently logging or not logging (T-24-04).
+func parseAccessLog(raw string) (bool, error) {
+	switch strings.TrimSpace(raw) {
+	case "":
+		return false, nil
+	case "1":
+		return true, nil
+	}
+	return false, errors.New(EnvAccessLog + " must be 1 to switch the access log on, or unset to leave it off")
 }
 
 // JoinToken returns the join token: from the file when EnvJoinTokenFile is set

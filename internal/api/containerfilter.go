@@ -12,6 +12,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 )
 
 // The labels the container list reads. They are the only labels that reach a
@@ -101,17 +102,26 @@ func statusCounts(rows []envs.ContainerRow) StatusCountsBody {
 }
 
 // selfKindOf says whether a container is TierPlan's own server ("server"), one of
-// its agents ("agent") or neither (""). A label can be set by anyone, so this only
-// adds care in the UI; the action endpoint decides ownership again from a fresh
-// inspect (T-04-32).
+// its agents ("agent"), a task of its ingress proxy ("ingress") or none of them
+// (""). A label can be set by anyone, so this only adds care in the UI; the
+// action endpoint decides ownership again from a fresh inspect (T-04-32).
 func selfKindOf(isSelf bool, labels map[string]string) string {
 	switch {
 	case isSelf:
 		return "server"
 	case labels[labelAgent] == "true":
 		return "agent"
+	case isIngressTask(labels):
+		return "ingress"
 	}
 	return ""
+}
+
+// isIngressTask says whether a container's labels are those of a task of TierPlan's ingress proxy: the
+// component label and the swarm's service-name label with the reserved name (D-41). The component label alone
+// is user-controlled, so a container that sets only it is not taken for the proxy.
+func isIngressTask(labels map[string]string) bool {
+	return ingress.HasComponentLabel(labels) && labels[labelService] == ingress.ServiceName
 }
 
 // matchesQuery says whether q (already lower-cased) occurs in the name, the image,

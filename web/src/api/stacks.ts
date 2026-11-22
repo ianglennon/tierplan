@@ -26,6 +26,7 @@ export type StackReview = components["schemas"]["StackReviewBody"];
 export type StackReviewService = components["schemas"]["StackReviewServiceBody"];
 export type StackReviewImage = components["schemas"]["StackReviewImageBody"];
 export type StackReviewObject = components["schemas"]["StackReviewObjectBody"];
+export type StackReviewIngress = components["schemas"]["StackReviewIngressBody"];
 export type StackTextDiff = components["schemas"]["StackTextDiffBody"];
 export type StackDiffHunk = components["schemas"]["StackDiffHunkBody"];
 export type StackDiffLine = components["schemas"]["StackDiffLineBody"];
@@ -749,12 +750,16 @@ export class DeployRequestError extends Error {
   readonly status: number;
   readonly type?: string;
   readonly fields: ProblemField[];
-  constructor(status: number, type?: string, fields: ProblemField[] = []) {
+  // The server's own sentence for why (which hostname a refused claim is about), already redacted by it. Shown as
+  // text only; undefined when it sent none.
+  readonly reason?: string;
+  constructor(status: number, type?: string, fields: ProblemField[] = [], reason?: string) {
     super(`POST deploys failed (${status})`);
     this.name = "DeployRequestError";
     this.status = status;
     this.type = type;
     this.fields = fields;
+    this.reason = reason;
   }
 }
 
@@ -774,7 +779,12 @@ export function useDeployStack(envId: string, stackId: string) {
         });
         if (!res.data) {
           const problem = readProblem(res.error, res.response);
-          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+          throw new DeployRequestError(
+            problem.status,
+            problem.type,
+            problem.fields,
+            problem.detail,
+          );
         }
         return res.data;
       } catch (e) {
@@ -806,7 +816,12 @@ export function useRollbackStack(envId: string, stackId: string) {
         });
         if (!res.data) {
           const problem = readProblem(res.error, res.response);
-          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+          throw new DeployRequestError(
+            problem.status,
+            problem.type,
+            problem.fields,
+            problem.detail,
+          );
         }
         return res.data;
       } catch (e) {

@@ -1,0 +1,49 @@
+# The fixed static configuration of TierPlan's ingress proxy. It is owned by proto/ingressbundle
+# (embedded, see StaticTraefik) and shared by TierPlan's renderer, the real-Traefik harness and the
+# tierplan-ingress supervisor, which writes it to its state volume at every start. It is not part of
+# a bundle and has no checksum. It is not rendered per environment. The host publishes ports 80 and
+# 443 to 8080 and 8443, so the proxy runs without privileges. A change to what this file expects of
+# the dynamic bundle needs a schema bump.
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+log:
+  level: INFO
+  format: json
+entryPoints:
+  web:
+    address: ":8080"
+    transport:
+      lifeCycle:
+        graceTimeOut: 10s
+    http:
+      aliasHeadersStrategy: delete
+      redirections:
+        entryPoint:
+          to: ":443"
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":8443"
+    transport:
+      lifeCycle:
+        graceTimeOut: 10s
+    http:
+      aliasHeadersStrategy: delete
+  ping:
+    address: ":8082"
+    http:
+      aliasHeadersStrategy: delete
+ping:
+  entryPoint: ping
+providers:
+  providersThrottleDuration: 1s
+  file:
+    directory: /var/lib/tierplan-ingress/dynamic
+# Access log, switched on by TIERPLAN_INGRESS_ACCESS_LOG=1. JSON on stdout; no header is recorded.
+accessLog:
+  format: json
+  fields:
+    defaultMode: keep
+    headers:
+      defaultMode: drop

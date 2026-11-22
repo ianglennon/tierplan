@@ -1284,31 +1284,47 @@ func (r Repo) FinishDeploy(ctx context.Context, id, state, failedService, code s
 	return nil
 }
 
+// InterruptedStack is a stack whose deploy, update or roll back was running when the server stopped.
+type InterruptedStack struct {
+	StackID, EnvID string
+}
+
 // MarkInterrupted ends every operation still recorded as running as interrupted, and fails the
 // revision a deploy or an update of them had taken. The server runs it once, when the store is open
 // and before it serves anything: the jobs and the operation lock are in memory, so an operation that
 // was running when the server stopped is not running now, and the swarm may be partly updated. The
-// stack then reads Deploy failed and offers a roll back (Open Q5). It returns how many operations
-// it ended.
-func (r Repo) MarkInterrupted(ctx context.Context) (int, error) {
+// stack then reads Deploy failed and offers a roll back (Open Q5). It returns the stacks whose deploy,
+// update or roll back it ended, once each, read inside the same transaction before the operations were
+// marked: those are the stacks whose hostname claims the failed revision may have written, which the
+// caller puts back to the last good revision's (D-45). A start, a stop and a remove are ended too but
+// are not listed: they write no claim.
+func (r Repo) MarkInterrupted(ctx context.Context) ([]InterruptedStack, error) {
 	tx, err := r.Store.Write.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin: %w", err)
+		return nil, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // a no-op once committed
 	q := r.Store.Q.WithTx(tx)
-	// The revisions first: they are found through the deploys that are still running.
-	if _, err := q.MarkRunningRevisionsFailed(ctx); err != nil {
-		return 0, fmt.Errorf("fail the revisions of interrupted deploys: %w", err)
-	}
-	n, err := q.MarkRunningDeploysInterrupted(ctx, r.now().UnixNano())
+	// The stacks first: the deploys that name them are about to end.
+	rows, err := q.ListInterruptedStacks(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("mark running deploys interrupted: %w", err)
+		return nil, fmt.Errorf("list the stacks of interrupted deploys: %w", err)
+	}
+	// The revisions next: they are found through the deploys that are still running.
+	if _, err := q.MarkRunningRevisionsFailed(ctx); err != nil {
+		return nil, fmt.Errorf("fail the revisions of interrupted deploys: %w", err)
+	}
+	if _, err := q.MarkRunningDeploysInterrupted(ctx, r.now().UnixNano()); err != nil {
+		return nil, fmt.Errorf("mark running deploys interrupted: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
+		return nil, fmt.Errorf("commit: %w", err)
 	}
-	return int(n), nil
+	out := make([]InterruptedStack, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, InterruptedStack{StackID: row.StackID, EnvID: row.EnvID})
+	}
+	return out, nil
 }
 
 // LatestDeploys is the newest operation of each stack of an environment, by stack ID.

@@ -21,7 +21,13 @@ const (
 	PrepareObjects = "objects"
 	PrepareConvert = "convert"
 	PreparePins    = "pins"
+	// PrepareIngress is the read of whether ingress is on for the environment. It fails the prepare instead of
+	// converting without the attachment, which would take a routed service off the shared network (T-24-18).
+	PrepareIngress = "ingress"
 )
+
+// prepareIngressMessage is what a refusal at PrepareIngress says.
+const prepareIngressMessage = "could not read whether ingress is on for this environment"
 
 // PrepareError is a revision that cannot be redeployed as it stands: the stage that refused it and why.
 type PrepareError struct {
@@ -52,6 +58,9 @@ type RollbackPlan struct {
 	// Platforms are the platforms the revision ran with, by swarm service name, exactly as it recorded them (08-33).
 	// Nil for a revision made before they were recorded.
 	Platforms map[string][]swarm.Platform
+	// Attach is the attachment to the ingress network the project was converted with: nil when none was made. A caller
+	// that takes the operation lock after preparing compares it with a fresh read, and prepares again when it changed.
+	Attach *stacks.IngressAttach
 }
 
 // PrepareRollback checks, loads and converts the revision to restore, and checks that it knows an image for every
@@ -83,7 +92,14 @@ func (d Deps) PrepareRollbackWith(ctx context.Context, st Stack, target Snapshot
 	refuse := func(stage string, err error) error {
 		return &PrepareError{Stage: stage, Err: err, Masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
 	}
-	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: target.Copy, IngressPolicy: policy})
+	// Every path that converts a revision for the engine comes through here, so the attachment of a routed service
+	// to the ingress network is decided once, here (D-38): a roll back, a restore, a start, the drift check, the
+	// history comparison and the automatic roll back of a failed image update convert as a deploy does.
+	attach, err := d.attachFor(ctx, st.EnvID, st.Target)
+	if err != nil {
+		return RollbackPlan{}, refuse(PrepareIngress, fmt.Errorf("%s: %w", prepareIngressMessage, err))
+	}
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: target.Copy, IngressPolicy: policy, Ingress: attach})
 	if err != nil {
 		return RollbackPlan{}, refuse(PrepareLoad, err)
 	}
@@ -99,7 +115,7 @@ func (d Deps) PrepareRollbackWith(ctx context.Context, st Stack, target Snapshot
 	if _, err := RestoredPins(plan.Services, pins); err != nil {
 		return RollbackPlan{}, refuse(PreparePins, err)
 	}
-	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: plan, Pins: pins, Platforms: target.Platforms}, nil
+	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: plan, Pins: pins, Platforms: target.Platforms, Attach: attach}, nil
 }
 
 // RestoredPins are the images a roll back sends: for each service with an image, the reference the

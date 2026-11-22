@@ -5,9 +5,12 @@ package stacks
 
 import (
 	"maps"
+	"slices"
 
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
+
+	"github.com/ianglennon/tierplan/internal/ingress"
 )
 
 // StripOwnership returns a copy of spec without any of TierPlan's own tierplan.* labels (IsOwnershipLabel; the user's
@@ -34,6 +37,32 @@ func StripOwnership(spec swarm.ServiceSpec) swarm.ServiceSpec {
 		}
 		spec.TaskTemplate.ContainerSpec = &stripped
 	}
+	return spec
+}
+
+// StripIngressAttachment returns a copy of spec without any TaskTemplate.Networks entry whose Target is the ingress
+// network, by name (ingress.NetworkName) or by any of ids (the network's ID, for a live spec whose targets were not
+// turned into names). The attachment is TierPlan's, added at deploy time (D-19): comparisons that must not see it
+// (drift, the drift rows of a review, the adopt review, the ownership-only comparison) call this on both sides; the
+// deploy review's own service diff does not, so a join or a leave stays a listed change there (D-20, D-21). The spec
+// given is not changed, and one without the attachment comes back as it was.
+func StripIngressAttachment(spec swarm.ServiceSpec, ids ...string) swarm.ServiceSpec {
+	isIngress := func(target string) bool {
+		return target == ingress.NetworkName || (target != "" && slices.Contains(ids, target))
+	}
+	if !slices.ContainsFunc(spec.TaskTemplate.Networks, func(n swarm.NetworkAttachmentConfig) bool { return isIngress(n.Target) }) {
+		return spec
+	}
+	kept := make([]swarm.NetworkAttachmentConfig, 0, len(spec.TaskTemplate.Networks))
+	for _, n := range spec.TaskTemplate.Networks {
+		if !isIngress(n.Target) {
+			kept = append(kept, n)
+		}
+	}
+	if len(kept) == 0 {
+		kept = nil
+	}
+	spec.TaskTemplate.Networks = kept
 	return spec
 }
 

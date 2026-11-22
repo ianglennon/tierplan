@@ -31,6 +31,7 @@ const web: ServiceItem = {
   stack: "",
   tierplanStackId: "",
   agent: false,
+  ingress: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
   updateMessage: "",
@@ -416,6 +417,38 @@ describe("ScaleDialog: several services", () => {
     expect(report.rows[1]?.reason).not.toContain("service_changed");
     expect(report.rows[2]?.reason).toBe("Global services can't be scaled.");
     expect(report.bulkId).toBeTruthy();
+  });
+
+  it("words the ingress proxy as managed by TierPlan, never by its code or the server's sentence", async () => {
+    answer = () =>
+      Response.json({
+        results: [
+          {
+            serviceId: "id-web",
+            name: "web",
+            result: "skipped",
+            code: "ingress_owned",
+            detail: "server sentence that is not shown",
+            replicas: 5,
+            changed: false,
+          },
+          {
+            serviceId: "id-api",
+            name: "api",
+            result: "failed",
+            code: "service_changed",
+            replicas: 2,
+            changed: false,
+          },
+        ],
+      });
+    const { onDetails } = mountBulk([web, api]);
+    fireEvent.click(screen.getByRole("button", { name: "Scale 2 services" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+    const report = onDetails.mock.calls[0]?.[0] as BulkReport;
+    expect(report.rows[0]?.reason).toBe(
+      "This is managed by TierPlan ingress. Switch ingress off to remove it. Nothing was changed.",
+    );
   });
 
   it("closes once the bulk is answered, even when every service failed, and sums it up in one toast", async () => {

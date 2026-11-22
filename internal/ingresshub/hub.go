@@ -91,9 +91,14 @@ type Hub struct {
 
 	// sub is the subscription to the source's Changes, taken in NewHub so a change that lands before Run starts
 	// is not lost. stop is closed by Close and ends Run.
-	sub      *ingress.Subscription
-	stop     chan struct{}
-	stopOnce sync.Once
+	sub *ingress.Subscription
+	// envSub is the subscription to a second notifier of environment changes, taken by WithEnvChanges. It wakes
+	// the sessions of an environment whose bundle did not change but whose switch did.
+	envSub *ingress.Subscription
+	// deliveryGate, when set, says whether an environment's nodes are sent bundles at all (WithDeliveryGate).
+	deliveryGate func(ctx context.Context, envID string) bool
+	stop         chan struct{}
+	stopOnce     sync.Once
 	// envelopes holds the marshalled bundle message of each environment, shared by its sessions.
 	envelopes envelopeCache
 	// onPush, when set, is told the outcome of every look at the current bundle (WithPushObserver).
@@ -230,6 +235,26 @@ func (h *Hub) WithBeforeWrite(f func(nodeID string)) *Hub {
 	return h
 }
 
+// WithDeliveryGate sets a function that says whether an environment's nodes are sent bundles: false, a node
+// completes its hello and is sent nothing (PushDisabled), and the renderer is not told. It is read on every look at
+// the current bundle, so a switch applies at once. A gate that cannot tell must answer false, so a read failure sends
+// nothing. Nil, the default, sends to every environment (D-12). Call it before the hub serves.
+func (h *Hub) WithDeliveryGate(gate func(ctx context.Context, envID string) bool) *Hub {
+	h.deliveryGate = gate
+	return h
+}
+
+// WithEnvChanges makes the hub look again at an environment's sessions whenever n says the environment changed, as
+// it does for the source's bundle changes. The gate's switch is not part of a bundle, so a node held back by the
+// gate is sent the bundle only when this wakes it. The subscription is taken now and closed by Close. Call it before
+// Run starts.
+func (h *Hub) WithEnvChanges(n *ingress.Notifier) *Hub {
+	if n != nil {
+		h.envSub = n.Subscribe()
+	}
+	return h
+}
+
 // Handler serves GET /ingress/connect.
 func (h *Hub) Handler() http.Handler { return http.HandlerFunc(h.serve) }
 
@@ -302,6 +327,9 @@ func (h *Hub) Close() {
 	h.stopOnce.Do(func() { close(h.stop) })
 	if h.sub != nil {
 		h.sub.Close()
+	}
+	if h.envSub != nil {
+		h.envSub.Close()
 	}
 	h.mu.Lock()
 	h.closed = true

@@ -492,6 +492,8 @@ func (l *lifecycle) startSwarm(ctx context.Context) {
 		switch {
 		case errors.As(err, &pe) && errors.As(pe.Err, &invalid):
 			code = CodePinsInvalid
+		case errors.As(err, &pe) && pe.Stage == PrepareIngress:
+			// The server could not read the ingress switch; the stack is not invalid.
 		case errors.As(err, &pe):
 			code = CodeStackInvalid
 		}

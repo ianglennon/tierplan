@@ -41,7 +41,13 @@ func Render(in RenderInput) ([]byte, error) {
 	if in.Loaded == nil || in.Loaded.Project == nil {
 		return nil, errors.New("stacks: render: no loaded project")
 	}
-	raw, err := in.Loaded.Project.MarshalYAML()
+	project := in.Loaded.Project
+	if in.Loaded.Ingress != nil {
+		// The ingress attachment is TierPlan's, never the user's: the stored rendering shows the file as
+		// written (D-20). The loaded project is left as it is.
+		project = undoIngress(project, in.Loaded.Ingress)
+	}
+	raw, err := project.MarshalYAML()
 	if err != nil {
 		return nil, fmt.Errorf("stacks: render: marshal: %w", err)
 	}
@@ -52,7 +58,7 @@ func Render(in RenderInput) ([]byte, error) {
 	if len(doc.Content) == 1 && doc.Content[0].Kind == yaml.MappingNode {
 		if services := mappingValue(doc.Content[0], "services"); services != nil && services.Kind == yaml.MappingNode {
 			for i := 0; i+1 < len(services.Content); i += 2 {
-				pinImage(services.Content[i+1], in.Loaded.Project.Name, services.Content[i].Value, in.Pins)
+				pinImage(services.Content[i+1], project.Name, services.Content[i].Value, in.Pins)
 				ShortenPorts(services.Content[i+1])
 			}
 		}

@@ -38,6 +38,8 @@ export interface VolumeTarget {
   name: string;
   node: string;
   nodeId: string;
+  // TierPlan's ingress cache volume: listed as skipped in a bulk and never sent (D-29).
+  ingress?: boolean;
 }
 
 // What a refusal comes to: the sentence, and whether it is the agent's policy, which
@@ -65,6 +67,8 @@ function reasonOf(t: Translate, who: VolumeTarget, result: VolumeDeleteResult): 
       return { message: t("volumes.errors.hostReadOnly"), agentPolicy: false };
     case "agent_policy_denied":
       return { message: t("actions.refusal.agent_policy_denied"), agentPolicy: true };
+    case "ingress_owned":
+      return { message: t("ingress.owned.refused"), agentPolicy: false };
     default:
       return { message: result.detail || t("volumes.errors.generic"), agentPolicy: false };
   }
@@ -82,19 +86,31 @@ function requestFailure(t: Translate, err: VolumeDeleteError): Failure {
   return { message: t("volumes.errors.generic"), agentPolicy: false };
 }
 
-// reportOf lines the results up with the volumes that were asked about.
+// reportOf lines the results up with the volumes that were asked about. The results are of
+// the volumes that were sent: a volume TierPlan's ingress owns was not, and is reported as
+// skipped.
 function reportOf(
   t: Translate,
   rows: readonly VolumeTarget[],
   results: VolumeDeleteResults,
 ): BulkReport {
+  let sentSoFar = 0;
   return {
     verb: "remove",
     title: t("volumes.results.title"),
     itemLabel: t("volumes.results.volume"),
     bulkId: results.bulkId,
-    rows: rows.map((r, i) => {
-      const result = results[i];
+    rows: rows.map((r) => {
+      if (r.ingress) {
+        return {
+          name: r.name,
+          node: r.node,
+          result: "skipped",
+          reason: t("ingress.owned.bulkNote"),
+          code: "ingress_owned",
+        };
+      }
+      const result = results[sentSoFar++];
       if (!result) {
         return {
           name: r.name,
@@ -152,9 +168,11 @@ export function DeleteVolumesDialog({
   const [error, setError] = useState<Failure | null>(null);
   // A second click can land before the pending state has rendered.
   const inFlight = useRef(false);
-  const first = rows[0];
-  const bulk = rows.length > 1;
-  const count = rows.length;
+  // The ingress cache volume is listed but never sent: the volumes acted on are the rest.
+  const acting = rows.filter((r) => !r.ingress);
+  const first = acting[0];
+  const bulk = acting.length > 1;
+  const count = acting.length;
   const name = first?.name ?? "";
   // What has to be typed: the name of one volume, else the phrase for the whole selection.
   const expected = bulk ? t("volumes.delete.phrase", { count }) : name;
@@ -173,7 +191,7 @@ export function DeleteVolumesDialog({
     try {
       const results = await mutation.mutateAsync({
         confirm: expected,
-        targets: rows.map((r) => ({ nodeId: r.nodeId, name: r.name })),
+        targets: acting.map((r) => ({ nodeId: r.nodeId, name: r.name })),
       });
       if (bulk) {
         sumUp(reportOf(t, rows, results));
@@ -211,7 +229,8 @@ export function DeleteVolumesDialog({
   // 1 failed" with Details that open the results.
   function sumUp(report: BulkReport) {
     const done = report.rows.filter((r) => r.result === "done").length;
-    const failed = report.rows.length - done;
+    // A skipped volume was not tried, so it is not a failure.
+    const failed = report.rows.filter((r) => r.result === "failed").length;
     if (failed === 0) {
       toastSuccess(t("volumes.delete.doneBulk", { count: done }));
     } else if (onDetails) {
@@ -243,11 +262,16 @@ export function DeleteVolumesDialog({
             {bulk ? t("volumes.delete.bodyBulk") : t("volumes.delete.body")}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {bulk ? (
+        {rows.length > 1 ? (
           <TargetList
             swarm={swarm}
             label={t("volumes.results.volume")}
-            rows={rows.map((r) => ({ name: r.name, node: r.node }))}
+            rows={rows.map((r) => ({
+              name: r.name,
+              node: r.node,
+              note: r.ingress ? t("ingress.owned.bulkNote") : undefined,
+              skipped: r.ingress,
+            }))}
           />
         ) : null}
         <TypeToConfirm

@@ -45,6 +45,7 @@ const net = (name: string, extra: Partial<NetworkRow> = {}): NetworkRow => ({
   subnets: [],
   created: "2026-10-01T10:00:00Z",
   builtIn: false,
+  ingress: false,
   attachedContainers: 0,
   attachedServices: 0,
   owner: "",

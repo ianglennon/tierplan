@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
@@ -150,6 +151,8 @@ func (a *Applier) containerUpdatable(ctx context.Context, envID string, w Worklo
 	switch {
 	case a.isSelf(w.ID):
 		return &NotUpdatableError{Code: NotUpdatableAgent}
+	case ingress.HasComponentLabel(w.Labels):
+		return &NotUpdatableError{Code: NotUpdatableIngress}
 	case w.Task:
 		return &NotUpdatableError{Code: NotUpdatableTaskContainer}
 	case len(w.NodeIDs) == 0 || w.NodeIDs[0] == "":

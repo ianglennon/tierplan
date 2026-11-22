@@ -221,6 +221,7 @@ The source code, version and commit are linked from **Settings > About**, as the
 - [docs/networks.md](docs/networks.md): the Address space page, pool and overlay warnings, orphaned and unused networks, the subnet picker, small stack subnets, and the pool guidance.
 - [docs/janitor.md](docs/janitor.md): the janitor: what it removes on its own and what it never touches, the schedule and policy levels, keeping things with `tierplan.keep=true`, previews and Clean now, run history, crash evidence, and the swarm task history limit.
 - [docs/services.md](docs/services.md): swarm services, nodes, secrets and configs, service logs and stats, restart loops, and why TierPlan cannot change a service with host access unless the host allows it.
+- [docs/ingress.md](docs/ingress.md): ingress on a swarm: switching it on and off, what that creates, what refuses the switch, how existing stacks join, and the proxy's access log.
 - [docs/access.md](docs/access.md): instance admins, roles, teams, invite and reset links, sessions.
 - [docs/permissions.md](docs/permissions.md): what each role may do, generated from the code.
 - [docs/backup.md](docs/backup.md): backups, the three ways to restore, agents after a restore and rotating the master key.

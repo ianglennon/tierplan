@@ -11,7 +11,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -23,6 +25,8 @@ import (
 const (
 	problemIngressNodeNotFound       = "ingress_node_not_found"
 	problemIngressNodeAlreadyRevoked = "ingress_node_already_revoked"
+	problemIngressNoManager          = "ingress_no_manager"
+	problemIngressTokenNotStored     = "ingress_token_not_stored" //nolint:gosec // G101: a problem type, not a credential
 
 	// The values of IngressNodeBody.Sync.
 	ingressSyncCurrent      = "current"
@@ -31,10 +35,21 @@ const (
 	ingressSyncUnknown      = "unknown"
 )
 
+// IngressTokenIssuer makes or rotates an environment's join token and, where ingress is on, keeps the swarm's secret in step
+// with it: *ingressdeploy.Service has this method.
+type IngressTokenIssuer interface {
+	IssueJoinToken(ctx context.Context, actor audit.Actor, owner, envID, ip, ua string) (ingresshub.Token, error)
+}
+
+var _ IngressTokenIssuer = (*ingressdeploy.Service)(nil)
+
 // IngressNodesDeps are the dependencies of the ingress node routes.
 type IngressNodesDeps struct {
 	// Service holds the join tokens and the nodes. Nil answers 503 ingress_unavailable, so the routes are always registered.
 	Service *ingresshub.Service
+	// Issuer makes the join token. On a swarm whose ingress is on it stores the token as the proxies' swarm secret, so the
+	// ensure loop does not replace it. Nil makes the token through Service alone.
+	Issuer IngressTokenIssuer
 	// Live says whether a node has a live session now. Nil means none has: every node shows as not connected.
 	Live func(nodeID string) bool
 	// CurrentBundle is the ID of the bundle an environment's nodes should hold now, and false when none has been
@@ -166,7 +181,7 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 	unavailable := func() error {
 		return httpx.Problem(http.StatusServiceUnavailable, problemIngressUnavailable, "Ingress nodes are not available on this server.")
 	}
-	fail := func(what string, err error) error {
+	fail := func(ctx context.Context, what string, err error) error {
 		switch {
 		case errors.Is(err, ingresshub.ErrEnvironmentNotFound):
 			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
@@ -174,6 +189,24 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			return httpx.Problem(http.StatusNotFound, problemIngressNodeNotFound, "No such ingress node in this environment.")
 		case errors.Is(err, ingresshub.ErrAlreadyRevoked):
 			return httpx.Problem(http.StatusConflict, problemIngressNodeAlreadyRevoked, "That node was revoked while you were looking at it.")
+		}
+		var locked *ingressdeploy.LockedError
+		var notStored *ingressdeploy.TokenNotStoredError
+		switch {
+		case errors.As(err, &locked):
+			name := ""
+			if env := httpx.EnvFrom(ctx); env != nil {
+				name = env.Name
+			}
+			return operationLocked(name, locked.Holder)
+		case errors.Is(err, ingressdeploy.ErrPaused):
+			return httpx.Problem(http.StatusConflict, problemIngressPaused, "Ingress on this environment was paused by a restore. Resume it first.")
+		case errors.Is(err, ingressdeploy.ErrNoManager):
+			return httpx.Problem(http.StatusConflict, problemIngressNoManager, "No manager node's agent is connected, so the new token cannot be stored on the swarm. Nothing was changed.")
+		case errors.As(err, &notStored):
+			d.Log.Error("ingress node request failed", "step", what, "error", err)
+			return httpx.Problem(http.StatusBadGateway, problemIngressTokenNotStored,
+				"The swarm would not take the new join token, so no token was handed out. Ingress will make its own token shortly; rotate again if you need to read it.")
 		}
 		d.Log.Error("ingress node request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
@@ -187,7 +220,10 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		Description: "Makes the ingress join token that lets ingress nodes enrol into this environment, or, when it has one, makes a new one and " +
 			"retires the current one in the same transaction. The token is in the answer, once, with Cache-Control no-store: the server keeps only " +
 			"its hash. A rotation stops the old token enrolling new nodes and does not affect nodes that are already enrolled, which authenticate with " +
-			"their own key. 404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or " +
+			"their own key. On a swarm whose ingress is on, the token is also stored as the proxies' swarm secret, under the environment's operation lock, so the " +
+			"deployer adopts it and does not make another: 409 operation_locked while another operation holds the environment, 409 ingress_paused while a restore's pause stands, " +
+			"409 ingress_no_manager when no manager is connected, 502 ingress_token_not_stored when the swarm refuses the secret; in each case no token is handed out. " +
+			"404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or " +
 			"ingress.join_token_rotated with the generation, never the token.",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *TokenMutationInput) (*IngressJoinTokenOutput, error) {
@@ -198,9 +234,15 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		if d.Service == nil {
 			return nil, unavailable()
 		}
-		tok, err := d.Service.IssueToken(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent)
+		var tok ingresshub.Token
+		var err error
+		if d.Issuer != nil {
+			tok, err = d.Issuer.IssueJoinToken(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID, httpx.ClientIP(ctx), in.UserAgent)
+		} else {
+			tok, err = d.Service.IssueToken(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent)
+		}
 		if err != nil {
-			return nil, fail("issue the join token", err)
+			return nil, fail(ctx, "issue the join token", err)
 		}
 		return &IngressJoinTokenOutput{CacheControl: "no-store", Body: IngressJoinTokenBody{
 			Token: tok.Token, Generation: tok.Generation, Rotated: tok.Rotated,
@@ -224,7 +266,7 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		}
 		st, err := d.Service.TokenStatus(ctx, in.EnvID)
 		if err != nil {
-			return nil, fail("ingress join token status", err)
+			return nil, fail(ctx, "ingress join token status", err)
 		}
 		return &IngressJoinTokenStatusOutput{CacheControl: "no-store", Body: IngressJoinTokenStatusBody{
 			Exists: st.Exists, Generation: st.Generation, CreatedAt: rfc3339(st.CreatedAt), CreatedBy: st.CreatedBy, Disabled: st.Disabled,
@@ -250,7 +292,7 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			return nil, unavailable()
 		}
 		if err := d.Service.DisableToken(ctx, p.AuditActor(), in.EnvID, httpx.ClientIP(ctx), in.UserAgent); err != nil {
-			return nil, fail("disable the ingress join token", err)
+			return nil, fail(ctx, "disable the ingress join token", err)
 		}
 		return &IngressNoContentOutput{CacheControl: "no-store"}, nil
 	})
@@ -275,11 +317,11 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		}
 		// An environment with no nodes is a 200 with an empty list; one that does not exist is a 404.
 		if _, err := d.Service.TokenStatus(ctx, in.EnvID); err != nil {
-			return nil, fail("look up the environment", err)
+			return nil, fail(ctx, "look up the environment", err)
 		}
 		nodes, err := d.Service.ListNodes(ctx, in.EnvID)
 		if err != nil {
-			return nil, fail("list the ingress nodes", err)
+			return nil, fail(ctx, "list the ingress nodes", err)
 		}
 		var (
 			currentID string
@@ -339,7 +381,7 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		}
 		res, err := d.Service.Revoke(ctx, p.AuditActor(), in.EnvID, in.NodeID, opts, httpx.ClientIP(ctx), in.UserAgent)
 		if err != nil {
-			return nil, fail("revoke the ingress node", err)
+			return nil, fail(ctx, "revoke the ingress node", err)
 		}
 		held := res.HeldHostnames
 		if held == nil {

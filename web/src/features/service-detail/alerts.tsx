@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { CircleX, TriangleAlert } from "lucide-react";
+import { CircleX, Lock, TriangleAlert } from "lucide-react";
 
 import { useSetRestartLoopMute } from "@/api/restart-loops";
 import { type RolloutState, type ServiceDetail, serviceRolloutQuery } from "@/api/services";
@@ -86,7 +86,7 @@ function RestartLoopAlert({ envId, detail }: { envId: string; detail: ServiceDet
 
 // ServiceAlerts are the alerts under a service's header, after the update-state region
 // (RolloutProgress) that sits above them: the restart-loop alert, the replicas-short alert, the
-// stack-owned notice and the agent-service warning, in that order. The replicas-short alert is
+// stack-owned notice, the ingress notice and the agent-service warning, in that order. The replicas-short alert is
 // suppressed while an update-state alert or the restart-loop alert is shown, so a user sees at
 // most the update-state and restart-loop alerts together (D-12). Docker's task error is text.
 export function ServiceAlerts({ envId, detail }: ServiceAlertsProps) {
@@ -127,6 +127,15 @@ export function ServiceAlerts({ envId, detail }: ServiceAlertsProps) {
           stack={detail.stack}
           tierplanStackId={detail.tierplanStackId}
         />
+      ) : null}
+      {detail.ingress ? (
+        // Plain status, not a warning and not announced as an alert: an object TierPlan manages
+        // is expected, not a fault (U-03).
+        <Alert role="status">
+          <Lock aria-hidden="true" />
+          <AlertTitle>{t("ingress.owned.alertTitle")}</AlertTitle>
+          <AlertDescription>{t("ingress.owned.serviceBody")}</AlertDescription>
+        </Alert>
       ) : null}
       {detail.agent ? (
         <Alert variant="warning">

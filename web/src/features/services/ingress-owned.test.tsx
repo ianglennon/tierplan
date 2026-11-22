@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { setCsrfToken } from "@/api/client";
+import type { components } from "@/api/schema";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
+import { ServiceList } from "@/features/services/service-list";
+import "@/i18n";
+import { makeMe } from "@/test-me";
+import { TestRouter } from "@/test-router";
+
+// The services list marks the ingress proxy service as TierPlan's (UI-SPEC S3, D-29).
+
+const ENV = "e1";
+
+type ServiceItem = components["schemas"]["ServiceItem"];
+
+const svc = (extra: Partial<ServiceItem> = {}): ServiceItem => ({
+  id: "id-web",
+  name: "web",
+  mode: "replicated",
+  running: 2,
+  desired: 2,
+  updateState: "",
+  image: "registry.example.com/acme/web:1.4",
+  stack: "",
+  tierplanStackId: "",
+  agent: false,
+  ingress: false,
+  updatedAt: "2026-10-01T10:00:00Z",
+  ports: [],
+  updateMessage: "",
+  hasPreviousSpec: false,
+  createdAt: "2026-09-01T10:00:00Z",
+  ...extra,
+});
+
+let client: QueryClient;
+
+beforeEach(() => {
+  const items = [
+    svc(),
+    svc({
+      id: "id-proxy",
+      name: "tierplan-ingress",
+      mode: "global",
+      running: 3,
+      desired: 3,
+      image: "tierplan/ingress:1",
+      ingress: true,
+      hasPreviousSpec: true,
+      restartLoop: {
+        state: "flagged",
+        count: 4,
+        windowMinutes: 10,
+        latestError: "task: non-zero exit (1)",
+        since: "2026-10-14T09:00:00Z",
+      },
+    }),
+  ];
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 1 } } });
+  setCsrfToken(null);
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (req: Request) => {
+      const path = new URL(req.url).pathname;
+      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "operator" } }));
+      if (path === `/api/env/${ENV}/services`) {
+        return Response.json({
+          items,
+          total: items.length,
+          unfilteredTotal: items.length,
+          capped: false,
+          statusCounts: { degraded: 0, updating: 0, problem: 0, loop: 0 },
+          noManager: false,
+          fetchedAt: "2026-10-14T09:00:00Z",
+        });
+      }
+      return Response.json({}, { status: 404 });
+    }),
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  client.clear();
+});
+
+function mount() {
+  return render(
+    <QueryClientProvider client={client}>
+      <TestRouter>
+        <TooltipProvider>
+          <ServiceList envId={ENV} search={{}} onSearchChange={() => {}} />
+        </TooltipProvider>
+      </TestRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("the services list and the ingress proxy", () => {
+  it("draws the TierPlan ingress badge, with its lock, on the proxy's row once", async () => {
+    mount();
+    await screen.findByText("web");
+    const row = screen.getByRole("row", { name: /^Select tierplan-ingress/ });
+    const badge = within(row).getByText("TierPlan ingress");
+    expect(within(row).getAllByText("TierPlan ingress")).toHaveLength(1);
+    // The lock is decoration: the words carry the meaning.
+    const lock = badge.querySelector("svg");
+    expect(lock?.getAttribute("aria-hidden")).toBe("true");
+    // The badge never shrinks beside a long name.
+    expect(badge.className).toContain("shrink-0");
+    expect(screen.getAllByText("TierPlan ingress")).toHaveLength(1);
+  });
+
+  it("draws no badge on a plain row", async () => {
+    mount();
+    await screen.findByText("web");
+    expect(
+      within(screen.getByRole("row", { name: /^Select web/ })).queryByText("TierPlan ingress"),
+    ).toBeNull();
+  });
+});
+
+const REASON = "Managed by TierPlan. Switch ingress off to remove it.";
+
+async function openMenu(name: string) {
+  await screen.findByText(name);
+  await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1));
+  await act(async () => {});
+  const trigger = screen.getByRole("button", { name: `Actions for ${name}` });
+  await act(async () => {
+    fireEvent.keyDown(trigger, { key: "Enter" });
+  });
+}
+
+describe("the services list: the ingress proxy is read-only", () => {
+  it("draws the proxy's row menu items aria-disabled with the reason, and Open enabled", async () => {
+    mount();
+    await openMenu("tierplan-ingress");
+    expect(
+      (await screen.findByRole("menuitem", { name: "Open" })).getAttribute("aria-disabled"),
+    ).toBeNull();
+    for (const name of ["Scale…", "Force update…", /^Roll back…/, "Remove…"]) {
+      const item = await screen.findByRole("menuitem", { name });
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+    }
+    expect(screen.getAllByText(REASON).length).toBeGreaterThan(0);
+  });
+
+  it("keeps Mute restart-loop alerts available on the proxy's row, which is not a write", async () => {
+    mount();
+    await openMenu("tierplan-ingress");
+    const mute = await screen.findByRole("menuitem", { name: "Mute restart-loop alerts" });
+    expect(mute.getAttribute("aria-disabled")).toBeNull();
+    expect(mute.hasAttribute("data-disabled")).toBe(false);
+  });
+
+  it("leaves a plain row's menu enabled", async () => {
+    mount();
+    await openMenu("web");
+    expect(
+      (await screen.findByRole("menuitem", { name: "Force update…" })).getAttribute(
+        "aria-disabled",
+      ),
+    ).toBeNull();
+    expect(screen.queryByText(REASON)).toBeNull();
+  });
+
+  it("lists the proxy as skipped in the bulk scale dialog with the note", async () => {
+    mount();
+    await screen.findByText("tierplan-ingress");
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(1));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select all services" }));
+    fireEvent.click(
+      within(screen.getByRole("toolbar", { name: "Bulk actions" })).getByRole("button", {
+        name: "Scale…",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Scale 2 services" });
+    expect(within(dialog).getByRole("button", { name: "Scale 1 service" })).toBeTruthy();
+    expect(within(dialog).getByText("Managed by TierPlan ingress")).toBeTruthy();
+    expect(within(dialog).queryByText("Global services can't be scaled.")).toBeNull();
+  });
+});

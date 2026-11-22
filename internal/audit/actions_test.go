@@ -545,7 +545,7 @@ var phase18DetailKeys = map[string][]string{
 	audit.ActionIngressDomainDeleted:            {"suffix", "issuer", "certificates"},
 	audit.ActionIngressHostReserved:             {"suffix", "hostname"},
 	audit.ActionIngressHostUnreserved:           {"suffix", "hostname"},
-	audit.ActionIngressEnabled:                  {},
+	audit.ActionIngressEnabled:                  {"subnet", "image"},
 	audit.ActionIngressDisabled:                 {},
 	audit.ActionIngressClaimReplaced:            {"stack", "hostnames", "count"},
 	audit.ActionIngressClaimReleased:            {"stack", "count"},

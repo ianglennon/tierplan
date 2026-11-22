@@ -181,7 +181,7 @@ const getIngressEnv = `-- name: GetIngressEnv :one
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
-SELECT env_id, enabled, config_version, updated_at, updated_by, certs_version FROM ingress_env WHERE env_id = ?
+SELECT env_id, enabled, config_version, updated_at, updated_by, certs_version, access_logs, paused, ensure_at, ensure_error FROM ingress_env WHERE env_id = ?
 `
 
 func (q *Queries) GetIngressEnv(ctx context.Context, envID string) (IngressEnv, error) {
@@ -194,6 +194,10 @@ func (q *Queries) GetIngressEnv(ctx context.Context, envID string) (IngressEnv, 
 		&i.UpdatedAt,
 		&i.UpdatedBy,
 		&i.CertsVersion,
+		&i.AccessLogs,
+		&i.Paused,
+		&i.EnsureAt,
+		&i.EnsureError,
 	)
 	return i, err
 }

@@ -154,6 +154,7 @@ func runStackCheck(ctx context.Context, d StacksDeps, lim *streamLimiter, stackI
 	if d.OnCheck != nil {
 		d.OnCheck(ctx)
 	}
+	// ingress: unattached, the editor check judges the file as written
 	in := stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: wc, Deadline: d.CheckDeadline}
 	if withNetworks {
 		in.Env = networkEnv(ctx, d, env.ID, st.Name)

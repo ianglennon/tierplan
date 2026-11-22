@@ -54,6 +54,12 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
   const connect = useNeeds("networks.connect", envId);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState<DisconnectDialogTarget | null>(null);
+  // TierPlan's ingress network is not rewired by hand: Connect and Disconnect say why (D-29).
+  // Who may comes first.
+  const wire =
+    connect.allowed && data?.ingress
+      ? { allowed: false, reason: t("ingress.owned.reason") }
+      : connect;
   const missing = t("networks.detail.missing");
   const key = "networks.detail.attachments";
 
@@ -72,12 +78,12 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
   // network is where a container is most often put.
   const header = (
     <div className="flex justify-end">
-      <NeedsTooltip reason={connect.reason}>
+      <NeedsTooltip reason={wire.reason}>
         <Button
           type="button"
           variant="outline"
           className="max-md:h-11"
-          onClick={connect.allowed ? () => setConnecting(true) : undefined}
+          onClick={wire.allowed ? () => setConnecting(true) : undefined}
         >
           {t("networks.connect.action")}
         </Button>
@@ -177,7 +183,7 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
               </TableCell>
               <TableCell className="align-top whitespace-normal">
                 {a.kind === "container" ? (
-                  <NeedsTooltip reason={connect.reason}>
+                  <NeedsTooltip reason={wire.reason}>
                     <Button
                       type="button"
                       variant="outline"
@@ -188,7 +194,7 @@ export function Attachments({ envId, networkId, node }: AttachmentsProps) {
                         network: data.name,
                       })}
                       onClick={
-                        connect.allowed
+                        wire.allowed
                           ? () =>
                               setDisconnecting({
                                 networkId: data.id,

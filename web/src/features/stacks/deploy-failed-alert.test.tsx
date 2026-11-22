@@ -10,7 +10,7 @@ import type { StackDetail } from "@/api/stacks";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DeployFailedAlert } from "@/features/stacks/deploy-failed-alert";
-import "@/i18n";
+import i18n from "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
@@ -304,6 +304,34 @@ describe("DeployFailedAlert", () => {
         "TierPlan couldn't pull an image, so nothing was changed. The pull failed.",
       ),
     ).toBeTruthy();
+  });
+
+  it("says a deploy whose hostnames were refused changed nothing, points to the console, and offers no roll back", async () => {
+    mount(withOperation({ code: "ingress_refused", failedService: "" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("The last deploy failed")).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "TierPlan stopped before changing anything. A hostname this stack asks for is taken or not allowed. Open the console for which one.",
+      ),
+    ).toBeTruthy();
+    expect(within(alert).queryByText(/didn't finish/)).toBeNull();
+    expect(within(alert).getByRole("link", { name: "Open console" })).toBeTruthy();
+    await waitFor(() => expect(within(alert).queryByRole("button")).toBeNull());
+    expect(within(alert).queryByText(/Roll back/)).toBeNull();
+  });
+
+  it("keeps Retry roll back for a roll back that was refused the same way", async () => {
+    mount(withOperation({ kind: "rollback", code: "ingress_refused", failedService: "" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("The last roll back failed")).toBeTruthy();
+    expect(await within(alert).findByRole("button", { name: "Retry roll back" })).toBeTruthy();
+  });
+
+  it("has the refusal's own reason line for the places that word a code alone", () => {
+    expect(i18n.t("stackDeploy.lastFailed.reason.ingress_refused", { ns: "stackDeploy" })).toBe(
+      "A hostname this stack asks for is taken or not allowed.",
+    );
   });
 
   it("keeps the roll back offer for a deploy that failed after it changed something", async () => {

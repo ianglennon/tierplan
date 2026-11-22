@@ -159,6 +159,7 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 		}
 	}
 
+	d.fillIngressSwarm(ctx, in, rv, project, plan.Services, desired, running, live)
 	rv.YAML = d.rollbackYAMLChange(in, prep, restored)
 	d.addRevertsDrift(ctx, in, rv, rawSwarmRows(desired, running), masker)
 	return nil
@@ -289,6 +290,7 @@ func (d Deps) reviewRollbackStandalone(ctx context.Context, in ReviewInput, rv *
 		rv.Objects = append(rv.Objects, ObjectChange{Change: stacks.ChangeAdded, Kind: "volume", Name: name})
 		rv.Summary.Volumes.Added++
 	}
+	d.fillIngressStandalone(ctx, in, rv, project)
 	d.addRevertsDrift(ctx, in, rv, rawStandaloneRows(cmp, diff.Removed, standalonePins(items, pinned)), rollbackMasker(target, in.Previous))
 	return nil
 }
@@ -313,6 +315,8 @@ func notDeployableMessage(seq int64, pe *PrepareError) string {
 		reason = ObjectErrorDetail(pe.Err)
 	case PrepareConvert:
 		reason = ConvertDetail(pe.Err) // already guarded by PrepareRollback
+	case PrepareIngress:
+		reason = prepareIngressMessage
 	case PreparePins:
 		var invalid *PinsInvalidError
 		if errors.As(pe.Err, &invalid) {

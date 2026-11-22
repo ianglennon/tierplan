@@ -2337,6 +2337,11 @@ describe("rolling back", () => {
     ],
     ["no_previous_version", 409, "There's no earlier deployed version to roll back to."],
     [
+      "ingress_refused",
+      409,
+      "A hostname in that version is taken or not allowed now. Nothing was changed.",
+    ],
+    [
       "pins_invalid",
       422,
       "That version can't be deployed again as it is. Open the editor to fix it, then deploy.",

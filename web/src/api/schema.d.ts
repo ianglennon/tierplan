@@ -789,7 +789,7 @@ export interface paths {
         };
         /**
          * List the containers of an environment
-         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
+         * @description Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server, agent or ingress for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one TierPlan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["listContainers"];
         put?: never;
@@ -935,7 +935,7 @@ export interface paths {
         put?: never;
         /**
          * Open a shell in a container
-         * @description Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for TierPlan's own server or an agent's container (decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).
+         * @description Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for TierPlan's own server, an agent's container or an ingress proxy task (decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).
          */
         post: operations["openShell"];
         delete?: never;
@@ -1428,6 +1428,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/access-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Switch the proxy access log of a swarm environment
+         * @description Stores whether the proxies write an access log; it is off by default. Switching it restarts each node's proxy in turn, as the proxy service is rolled with the setting changed. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). The answer says when it applies: rolling, or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. 409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).
+         */
+        put: operations["setIngressAccessLogs"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/ingress/certificates": {
         parameters: {
             query?: never;
@@ -1526,6 +1546,46 @@ export interface paths {
          * @description Queues the certificate with its next attempt now, without waiting for its backoff. The order is placed by the next round, so 202. 404 ingress_cert_not_found for a certificate that is not a live one of this environment that TierPlan orders (another environment's, retired, uploaded or gone); 409 ingress_certs_paused while issuing is paused after a restore; 409 ingress_cert_stopped for a stopped certificate, which waits for a claim or a request, not a retry; 429 ingress_cert_blocked while the certificate authority has asked TierPlan to wait or three attempts failed within the hour (reason told_to_wait or failure_guard, the instant it reopens in errors[0].value, and a Retry-After header in seconds). A certificate whose order is already in flight is left alone and answers 202. Audited as ingress.cert_retried. Needs ingress.manage on the environment (its Admin).
          */
         post: operations["retryIngressCertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch ingress off for a swarm environment
+         * @description Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; 409 ingress_standalone_unavailable on a standalone environment; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["disableIngress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/disable/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching ingress off for a swarm environment
+         * @description Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["previewIngressDisable"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1660,6 +1720,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch ingress on for a swarm environment
+         * @description Runs the preflight again, then, as a job answered with 202 and its ID at once, makes the join token's swarm secret, the ingress network and the global proxy service and switches ingress on. Existing stacks are not changed: a stack must be redeployed to be attached to the ingress network. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream; enrolment and readiness of the proxy nodes are read through the ingress status and the node list. 409 ingress_standalone_unavailable on a standalone environment; 409 ingress_preflight_refused when the preflight refuses, with each finding's code and items in errors; 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin). Audited as ingress.enabled when the job switches it on.
+         */
+        post: operations["enableIngress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/enable/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching ingress on for a swarm environment
+         * @description Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. 409 ingress_standalone_unavailable on a standalone environment, which has no ingress yet. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["previewIngressEnable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One ingress job and its steps
+         * @description The job as it stands now. A job is kept for 10 minutes after it ends. A job of another environment, one that is not an ingress job, one you did not start and may not follow, or one that is gone is 404 ingress_job_not_found. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["getIngressJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/ingress/join-token": {
         parameters: {
             query?: never;
@@ -1675,7 +1795,7 @@ export interface paths {
         put?: never;
         /**
          * Make or rotate an environment's ingress join token
-         * @description Makes the ingress join token that lets ingress nodes enrol into this environment, or, when it has one, makes a new one and retires the current one in the same transaction. The token is in the answer, once, with Cache-Control no-store: the server keeps only its hash. A rotation stops the old token enrolling new nodes and does not affect nodes that are already enrolled, which authenticate with their own key. 404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or ingress.join_token_rotated with the generation, never the token.
+         * @description Makes the ingress join token that lets ingress nodes enrol into this environment, or, when it has one, makes a new one and retires the current one in the same transaction. The token is in the answer, once, with Cache-Control no-store: the server keeps only its hash. A rotation stops the old token enrolling new nodes and does not affect nodes that are already enrolled, which authenticate with their own key. On a swarm whose ingress is on, the token is also stored as the proxies' swarm secret, under the environment's operation lock, so the deployer adopts it and does not make another: 409 operation_locked while another operation holds the environment, 409 ingress_paused while a restore's pause stands, 409 ingress_no_manager when no manager is connected, 502 ingress_token_not_stored when the swarm refuses the secret; in each case no token is handed out. 404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or ingress.join_token_rotated with the generation, never the token.
          */
         post: operations["issueIngressJoinToken"];
         /**
@@ -1722,6 +1842,46 @@ export interface paths {
          * @description The node is disconnected within a second and its key is refused from now on; no other node is touched and nothing on its host is changed. Unless allowReenrol is true, its host is also blocked from enrolling again with the join token still mounted in its container. The answer lists heldHostnames: the names whose private keys this node may still hold and that should be re-issued. rotateTokenRecommended is always true. The optional reason is kept in the audit log. 404 environment_not_found or ingress_node_not_found (a node of another environment is the same 404); 409 ingress_node_already_revoked when it was revoked already. Answered with Cache-Control no-store. Needs environments.revoke on the environment (env Admin or instance admin), the permission that revokes an agent. Audited as ingress.node_revoked.
          */
         post: operations["revokeIngressNode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume the ingress of an environment a restore paused
+         * @description After a restore from a backup, TierPlan only observes each environment's ingress and writes nothing to its swarm until an Admin resumes it here. Resuming clears the marker and the next pass writes the ingress objects again. Resuming an environment that is not paused answers 200 with resumed false and is not audited. 409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["resumeIngress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the ingress status of a swarm environment
+         * @description Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. It carries no token and no secret. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["getIngressStatus"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2535,7 +2695,7 @@ export interface paths {
         put?: never;
         /**
          * Create a service
-         * @description Creates one standalone service from a full spec, once and never retried; the tasks start in the swarm, so the answer is 201. The spec is decoded strictly, the host-escalation policy runs on the whole of it, the image is required and resolved to its digest (a failed lookup is 422 image_unresolved and nothing is created), and one create is sent with the registry credential and without the engine's own registry lookup. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is created; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If the service cannot be created, every object this request made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused.
+         * @description Creates one standalone service from a full spec, once and never retried; the tasks start in the swarm, so the answer is 201. The spec is decoded strictly, the host-escalation policy runs on the whole of it, the image is required and resolved to its digest (a failed lookup is 422 image_unresolved and nothing is created), and one create is sent with the registry credential and without the engine's own registry lookup. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is created; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If the service cannot be created, every object this request made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused. A spec that sets the label tierplan.component, on the service or on its container, is refused 422 ingress_component_label before anything is created: the label is TierPlan's own for its ingress objects.
          */
         post: operations["createService"];
         delete?: never;
@@ -2600,7 +2760,7 @@ export interface paths {
         post?: never;
         /**
          * Remove a service
-         * @description Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.
+         * @description Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. TierPlan's ingress proxy service is refused: 409 ingress_owned, before anything is sent; switch ingress off to remove it. A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. 404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. Needs services.manage (Admin) on the environment. Every attempt on a service that exists is audited as service.removed, with result failure and the code when it was refused.
          */
         delete: operations["removeService"];
         options?: never;
@@ -2619,7 +2779,7 @@ export interface paths {
         put?: never;
         /**
          * Apply a full service spec
-         * @description Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, and 422 spec_rejected, with Docker's words, for a spec Docker refuses. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is updated; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If anything after the first creation fails, every object this apply made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). 403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.
+         * @description Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, and 422 spec_rejected, with Docker's words, for a spec Docker refuses. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is updated; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If anything after the first creation fails, every object this apply made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 409 ingress_owned for TierPlan's ingress proxy service; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). 403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. A spec that sets the label tierplan.component, on the service or on its container, and a staged secret or config that sets it, are refused 422 ingress_component_label before anything is created: the label is TierPlan's own for its ingress objects. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.
          */
         post: operations["applyServiceUpdate"];
         delete?: never;
@@ -2723,7 +2883,7 @@ export interface paths {
         put?: never;
         /**
          * Review a full service spec
-         * @description Judges a full service spec and answers what an apply would do, without changing Docker. The spec is read fresh against the service: the values a caller without secrets.reveal could not see (<hidden>) are merged back in, a changed tag is resolved to its digest through the manager with the stored registry credential (a failed lookup is imageError, and the spec stays unpinned), and the host-escalation policy runs on the decoded spec an apply would forward. The answer is the merged, normalised spec (masked again for a caller without secrets.reveal), the image, the findings, whether the caller may have them (allowed) and the networks the spec names that do not exist (missing). A refusal by the policy is not an error here: allowed is false and refusal lists the findings. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). 403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); Needs services.control (Operator) on the environment. A review is not audited.
+         * @description Judges a full service spec and answers what an apply would do, without changing Docker. The spec is read fresh against the service: the values a caller without secrets.reveal could not see (<hidden>) are merged back in, a changed tag is resolved to its digest through the manager with the stored registry credential (a failed lookup is imageError, and the spec stays unpinned), and the host-escalation policy runs on the decoded spec an apply would forward. The answer is the merged, normalised spec (masked again for a caller without secrets.reveal), the image, the findings, whether the caller may have them (allowed) and the networks the spec names that do not exist (missing). A refusal by the policy is not an error here: allowed is false and refusal lists the findings. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 409 ingress_owned for TierPlan's ingress proxy service; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). 403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); Needs services.control (Operator) on the environment. A review is not audited.
          */
         post: operations["reviewServiceUpdate"];
         delete?: never;
@@ -2967,7 +3127,7 @@ export interface paths {
         put?: never;
         /**
          * Deploy a stack's draft
-         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). On a standalone host the job checks the stack, pins each image the same way (a service that runs the text it is deployed with keeps its digest; a new or changed one is looked up on the host with the stored credential), pulls each image of a container it will create or recreate that the host does not have, with the stored credential and never the SDK's anonymous pull (a Pull step under the lookup with the bytes done of the total; a refused pull ends it with its pull_denied, pull_unauthorized, image_not_found, rate_limited or registry_tls code and nothing is created), and runs the Compose SDK's up over a guarded client: containers created, those whose configuration changed recreated, the others left alone, those of services the file no longer declares removed, and a wait until they run; they carry com.docker.compose.project and tierplan.stack.id, and tierplan.stack.image holds the image as written. A stack secret or config is written into the container, not mounted from a file. On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and tierplan.stack.id, and each service com.docker.stack.image with the image as written. A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to TIERPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. A name that something TierPlan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). With mode update, only the services named in services take a newly looked-up digest (the ones the review chose, sent as pins) and every other service keeps the digest it runs; a request that names no service, or one the stack does not have, is 422 services_invalid and nothing is stored. Writes one stack.deployed audit row, with the mode and the result, when the job ends. Needs stacks.deploy (Operator).
+         * @description Takes a revision from the draft and deploys it as a job, answering 202 with the job ID at once; the deploy goes on if the browser closes. draftVersion must be the version of the draft you reviewed, or the answer is 409 draft_changed. A draft that started from an older revision than the newest good one (someone deployed since) is 409 concurrent_unacknowledged unless acknowledgeConcurrent is true; a deploy never overwrites a newer one unseen. pins, when sent, are the review's: the deploy uses exactly those digests and makes no registry lookup (422 pins_invalid for one the server would not have chosen). On a standalone host the job checks the stack, pins each image the same way (a service that runs the text it is deployed with keeps its digest; a new or changed one is looked up on the host with the stored credential), pulls each image of a container it will create or recreate that the host does not have, with the stored credential and never the SDK's anonymous pull (a Pull step under the lookup with the bytes done of the total; a refused pull ends it with its pull_denied, pull_unauthorized, image_not_found, rate_limited or registry_tls code and nothing is created), and runs the Compose SDK's up over a guarded client: containers created, those whose configuration changed recreated, the others left alone, those of services the file no longer declares removed, and a wait until they run; they carry com.docker.compose.project and tierplan.stack.id, and tierplan.stack.image holds the image as written. A stack secret or config is written into the container, not mounted from a file. On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and tierplan.stack.id, and each service com.docker.stack.image with the image as written. A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to TIERPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. A secret or config that content changes replaces is removed at the end, once every service uses the new one. A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid, except that a stack whose only errors are hostnames another stack holds, a reserved one or one no registered domain covers is 409 ingress_refused, with the reason in detail, before anything is stored. A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. A name that something TierPlan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. Just before it writes anything the job judges the host access of the stack again for the caller, so a grant removed since the request still stops it (the check step fails needs_admin). With mode update, only the services named in services take a newly looked-up digest (the ones the review chose, sent as pins) and every other service keeps the digest it runs; a request that names no service, or one the stack does not have, is 422 services_invalid and nothing is stored. Writes one stack.deployed audit row, with the mode and the result, when the job ends. Needs stacks.deploy (Operator).
          */
         post: operations["deployStack"];
         delete?: never;
@@ -3502,6 +3662,26 @@ export interface paths {
          * @description Redeploys a revision of the stack that ran well, as a job, answering 202 with the job ID at once. With no body, that is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. With revision, it is that one: any revision whose deploy ended good, the deployed one included (useful after a newer attempt failed). A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. expectedDeployed is the number of the deployed revision the review was made against; if the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. It takes a revision of its own from it (the files, the variables and the images it ran, recorded as origin rollback with restored_from naming the revision it restored) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback, the revision and restoredFrom. It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. A stack with no earlier version that ran well is 409 no_previous_version. Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. A stack of a standalone host rolls back the same way, through the Compose SDK: the containers whose configuration differs are recreated from the images the revision stored, networks and volumes a later revision added stay on the host, and the foreign-project check is made before anything is written. With mode restore, the roll back puts the deployed revision back to undo what was changed outside the stack (drift): revision must be the deployed one (409 deployed_changed when it is not, 409 no_deployed_revision when the stack has none, 422 revision_required without it), it is audited as stack.deployed with the mode restore and the job's mode is restore. Everything else is a roll back's, and it is recorded as a revision of origin rollback restoring the deployed one. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).
          */
         post: operations["rollbackStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What each route of a stack is doing now
+         * @description Answers each route the stack holds with its hostname, path, service and a state: serving, pending, waiting_certificate (with the reason), backend_not_running (stopped is true when the stack is stopped), not_attached, ingress_off or not_served_yet (a stack on a standalone host). The first of these that holds is the state, in that order of the list: not served yet, ingress off, then the backend not running, then not attached, then waiting for a certificate, then pending. The state is worked out when asked from the stored claims, the services on the swarm, the proxy's current bundle and what each active node applied; nothing is stored. A stack that holds no route answers an empty list. The answer never carries a certificate, a key or a token. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackRoutes"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7140,10 +7320,10 @@ export interface components {
             /** @enum {string} */
             restartPolicy: "no" | "always" | "on-failure" | "unless-stopped";
             /**
-             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, empty otherwise
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise
              * @enum {string}
              */
-            selfKind: "" | "server" | "agent";
+            selfKind: "" | "server" | "agent" | "ingress";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
@@ -7208,10 +7388,10 @@ export interface components {
             /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
             restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
-             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
              * @enum {string}
              */
-            selfKind: "" | "server" | "agent";
+            selfKind: "" | "server" | "agent" | "ingress";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
@@ -10102,6 +10282,19 @@ export interface components {
             /** @description The user's username */
             username: string;
         };
+        IngressAccessLogsBody: {
+            /** @description The value now stored */
+            accessLogs: boolean;
+            /**
+             * @description rolling: it applies as each node's proxy restarts. when_enabled: it is stored and applies when ingress is switched on. when_resumed: it is stored and applies once the environment is resumed
+             * @enum {string}
+             */
+            applies: "rolling" | "when_enabled" | "when_resumed";
+        };
+        IngressAccessLogsRequest: {
+            /** @description True to make the proxies write an access log, false to stop */
+            enabled: boolean;
+        };
         IngressCertAccountBody: {
             /** @description The directories certificates are ordered from, production then staging, with the terms each advertises */
             directories: components["schemas"]["IngressCertAccountDirectoryBody"][] | null;
@@ -10386,6 +10579,34 @@ export interface components {
             /** @description The environment's certificates, live and retired, by hostname */
             items: components["schemas"]["IngressCertBody"][] | null;
         };
+        IngressDisableNodeBody: {
+            /** @description The node's name */
+            name: string;
+            /** @description The ID the node's agent connects as */
+            nodeId: string;
+        };
+        IngressDisablePreviewBody: {
+            /** @description What stands in the way, each an error: ingress_paused first, then ingress_routes_live listing every hostname and path with its stack. Empty when nothing does */
+            findings: components["schemas"]["IngressFindingBody"][] | null;
+            /** @description What the switch-off would remove */
+            removes: components["schemas"]["IngressDisableRemovesBody"];
+            /** @description The nodes whose agent is not connected now: their certificate cache volume is wiped when the agent connects */
+            unreachable: string[] | null;
+        };
+        IngressDisableRemovesBody: {
+            /** @description The ingress network's name; empty when the swarm was read and does not hold it */
+            network: string;
+            /** @description The names of the join token secrets the swarm holds */
+            secrets: string[] | null;
+            /** @description The proxy service's name; empty when the swarm was read and does not hold it */
+            service: string;
+            /** @description The nodes whose certificate cache volume is wiped: every node of the environment */
+            volumes: components["schemas"]["IngressDisableNodeBody"][] | null;
+        };
+        IngressDisableStartBody: {
+            /** @description The disable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
+            jobId: string;
+        };
         IngressDomainBody: {
             /**
              * Format: int64
@@ -10436,6 +10657,35 @@ export interface components {
             /** @description The environment's domains, by suffix */
             items: components["schemas"]["IngressDomainBody"][] | null;
         };
+        IngressEnablePreviewBody: {
+            /** @description What the enable would create, or reuse where it is there already */
+            creates: components["schemas"]["IngressPlanBody"];
+            /** @description Everything the preflight found, errors and warnings, in order */
+            findings: components["schemas"]["IngressFindingBody"][] | null;
+            /** @description The stacks that hold routes and must be redeployed to be attached to the ingress network; the enable does not change them */
+            redeploy: components["schemas"]["IngressRedeployBody"][] | null;
+        };
+        IngressEnableRequest: {
+            /** @description The CIDR block of the ingress network, for example 10.0.8.0/22. Leave it out to let TierPlan choose the lowest free /22 of the swarm's address pools */
+            subnet?: string;
+        };
+        IngressEnableStartBody: {
+            /** @description The enable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
+            jobId: string;
+        };
+        IngressFindingBody: {
+            /** @description The stable name of the finding, for example ingress_no_manager */
+            code: string;
+            /** @description What the finding is about (a port, a stack, a hostname); empty for none */
+            items: string[] | null;
+            /** @description The sentence to show */
+            message: string;
+            /**
+             * @description error refuses the enable; warning tells you something and lets it go on
+             * @enum {string}
+             */
+            severity: "error" | "warning";
+        };
         IngressIssuerPreviewBody: {
             /**
              * Format: int64
@@ -10454,6 +10704,30 @@ export interface components {
             issuer: "staging" | "production";
             /** @description The hostnames of the uploaded certificates under the domain, sorted. The change leaves them alone */
             uploads: string[] | null;
+        };
+        IngressJobBody: {
+            /** @description When the job started, RFC 3339 UTC */
+            createdAt: string;
+            /** @description When the job ended, RFC 3339 UTC, empty while it runs */
+            finishedAt: string;
+            /** @description The job ID */
+            id: string;
+            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable; switch_off, service, volumes, network, secret, token and nodes for ingress_disable */
+            items: components["schemas"]["StackJobItemBody"][] | null;
+            /**
+             * @description What the job does: ingress_enable or ingress_disable
+             * @enum {string}
+             */
+            kind: "ingress_enable" | "ingress_disable";
+            /** @description The output log, oldest first */
+            output: components["schemas"]["StackJobOutputLine"][] | null;
+            /** @description Who started it, as the hub records its owner */
+            startedBy: string;
+            /**
+             * @description running until every step has ended, then done when every step is
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
         };
         IngressJoinTokenBody: {
             /**
@@ -10550,6 +10824,42 @@ export interface components {
             /** @description One entry per node, oldest first, revoked nodes included */
             items: components["schemas"]["IngressNodeBody"][] | null;
         };
+        IngressPlanBody: {
+            network: components["schemas"]["IngressPlanNetwork"];
+            secret: components["schemas"]["IngressPlanSecret"];
+            service: components["schemas"]["IngressPlanService"];
+            volume: components["schemas"]["IngressPlanVolume"];
+        };
+        IngressPlanNetwork: {
+            /** @description The network's name */
+            name: string;
+            /** @description The block it has or would get; empty when no free block could be chosen yet */
+            subnet: string;
+        };
+        IngressPlanSecret: {
+            /** @description The secret's name; empty while the token is yet to be made, because the name carries the token's ID */
+            name: string;
+            /** @description True when the enable makes a new join token and secret */
+            new: boolean;
+        };
+        IngressPlanService: {
+            /** @description The image it runs, tagged with this server's version */
+            image: string;
+            /** @description The global proxy service's name */
+            name: string;
+        };
+        IngressPlanVolume: {
+            /** @description The volume's name */
+            name: string;
+        };
+        IngressRedeployBody: {
+            /** @description True when the stack holds hostname claims */
+            holdsClaims: boolean;
+            /** @description The stack's ID */
+            stackId: string;
+            /** @description The stack's name */
+            stackName: string;
+        };
         IngressReservationBody: {
             /**
              * Format: date-time
@@ -10564,6 +10874,70 @@ export interface components {
             hostname: string;
             /** @description The domain's suffix */
             suffix: string;
+        };
+        IngressResumeOutputBody: {
+            /** @description True when the environment was paused and is now resumed; false when it was not paused */
+            resumed: boolean;
+        };
+        IngressStatusBody: {
+            /** @description True while the proxy writes an access log */
+            accessLogs: boolean;
+            /** @description True when ingress is off but an ingress object remains in the swarm after a switch-off that did not finish. Switch ingress off again to remove it */
+            disablingIncomplete: boolean;
+            /** @description True when ingress is off because switching it on failed, and the objects that attempt made remain in the swarm. Switch ingress on again to carry on, or off to remove them */
+            enableFailed: boolean;
+            /** @description True while ingress is switched on */
+            enabled: boolean;
+            /** @description The last pass that keeps the ingress objects as wanted */
+            lastEnsure: components["schemas"]["IngressStatusEnsure"];
+            /** @description How many proxy nodes are expected, enrolled and ready */
+            nodes: components["schemas"]["IngressStatusNodes"];
+            /** @description Which ingress objects the swarm holds */
+            objects: components["schemas"]["IngressStatusObjects"];
+            /** @description False when the swarm could not be read, so objects says nothing */
+            objectsKnown: boolean;
+            /** @description True after a restore, until an Admin resumes the environment: nothing is written to the swarm while it is */
+            paused: boolean;
+            /**
+             * Format: int64
+             * @description Certificate cache volumes still to be wiped on nodes that could not be reached
+             */
+            pendingWipes: number;
+            /** @description The stacks that must be redeployed to be attached to the ingress network */
+            redeploy: components["schemas"]["IngressRedeployBody"][] | null;
+            /** @description True when the join token is disabled, so no further node can enrol */
+            tokenDisabled: boolean;
+        };
+        IngressStatusEnsure: {
+            /** @description When the last pass ended, RFC 3339 UTC; empty when none has run */
+            at: string;
+            /** @description How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, enable_failed (switching ingress on failed and ingress is still off), url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes) */
+            class: string;
+        };
+        IngressStatusNodes: {
+            /**
+             * Format: int64
+             * @description The proxies that enrolled and were not revoked
+             */
+            enrolled: number;
+            /**
+             * Format: int64
+             * @description The swarm's nodes, each of which runs a proxy
+             */
+            expected: number;
+            /**
+             * Format: int64
+             * @description The enrolled proxies whose health is ok and whose applied bundle is the current one
+             */
+            ready: number;
+        };
+        IngressStatusObjects: {
+            /** @description True when the ingress network exists */
+            network: boolean;
+            /** @description True when a join token secret exists */
+            secret: boolean;
+            /** @description True when the proxy service exists */
+            service: boolean;
         };
         InstallBody: {
             /** @description The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
@@ -11594,6 +11968,8 @@ export interface components {
             created?: string;
             driver: string;
             id: string;
+            /** @description True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description No access to outside networks */
             internal: boolean;
             /** @description The address pools, in the engine's order; empty when the network has none */
@@ -11668,6 +12044,8 @@ export interface components {
             created?: string;
             driver: string;
             id: string;
+            /** @description True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description No access to outside networks */
             internal: boolean;
             /** @description IPv6 is enabled */
@@ -12686,6 +13064,8 @@ export interface components {
             externals: string[] | null;
             /** @description True when the stack has a saved draft with changes; a removal deletes it with the definition unless the definition is kept */
             hasDraft: boolean;
+            /** @description The hostnames the removal releases (LBL-06), each once and sorted. Empty when the stack holds none */
+            hostnames: string[] | null;
             /** @description The networks that carry this stack's own labels */
             networks: string[] | null;
             /** @description The nodes that did not answer, whose volumes are left out of the list */
@@ -13276,6 +13656,8 @@ export interface components {
             createdAt: string;
             /** @description The secret ID */
             id: string;
+            /** @description True for a proxy join token's secret (the component label and a name that starts with tierplan-ingress-token-): read-only here, with delete and rotate refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description Every label of the secret */
             labels: {
                 [key: string]: string;
@@ -13318,6 +13700,8 @@ export interface components {
             createdAt: string;
             /** @description The secret ID */
             id: string;
+            /** @description True for a proxy join token's secret (the component label and a name that starts with tierplan-ingress-token-): read-only here, with delete and rotate refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description Every label of the secret */
             labels: {
                 [key: string]: string;
@@ -13492,6 +13876,8 @@ export interface components {
             id: string;
             /** @description The image the spec names */
             image: components["schemas"]["ServiceImageBody"];
+            /** @description True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it */
+            ingress: boolean;
             /** @description The service's own labels, as Docker reports them */
             labels: {
                 [key: string]: string;
@@ -13649,6 +14035,8 @@ export interface components {
             id: string;
             /** @description The image the service's spec names, as written; empty when it has none */
             image: string;
+            /** @description True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it */
+            ingress: boolean;
             /**
              * @description How the swarm runs it
              * @enum {string}
@@ -13901,10 +14289,10 @@ export interface components {
             /** @description False when the service already had that count: it was answered done and no update was sent */
             changed: boolean;
             /**
-             * @description Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message
+             * @description Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. ingress_owned (with skipped): the service is the ingress proxy TierPlan creates and updates itself, which is never scaled by hand; switch ingress off to remove it. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message
              * @enum {string}
              */
-            code?: "not_scalable" | "service_changed" | "service_not_found" | "host_read_only" | "agent_policy_denied" | "agent_host_policy" | "no_manager_connected" | "no_quorum" | "registry_unresolved" | "scale_failed";
+            code?: "not_scalable" | "ingress_owned" | "service_changed" | "service_not_found" | "host_read_only" | "agent_policy_denied" | "agent_host_policy" | "no_manager_connected" | "no_quorum" | "registry_unresolved" | "scale_failed";
             /** @description The manager's message for scale_failed, at most 300 characters; for the other codes a plain sentence */
             detail?: string;
             /** @description The service name when the manager could be asked; otherwise what the request named */
@@ -13939,6 +14327,8 @@ export interface components {
         ServiceSpecBody: {
             /** @description True for a TierPlan agent service */
             agent: boolean;
+            /** @description True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): its spec is readable but every change is refused as ingress_owned, so the editor shows it read-only; switch ingress off to remove it */
+            ingress: boolean;
             /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
             masked: boolean;
             /**
@@ -15487,6 +15877,8 @@ export interface components {
             git?: components["schemas"]["StackReviewGitBody"];
             /** @description One row for each service with an image, by name */
             images: components["schemas"]["StackReviewImageBody"][] | null;
+            /** @description Left out unless there is something to say: set when the deploy adds, keeps or releases a route, has a certificate to report or moves a service on or off the shared ingress network. A stack with no route and no claim has none. The warnings and the policy's errors are in problems */
+            ingress?: components["schemas"]["StackReviewIngressBody"];
             /** @description The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it */
             needsAdmin: string[] | null;
             /** @description The other resources: networks, secrets and configs */
@@ -15593,6 +15985,61 @@ export interface components {
              * @enum {string}
              */
             state: "pinned" | "new" | "as_written" | "local" | "unreachable" | "unresolved";
+        };
+        StackReviewIngressBody: {
+            /** @description The certificate of each hostname the stack will hold, ordered by hostname */
+            certificates: components["schemas"]["StackReviewIngressCertificateBody"][] | null;
+            /** @description The services that join or leave the shared ingress network, ordered by service. Empty for a standalone host */
+            network: components["schemas"]["StackReviewIngressNetworkBody"][] | null;
+            /** @description The routes the deploy adds, keeps and releases, ordered by hostname, then path */
+            routes: components["schemas"]["StackReviewIngressRouteBody"][] | null;
+        };
+        StackReviewIngressCertificateBody: {
+            /** @description The hostname */
+            hostname: string;
+            /** @description Left out unless set: for waiting, why, as a sentence */
+            reason?: string;
+            /**
+             * @description reused: a certificate that can be served exists. will_issue: there is none yet, so one is ordered. waiting: an order exists and nothing can be served yet. A certificate that is not ready never stops a deploy
+             * @enum {string}
+             */
+            state: "reused" | "will_issue" | "waiting";
+        };
+        StackReviewIngressNetworkBody: {
+            /**
+             * @description joins: the deploy puts the service on the shared ingress network. leaves: the deploy takes it off, because the service no longer declares a route
+             * @enum {string}
+             */
+            change: "joins" | "leaves";
+            /** @description True when the change replaces the running tasks of the service (a change of a service's networks does), false for a service that does not exist yet */
+            replacesTasks: boolean;
+            /** @description The service, by its name in the compose file */
+            service: string;
+        };
+        StackReviewIngressRouteBody: {
+            /**
+             * @description added: the deploy claims it. kept: the stack holds it now and the deploy leaves it as it is (the same hostname, path, service, port and scheme). released: the stack holds it now and the deploy lets it go
+             * @enum {string}
+             */
+            change: "added" | "kept" | "released";
+            /** @description The hostname the route answers on */
+            hostname: string;
+            /** @description Left out unless set: a sentence for the row. A route of a standalone host says it is not served on that host yet */
+            note?: string;
+            /** @description The path prefix the route matches, / for the whole hostname */
+            path: string;
+            /**
+             * Format: int64
+             * @description The port of the service the proxy connects to
+             */
+            port: number;
+            /**
+             * @description How the proxy speaks to the service
+             * @enum {string}
+             */
+            scheme: "http" | "https";
+            /** @description The service of the compose file the route goes to */
+            service: string;
         };
         StackReviewObjectBody: {
             /**
@@ -15877,6 +16324,27 @@ export interface components {
              */
             revision?: number;
         };
+        StackRouteBody: {
+            /** @description The route's hostname */
+            hostname: string;
+            /** @description The path prefix the route serves, / for the whole host */
+            path: string;
+            /** @description For waiting_certificate, why the certificate is not served: no_certificate (none yet) or certificate_not_ready (one exists and cannot be served yet). Empty for every other state */
+            reason: string;
+            /** @description The service's name in the compose file */
+            service: string;
+            /**
+             * @description serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. not_served_yet: the stack runs on a standalone host, which ingress does not serve yet; its routes keep their hostnames and the other states are not worked out for it. Derived when read, stored nowhere
+             * @enum {string}
+             */
+            state: "serving" | "pending" | "waiting_certificate" | "backend_not_running" | "not_attached" | "ingress_off" | "not_served_yet";
+            /** @description True when state is backend_not_running because the stack is stopped. A stopped stack keeps its hostnames */
+            stopped: boolean;
+        };
+        StackRoutesBody: {
+            /** @description The routes the stack holds, in hostname then path order; empty when it holds none */
+            routes: components["schemas"]["StackRouteBody"][] | null;
+        };
         StackServiceBody: {
             /** @description The containers of a standalone service, by name; empty on a swarm */
             containers: components["schemas"]["StackContainerBody"][] | null;
@@ -15983,10 +16451,10 @@ export interface components {
             /** @description True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack */
             orphan: boolean;
             /**
-             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other
+             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so it is a contract value only), empty for any other
              * @enum {string}
              */
-            owner: "" | "tierplan" | "agent";
+            owner: "" | "tierplan" | "agent" | "ingress";
             /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
             portainer: boolean;
             /** @description Why the stack cannot be adopted; empty when it can */
@@ -16606,10 +17074,10 @@ export interface components {
             /** @description True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked */
             orphan: boolean;
             /**
-             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other
+             * @description tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so no row has it today), empty for any other
              * @enum {string}
              */
-            owner: "" | "tierplan" | "agent";
+            owner: "" | "tierplan" | "agent" | "ingress";
             /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
             portainer: boolean;
             /** @description Why the stack cannot be adopted; empty when it can */
@@ -16768,10 +17236,10 @@ export interface components {
             /** @description Who started it, as a name; for an automatic deploy a system name */
             by: string;
             /**
-             * @description What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, or update (an image update, or a stack's Update images)
+             * @description What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, update (an image update, or a stack's Update images), or ingress (TierPlan is switching an environment's ingress on or changing it)
              * @enum {string}
              */
-            kind: "git_deploy" | "deploy" | "rollback" | "janitor" | "update";
+            kind: "git_deploy" | "deploy" | "rollback" | "janitor" | "update" | "ingress";
             /** @description Left out unless set: the stack a stack operation is on */
             stack?: string;
             /**
@@ -17262,10 +17730,10 @@ export interface components {
         };
         VolumeDeleteResult: {
             /**
-             * @description Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. ingress_owned: the volume is TierPlan's ingress cache (the component label and the reserved name); nothing was removed, and switching ingress off removes it. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
-            code?: "volume_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "action_failed";
+            code?: "volume_in_use" | "not_found" | "node_unreachable" | "host_read_only" | "agent_policy_denied" | "ingress_owned" | "action_failed";
             /** @description A plain sentence, or for action_failed the engine's message, at most 300 characters */
             detail?: string;
             /** @description The volume name the request named */
@@ -17290,6 +17758,8 @@ export interface components {
             /** Format: date-time */
             created?: string;
             driver: string;
+            /** @description True for the proxy's certificate cache volume (the component label and the reserved name tierplan-ingress-cache): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             /** @description Every label of the volume */
             labels: {
                 [key: string]: string;
@@ -17335,6 +17805,8 @@ export interface components {
             /** Format: date-time */
             created?: string;
             driver: string;
+            /** @description True for the proxy's certificate cache volume (the component label and the reserved name tierplan-ingress-cache): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it */
+            ingress: boolean;
             name: string;
             /** @description The node that holds the volume */
             node: string;
@@ -20507,6 +20979,43 @@ export interface operations {
             };
         };
     };
+    setIngressAccessLogs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressAccessLogsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressAccessLogsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listIngressCertificates: {
         parameters: {
             query?: never;
@@ -20703,6 +21212,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressDisableStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressDisable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressDisablePreviewBody"];
+                };
             };
             /** @description Error */
             default: {
@@ -21018,6 +21593,115 @@ export interface operations {
             };
         };
     };
+    enableIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["IngressEnableRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressEnableStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressEnable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["IngressEnableRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressEnablePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIngressJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The job ID the enable answered with */
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressJobBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getIngressJoinToken: {
         parameters: {
             query?: never;
@@ -21174,6 +21858,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevokeIngressNodeBodyOut"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resumeIngress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressResumeOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIngressStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressStatusBody"];
                 };
             };
             /** @description Error */
@@ -25048,6 +25798,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackDeployBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackRoutes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRoutesBody"];
                 };
             };
             /** @description Error */

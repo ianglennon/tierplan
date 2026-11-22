@@ -628,8 +628,8 @@ func TestRunningDeploysAreMarkedInterruptedAtStartup(t *testing.T) {
 	}
 
 	// The server does this once the store is open.
-	if n, err := repo.MarkInterrupted(ctx); err != nil || n != 1 {
-		t.Fatalf("MarkInterrupted = %d, %v, want 1", n, err)
+	if listed, err := repo.MarkInterrupted(ctx); err != nil || len(listed) != 1 {
+		t.Fatalf("MarkInterrupted = %+v, %v, want the one stack", listed, err)
 	}
 	got := answerOf[struct {
 		stackAnswer

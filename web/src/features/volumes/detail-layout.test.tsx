@@ -32,6 +32,7 @@ function detail(extra: Partial<VolumeDetail> = {}): VolumeDetail {
     nodeId: "n1",
     created: "2026-10-01T10:00:00Z",
     anonymous: false,
+    ingress: false,
     options: [],
     labels: {},
     usedBy: [],

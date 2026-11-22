@@ -21,10 +21,14 @@ const STATES: Record<Verb, ReadonlySet<string>> = {
 type Subject = Pick<ContainerRow, "state" | "selfKind" | "isSelf">;
 
 // ownKind says whether a container is one TierPlan itself depends on: the server
-// it runs in, or an agent. Acting on one asks for its name to be typed, one at
-// a time (D-11), and a bulk never includes one (D-12).
-export function ownKind(row: Pick<ContainerRow, "selfKind" | "isSelf">): "server" | "agent" | "" {
-  if (row.selfKind === "server" || row.selfKind === "agent") return row.selfKind;
+// it runs in, an agent, or a task of its ingress proxy. Acting on one asks for its
+// name to be typed, one at a time (D-11, D-46), and a bulk never includes one (D-12).
+export function ownKind(
+  row: Pick<ContainerRow, "selfKind" | "isSelf">,
+): "server" | "agent" | "ingress" | "" {
+  if (row.selfKind === "server" || row.selfKind === "agent" || row.selfKind === "ingress") {
+    return row.selfKind;
+  }
   return row.isSelf ? "server" : "";
 }
 

@@ -83,6 +83,21 @@ function reviewBody(over: Record<string, unknown> = {}) {
   };
 }
 
+const REFUSED =
+  "A hostname this stack asks for is taken or not allowed. Nothing was changed. Fix the labels and review again.";
+const refused = () =>
+  Response.json(
+    {
+      type: "ingress_refused",
+      title: "x",
+      status: 409,
+      detail: "app.example.com is held by stack shop.",
+      // The server's real shape: the reason is the detail, and each refused label is also listed at its place.
+      errors: [{ location: "compose.yaml:7", message: "app.example.com is held by stack shop." }],
+    },
+    { status: 409 },
+  );
+
 const problem = (status: number, type: string) =>
   Response.json({ type, title: "x", status, detail: "d" }, { status });
 
@@ -579,6 +594,85 @@ describe("the Changes tab", () => {
     expect(screen.getByText("db_pass")).toBeTruthy();
   });
 
+  it("draws the Ingress card after the service diff and before Other resources, and a warning only in the warnings list", async () => {
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          objects: [{ change: "added", kind: "network", name: "front", detail: "" }],
+          ingress: {
+            routes: [
+              {
+                change: "added",
+                hostname: "app.example.com",
+                path: "/",
+                port: 8080,
+                scheme: "http",
+                service: "web",
+              },
+            ],
+            certificates: [{ hostname: "app.example.com", state: "will_issue" }],
+            network: [{ service: "web", change: "joins", replacesTasks: true }],
+          },
+          problems: [
+            problemOf({
+              severity: "warning",
+              code: "ingress_dnsrr",
+              message: "web uses DNS round robin, so ingress cannot route to it.",
+            }),
+          ],
+        }),
+      );
+    mount();
+    const card = await screen.findByRole("heading", { level: 3, name: "Ingress" });
+    const diff = await screen.findByRole("table", { name: "Changes to web" });
+    const other = screen.getByRole("heading", { name: "Other resources" });
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(diff, card)).toBe(true);
+    expect(follows(card, other)).toBe(true);
+    expect(screen.getByRole("table", { name: "Routes" })).toBeTruthy();
+    // The warning is the server's own message in the warnings list, not in the card.
+    const message = screen.getByText("web uses DNS round robin, so ingress cannot route to it.");
+    expect(message).toBeTruthy();
+    expect(card.closest("section")?.contains(message)).toBe(false);
+  });
+
+  it("draws no Ingress card when the review has no ingress section", async () => {
+    review = () => Response.json(reviewBody({ services: [changedWeb()] }));
+    mount();
+    await screen.findByRole("table", { name: "Changes to web" });
+    expect(screen.queryByRole("heading", { name: "Ingress" })).toBeNull();
+  });
+
+  it("leaves the network table out of the card for a standalone stack", async () => {
+    target = "standalone";
+    review = () =>
+      Response.json(
+        reviewBody({
+          services: [changedWeb()],
+          ingress: {
+            routes: [
+              {
+                change: "added",
+                hostname: "app.example.com",
+                path: "/",
+                port: 8080,
+                scheme: "http",
+                service: "web",
+                note: "Not served on this host yet.",
+              },
+            ],
+            certificates: [],
+            network: [{ service: "web", change: "joins", replacesTasks: true }],
+          },
+        }),
+      );
+    mount();
+    expect(await screen.findByRole("table", { name: "Routes" })).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "Network changes" })).toBeNull();
+  });
+
   it("lists every service as Added on a first deploy and says nothing from the stack is running", async () => {
     review = () =>
       Response.json(
@@ -1070,6 +1164,49 @@ describe("the operation lock", () => {
       ),
     ).toBeTruthy();
   });
+
+  // D-15 and UI-SPEC S4: a hostname the stack asks for is refused, nothing was changed, and the server's reason follows
+  // the sentence as a second span of text.
+  it("says a hostname is taken or not allowed, that nothing was changed, and gives the server's reason as text", async () => {
+    deploy = refused;
+    const { onDeployed } = mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(deployButton());
+    const alert = await screen.findByRole("alert");
+    const spans = alert.querySelectorAll("span");
+    expect(within(alert).getByText(REFUSED)).toBeTruthy();
+    expect(within(alert).getByText("app.example.com is held by stack shop.")).toBeTruthy();
+    expect(Array.from(spans).map((s) => s.textContent)).toContain(
+      "app.example.com is held by stack shop.",
+    );
+    expect(onDeployed).not.toHaveBeenCalled();
+    expect(deployButton().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("draws the reason of a refused claim as text, never as markup", async () => {
+    deploy = () =>
+      Response.json(
+        { type: "ingress_refused", title: "x", status: 409, detail: "<b>shop</b> holds it" },
+        { status: 409 },
+      );
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(deployButton());
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("<b>shop</b> holds it")).toBeTruthy();
+    expect(alert.querySelector("b")).toBeNull();
+  });
+
+  it("words a refusal with no reason as the sentence alone", async () => {
+    deploy = () =>
+      Response.json({ type: "ingress_refused", title: "x", status: 409 }, { status: 409 });
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(deployButton());
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(REFUSED)).toBeTruthy();
+    expect(alert.querySelectorAll("span")).toHaveLength(1);
+  });
 });
 
 // A roll back to a chosen revision (plan 08-03, STK-08, D-02): the revision's own stack with its stored
@@ -1149,6 +1286,16 @@ describe("in roll back mode", () => {
     expect(posts("/rollback")).toHaveLength(1);
     expect(posts("/rollback")[0]?.body).toEqual({ revision: 1, expectedDeployed: 3 });
     expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("words a claim the store refused as nothing changed, with the server's reason", async () => {
+    rollback = refused;
+    mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(rollbackButton());
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(REFUSED)).toBeTruthy();
+    expect(within(alert).getByText("app.example.com is held by stack shop.")).toBeTruthy();
   });
 
   it("says the stack was deployed again, stores nothing, and reviews again on request", async () => {
@@ -1318,6 +1465,16 @@ describe("in restore mode", () => {
     await screen.findByRole("table", { name: "Summary of changes" });
     expect(posts("/rollback")).toHaveLength(0);
     expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("words a claim the store refused as nothing changed, with the server's reason", async () => {
+    rollback = refused;
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText(REFUSED)).toBeTruthy();
+    expect(within(alert).getByText("app.example.com is held by stack shop.")).toBeTruthy();
   });
 
   it("says the stack was deployed again, stores nothing, and reviews again on request", async () => {

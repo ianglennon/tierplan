@@ -15,6 +15,8 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
+
+	"github.com/ianglennon/tierplan/internal/ingress"
 )
 
 // quorumLossMarker is in the message of the 500 a manager answers every cluster
@@ -47,6 +49,13 @@ const (
 // never looked at; anyone can run it under any name.
 func isAgentService(s swarm.Service) bool {
 	return s.Spec.Name == agentServiceName || s.Spec.Labels[agentServiceLabel] == agentServiceLabelValue
+}
+
+// isIngressService reports whether s is the TierPlan ingress proxy: the component label and the exact
+// reserved name, both (D-41). Unlike the agent rule, a label alone does not make a service the proxy,
+// because the label is user-controlled and this flag backs refusals.
+func isIngressService(s swarm.Service) bool {
+	return ingress.OwnsService(s.Spec.Name, s.Spec.Labels)
 }
 
 // NodeRow is one swarm node as the cluster view shows it.
@@ -88,6 +97,8 @@ type ServiceRow struct {
 	Stack string
 	// Agent is true for a TierPlan agent service (see isAgentService).
 	Agent bool
+	// Ingress is true for the TierPlan ingress proxy service (see isIngressService).
+	Ingress bool
 	// Ports are the ports the service publishes, sorted by published port, then target
 	// port, then protocol. Never nil.
 	Ports []ServicePort
@@ -238,24 +249,15 @@ func (r ClusterRead) ListsAnswerer(answeringNodeID string) bool {
 	return false
 }
 
-// Cluster reads the nodes, the services with their task counts and the tasks of
-// the agent service (found by its label, see isAgentService) from a swarm manager. It is read-only and has no
-// variant that changes anything. A worker, and a manager that has lost quorum,
-// answer with errors whose text carries the daemon's own message, which
-// envs.ReasonFor maps to not_a_manager and no_quorum.
-//
-// Nodes are sorted by hostname then ID and services by name then ID. The agent
-// tasks are reduced to the newest task of each node, which is its current one;
-// the rows are sorted by node ID.
-func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
-	cli := c.cur()
-	var out ClusterRead
-
-	ns, err := cli.NodeList(ctx, client.NodeListOptions{})
+// SwarmNodes lists the swarm's nodes from a manager, sorted by hostname then ID. It is the node half of Cluster and
+// reads nothing else, for a caller that needs only who is in the swarm. A worker, and a manager that has lost quorum,
+// answer with errors, as Cluster does.
+func (c *Client) SwarmNodes(ctx context.Context) ([]NodeRow, error) {
+	ns, err := c.cur().NodeList(ctx, client.NodeListOptions{})
 	if err != nil {
-		return ClusterRead{}, fmt.Errorf("list swarm nodes on %s: %w", c.t.Describe(), err)
+		return nil, fmt.Errorf("list swarm nodes on %s: %w", c.t.Describe(), err)
 	}
-	out.Nodes = make([]NodeRow, 0, len(ns.Items))
+	out := make([]NodeRow, 0, len(ns.Items))
 	for _, n := range ns.Items {
 		row := NodeRow{
 			ID: n.ID, Hostname: n.Description.Hostname, Role: string(n.Spec.Role),
@@ -270,11 +272,32 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 			row.Reachability = string(n.ManagerStatus.Reachability)
 			row.ManagerAddr = n.ManagerStatus.Addr
 		}
-		out.Nodes = append(out.Nodes, row)
+		out = append(out, row)
 	}
-	slices.SortFunc(out.Nodes, func(a, b NodeRow) int {
+	slices.SortFunc(out, func(a, b NodeRow) int {
 		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.ID, b.ID))
 	})
+	return out, nil
+}
+
+// Cluster reads the nodes, the services with their task counts and the tasks of
+// the agent service (found by its label, see isAgentService) from a swarm manager. It is read-only and has no
+// variant that changes anything. A worker, and a manager that has lost quorum,
+// answer with errors whose text carries the daemon's own message, which
+// envs.ReasonFor maps to not_a_manager and no_quorum.
+//
+// Nodes are sorted by hostname then ID and services by name then ID. The agent
+// tasks are reduced to the newest task of each node, which is its current one;
+// the rows are sorted by node ID.
+func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
+	cli := c.cur()
+	var out ClusterRead
+
+	nodes, err := c.SwarmNodes(ctx)
+	if err != nil {
+		return ClusterRead{}, err
+	}
+	out.Nodes = nodes
 
 	ss, err := cli.ServiceList(ctx, client.ServiceListOptions{Status: true})
 	if err != nil {
@@ -288,7 +311,7 @@ func (c *Client) Cluster(ctx context.Context) (ClusterRead, error) {
 		}
 		row := ServiceRow{
 			ID: s.ID, Name: s.Spec.Name, Mode: serviceMode(s.Spec.Mode), UpdatedAt: s.UpdatedAt.UTC(),
-			Stack: s.Spec.Labels[stackLabel], Agent: isAgentService(s),
+			Stack: s.Spec.Labels[stackLabel], Agent: isAgentService(s), Ingress: isIngressService(s),
 		}
 		if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {
 			row.Image = cs.Image

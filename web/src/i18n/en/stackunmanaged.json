@@ -6,7 +6,8 @@
     "portainer": "Portainer",
     "owner": {
       "tierplan": "TierPlan",
-      "agent": "TierPlan agent"
+      "agent": "TierPlan agent",
+      "ingress": "TierPlan ingress"
     },
     "notAdoptable": {
       "title": "Can't be adopted"

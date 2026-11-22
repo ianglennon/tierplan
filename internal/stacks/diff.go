@@ -547,8 +547,8 @@ func MarkOwnershipOnly(changes []ServiceChange, desired, running map[string]swar
 }
 
 // sameWithoutOwnership reports whether two normalised specs have no difference left once every ownership label is
-// stripped from both. It reads the specs themselves, as the differences are listed, so an emptied label map and an
-// absent one are the same thing.
+// stripped from both, and TierPlan's ingress attachment with them (D-20). It reads the specs themselves, as the
+// differences are listed, so an emptied label map and an absent one are the same thing.
 func sameWithoutOwnership(a, b swarm.ServiceSpec) bool {
-	return len(ChangedPaths(NormalizeSpec(StripOwnership(a)), NormalizeSpec(StripOwnership(b)))) == 0
+	return len(ChangedPaths(NormalizeSpec(StripIngressAttachment(StripOwnership(a))), NormalizeSpec(StripIngressAttachment(StripOwnership(b))))) == 0
 }

@@ -253,6 +253,9 @@ type RouterDeps struct {
 	// IngressNodes serves the ingress join token, the node list and the revoke of one node under
 	// /api/env/{envId}/ingress/ (Phase 22). The zero value registers every route answering 503 ingress_unavailable.
 	IngressNodes api.IngressNodesDeps
+	// IngressDeploy serves the preview and the enable of an environment's ingress and the job they start, under
+	// /api/env/{envId}/ingress/ (Phase 24). The zero value registers every route answering 503 ingress_unavailable.
+	IngressDeploy api.IngressDeployDeps
 	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
 	GitHooks api.GitHookDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
@@ -313,6 +316,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterIngress(r, d.Ingress)
 	api.RegisterIngressCerts(r, d.IngressCerts)
 	api.RegisterIngressNodes(r, d.IngressNodes)
+	api.RegisterIngressDeploy(r, d.IngressDeploy)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
@@ -710,13 +714,15 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The jobs and the operation lock are in memory, so a deploy that was running when the last process
 	// stopped is not running now. It ends interrupted, its revision failed, and its stack reads Deploy
 	// failed and offers a roll back (Open Q5).
+	// The stacks it lists are the ones whose hostname claims may be the failed revision's; they are put back below, once
+	// the ingress store exists (D-45).
 	interrupted, err := stackops.Repo{Store: st, Vault: vlt}.MarkInterrupted(ctx)
 	if err != nil {
 		_ = st.Close()
 		return nil, restoredStateError{fmt.Errorf("mark interrupted stack deploys: %w", err)}
 	}
-	if interrupted > 0 {
-		log.Warn("stack operations that were running when the server stopped were marked interrupted", "count", interrupted)
+	if len(interrupted) > 0 {
+		log.Warn("stack operations that were running when the server stopped were marked interrupted", "count", len(interrupted))
 	}
 
 	// The Compose SDK that deploys a standalone stack keeps process-wide state (its Docker CLI
@@ -1126,7 +1132,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// the nodes that dial in. A removed environment closes its nodes' sessions through the one kicker the registry holds
 	// (D-23, D-29).
 	ingressSvc, ingressHub, err := wireIngressHub(ctx, ingressHubDeps{
-		Log: log, Store: st, Audit: aud, Instance: inst, Pins: rt.WelcomePins, Recon: ingressRecon, Nodes: clusters, Refusals: ingressAudit,
+		Log: log, Store: st, Audit: aud, Instance: inst, Pins: rt.WelcomePins, Recon: ingressRecon, Ingress: ingressStore, Changes: ingressNotifier, Nodes: clusters, Refusals: ingressAudit,
 		UpgradeFailure: proxyObs.RecordUpgradeFailure,
 	})
 	if err != nil {
@@ -1259,7 +1265,24 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			return audit.Actor{Type: audit.ActorUser, ID: key, Name: name}
 		},
 	}
-	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, Ingress: ingressStore, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
+	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, Ingress: ingressStore, IngressCerts: certStore, IngressRoutes: routeSources{ingressRecon, ingressSvc}, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Updates: updateService, Log: log}.WithDeployCancels()
+	// The claims of a stack whose deploy was cut off go back to its last good revision's before anything is served, so a
+	// crash never leaves a failed revision's hostnames held (D-45). A failure is logged and never stops the start.
+	if err := api.RestoreInterruptedIngressClaims(ctx, stacksDeps, interrupted); err != nil {
+		log.Error("the hostname claims of interrupted stack operations could not all be put back", "error", err)
+	}
+	// The ingress deployer shares the stack routes' operation lock and the job hub, so an enable and a stack operation exclude
+	// each other. Its stack side lists the stacks to redeploy.
+	ingressDeploy := newIngressDeploy(ingressDeployDeps{
+		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc, Hub: ingressHub, Broker: broker,
+		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
+		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
+		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead),
+		CurrentBundle: func(envID string) (string, bool) {
+			b, ok := ingressRecon.Current(envID)
+			return b.ID, ok
+		},
+	})
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
 	router := NewRouter(RouterDeps{
@@ -1375,8 +1398,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// The ingress nodes dial in here, and the typed API lists and revokes them (Phase 22). The bundle a node should
 		// hold is the reconciler's current one.
 		IngressConnect: ingressHub.Handler(),
+		IngressDeploy:  api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log},
 		IngressNodes: api.IngressNodesDeps{
-			Service: ingressSvc, Live: ingressHub.Live,
+			Service: ingressSvc, Live: ingressHub.Live, Issuer: ingressDeploy,
 			CurrentBundle: func(envID string) (string, bool) {
 				b, ok := ingressRecon.Current(envID)
 				return b.ID, ok
@@ -1478,6 +1502,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { certMgr.Run(bg) })
 	// The ingress reconciler renders every environment's bundle and keeps it current until the server stops.
 	srv.background.Go(func() { ingressRecon.Run(bg) })
+	// The ensure loop keeps the switched-on ingress objects as this server wants them; a restored install is paused until an Admin resumes.
+	srv.background.Go(func() { ingressDeploy.Run(bg) })
+	// A node that was away when ingress was switched off has its certificate cache wiped as soon as its agent connects.
+	srv.background.Go(func() { ingressDeploy.RunWipes(bg) })
 	// The ingress hub pushes each environment's changed bundle to its nodes until the server stops.
 	srv.background.Go(func() { ingressHub.Run(bg) })
 	// The header is decided once before anything is served, then again on every certificate install

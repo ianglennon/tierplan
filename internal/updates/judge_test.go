@@ -698,6 +698,7 @@ func TestHolderKinds(t *testing.T) {
 		{"a stop", stackops.Holder{Kind: "stop", StackName: "shop", By: "ann"}, updates.HolderDeploy},
 		{"a removal", stackops.Holder{Kind: stackops.ModeRemove, StackName: "shop", By: "ann"}, updates.HolderDeploy},
 		{"an adoption", stackops.Holder{Kind: "adopt", StackName: "shop", By: "ann"}, updates.HolderDeploy},
+		{"an ingress job", stackops.Holder{Kind: stackops.HolderKindIngress, JobID: "job-1", By: "ann"}, updates.HolderIngress},
 	} {
 		if got := updates.HolderKind(tc.h); got != tc.want {
 			t.Errorf("%s: kind = %q, want %q", tc.name, got, tc.want)

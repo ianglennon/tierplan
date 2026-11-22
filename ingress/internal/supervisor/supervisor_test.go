@@ -517,6 +517,39 @@ type dialRecord struct {
 	creds     channel.Credentials
 }
 
+// startStatic runs a supervisor with cfg until the channel loop and returns the static file on the volume.
+func startStatic(t *testing.T, accessLog bool) []byte {
+	t.Helper()
+	h := newHarness(t, "")
+	h.deps.Config.AccessLog = accessLog
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, done := h.runUntilChannel(ctx)
+	static, err := os.ReadFile(filepath.Join(h.root, "static", "traefik.yml"))
+	if err != nil {
+		t.Fatalf("read the static file: %v", err)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-testsupport.Context(t).Done():
+		t.Fatalf("timed out after %v waiting for Run to return", testsupport.Deadline)
+	}
+	return static
+}
+
+func TestStartWritesAccessLogStatic(t *testing.T) {
+	if got := startStatic(t, true); !bytes.Equal(got, ingressbundle.StaticTraefikWith(true)) {
+		t.Fatalf("static/traefik.yml with the access log on is not ingressbundle.StaticTraefikWith(true)")
+	}
+}
+
+func TestStartWritesPlainStaticByDefault(t *testing.T) {
+	if got := startStatic(t, false); !bytes.Equal(got, ingressbundle.StaticTraefik()) {
+		t.Fatalf("static/traefik.yml by default is not ingressbundle.StaticTraefik()")
+	}
+}
+
 func TestStartGoodCache(t *testing.T) {
 	b := validBundle(t, 1, "app.example.test")
 	h := newHarness(t, cachedVolume(t, b))

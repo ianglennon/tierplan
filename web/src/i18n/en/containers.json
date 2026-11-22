@@ -53,7 +53,8 @@
       "unhealthy": "Unhealthy",
       "self": {
         "server": "TierPlan (this instance)",
-        "agent": "TierPlan agent"
+        "agent": "TierPlan agent",
+        "ingress": "TierPlan ingress"
       },
       "ports": {
         "more": "+{{count}}"

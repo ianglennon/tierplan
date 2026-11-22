@@ -95,7 +95,10 @@ const (
 
 // The codes of a NotUpdatableError.
 const (
-	NotUpdatableAgent      = "agent"
+	NotUpdatableAgent = "agent"
+	// NotUpdatableIngress: the TierPlan ingress proxy. Its image follows the server, and the ensure loop updates it (D-11),
+	// so no one is offered an update of it.
+	NotUpdatableIngress    = "ingress"
 	NotUpdatableJobMode    = "job_mode"
 	NotUpdatableManaged    = "managed_by_stack"
 	NotUpdatablePinned     = "pinned_in_file"
@@ -441,14 +444,27 @@ func (a *Applier) serviceRow(ctx context.Context, envID, name string) (dockerx.S
 	return dockerx.ServiceRow{}, false, nil
 }
 
-// updatable refuses the services this path does not update: TierPlan's own agent, a job, and a service of a stack TierPlan
-// manages, which is updated through a revision of that stack. A service of a stack that was only discovered is a plain one.
-func (a *Applier) updatable(ctx context.Context, envID string, row dockerx.ServiceRow) error {
+// NotUpdatableCode is the refusal the row alone decides, empty when it decides none: the ingress proxy (the flag, which needs the
+// label and the reserved name, D-41), TierPlan's own agent and a job. A service of a managed stack is refused by updatable, which
+// has to look the stack up.
+func NotUpdatableCode(row dockerx.ServiceRow) string {
 	switch {
+	case row.Ingress:
+		return NotUpdatableIngress
 	case row.Agent:
-		return &NotUpdatableError{Code: NotUpdatableAgent}
+		return NotUpdatableAgent
 	case row.Mode == "replicated-job" || row.Mode == "global-job":
-		return &NotUpdatableError{Code: NotUpdatableJobMode}
+		return NotUpdatableJobMode
+	}
+	return ""
+}
+
+// updatable refuses the services this path does not update: the ingress proxy, TierPlan's own agent, a job, and a service of a
+// stack TierPlan manages, which is updated through a revision of that stack. A service of a stack that was only discovered is a
+// plain one.
+func (a *Applier) updatable(ctx context.Context, envID string, row dockerx.ServiceRow) error {
+	if code := NotUpdatableCode(row); code != "" {
+		return &NotUpdatableError{Code: code}
 	}
 	id, err := a.managedStackID(ctx, envID, row)
 	if err != nil {

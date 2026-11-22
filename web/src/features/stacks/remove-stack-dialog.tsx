@@ -52,6 +52,9 @@ function refusalKey(error: DeployRequestError): string {
   }
 }
 
+// At most this many released hostnames are listed, then "and N more" (UI-SPEC S4b).
+const HOSTNAMES_SHOWN = 10;
+
 interface Row {
   kind: "service" | "container" | "network" | "secret" | "config" | "definition";
   name: string;
@@ -165,6 +168,7 @@ export function RemoveStackDialog({ stack, open, onOpenChange }: RemoveStackDial
   }
 
   const rows = preview.data ? rowsOf(preview.data, stack.name) : [];
+  const hostnames = preview.data?.hostnames ?? [];
   const counts = preview.data
     ? t("stackRemove.list.counts", {
         services:
@@ -265,6 +269,28 @@ export function RemoveStackDialog({ stack, open, onOpenChange }: RemoveStackDial
                     </tbody>
                   </table>
                 </div>
+                {hostnames.length > 0 ? (
+                  <section className="flex flex-col gap-1 pt-2">
+                    <h4 className="text-sm font-semibold">{t("stackRemove.hostnames.label")}</h4>
+                    <ul className="flex flex-col gap-0.5">
+                      {hostnames.slice(0, HOSTNAMES_SHOWN).map((h) => (
+                        <li key={h} className="font-mono text-xs break-all">
+                          {h}
+                        </li>
+                      ))}
+                    </ul>
+                    {hostnames.length > HOSTNAMES_SHOWN ? (
+                      <p className="text-xs text-muted-foreground">
+                        {t("stackRemove.hostnames.more", {
+                          count: hostnames.length - HOSTNAMES_SHOWN,
+                        })}
+                      </p>
+                    ) : null}
+                    <p className="text-xs text-muted-foreground">
+                      {t("stackRemove.hostnames.note")}
+                    </p>
+                  </section>
+                ) : null}
               </section>
             ) : null}
             {preview.data ? (

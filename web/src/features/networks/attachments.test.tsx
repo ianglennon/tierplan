@@ -53,6 +53,7 @@ function detail(extra: Partial<NetworkDetail> = {}): NetworkDetail {
     attachable: false,
     ipv6: false,
     builtIn: false,
+    ingress: false,
     owner: "",
     ownerKind: "",
     labels: {},

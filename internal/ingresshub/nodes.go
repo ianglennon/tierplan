@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/ingressrender"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
@@ -47,6 +49,40 @@ func (s *Service) ListNodes(ctx context.Context, envID string) ([]Node, error) {
 	for _, r := range rows {
 		out = append(out, nodeOf(r))
 	}
+	return out, nil
+}
+
+// RemoveEnvNodes deletes every active ingress node row of the environment as the last step of switching ingress off
+// (D-39). A revoked row is kept: it is the only record that keeps a revoked host out (reenrol_blocked), so a switch off
+// followed by a switch on must not re-admit it (WR-03). It records ingress.node_removed for each row it removes in the
+// same transaction, so a row never goes without its audit entry and an audit entry never names a row that stayed. The rows
+// that were removed are returned, oldest first. An environment with no active rows removes nothing and records nothing.
+// It closes no session: the caller has kicked them.
+func (s *Service) RemoveEnvNodes(ctx context.Context, actor audit.Actor, envID string) ([]Node, error) {
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	rows, err := s.st.Q.WithTx(tx).DeleteIngressNodesByEnv(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("remove the ingress nodes: %w", err)
+	}
+	out := make([]Node, 0, len(rows))
+	for _, r := range rows {
+		n := nodeOf(r)
+		out = append(out, n)
+		if err := s.aud.RecordTx(ctx, tx, audit.Entry{
+			Actor: actor, Action: audit.ActionIngressNodeRemoved, TargetType: targetIngressNode, TargetID: n.ID,
+			EnvID: envID, Result: audit.ResultSuccess, Details: map[string]string{"node": n.Name},
+		}); err != nil {
+			return nil, fmt.Errorf("audit ingress node removed: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	slices.SortStableFunc(out, func(a, b Node) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	return out, nil
 }
 

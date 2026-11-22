@@ -72,6 +72,10 @@ type Loaded struct {
 	// no value in the table and no default, sorted. compose-go fills them with a blank and only
 	// logs; TierPlan names them so a check can refuse the deploy (Pitfall 3).
 	Unset []string
+	// Ingress is what check added for the ingress attachment (D-19): the shared network and the
+	// routed services joined to it. Render and drift read it to tell the attachment from what the
+	// user wrote. Nil when nothing was injected.
+	Ingress *InjectedIngress
 }
 
 // Load reads the working copy's compose files, merged in order, with compose-go, in a sandbox:

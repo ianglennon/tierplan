@@ -122,7 +122,7 @@ type UpdateFailureBody struct {
 
 // UpdateHolderBody is who holds an environment's operation lock, as the Busy badge and the confirm name them.
 type UpdateHolderBody struct {
-	Kind     string `json:"kind" enum:"git_deploy,deploy,rollback,janitor,update" doc:"What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, or update (an image update, or a stack's Update images)"`
+	Kind     string `json:"kind" enum:"git_deploy,deploy,rollback,janitor,update,ingress" doc:"What holds the lock: git_deploy (a stack's automatic deploy from git), deploy (any other stack operation that deploys, stops, starts or removes), rollback, janitor, update (an image update, or a stack's Update images), or ingress (TierPlan is switching an environment's ingress on or changing it)"`
 	By       string `json:"by" doc:"Who started it, as a name; for an automatic deploy a system name"`
 	Started  string `json:"started" format:"date-time" doc:"When it started"`
 	Workload string `json:"workload,omitempty" doc:"Left out unless set: for an image update, the service, container or stack being updated"`

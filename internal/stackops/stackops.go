@@ -111,6 +111,10 @@ type Deps struct {
 	// given a block of (D-20), and holds the allocation lock a deploy shares with the network dialog. Nil means
 	// no deploy gives a network a subnet of its own making.
 	AddressSpaces *envs.AddressSpaces
+	// Ingress is the ingress model the stack pipeline asks which services join the shared ingress network, and
+	// which claims a stack holds (D-18). It is optional: nil means no ingress, so nothing is attached and no
+	// claim is written, and a Deps built without it behaves as it did before ingress existed.
+	Ingress Ingress
 	// subnetPlanHook, when set, is called by a swarm or standalone deploy right after it has planned the subnets of its new
 	// networks and before it creates any (a standalone deploy: before the SDK's up), while it holds the allocation lock. Tests order a second allocation
 	// against the deploy with it, never with a sleep; nothing sets it in production.

@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/swarmops"
 	"github.com/ianglennon/tierplan/internal/tunnel"
 	"github.com/ianglennon/tierplan/internal/updates"
 )
@@ -110,6 +111,7 @@ type ServiceItem struct {
 	Stack           string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
 	TierPlanStackID string `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
 	Agent           bool   `json:"agent" doc:"True for a TierPlan agent service"`
+	Ingress         bool   `json:"ingress" doc:"True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): read-only here; switch ingress off to remove it"`
 	UpdatedAt       string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
 
 	Ports           []string `json:"ports" doc:"The ports the service publishes, as published->target/protocol (8080->80/tcp), with (host) after a port published in host mode; sorted by published port. Empty when it publishes none"`
@@ -212,7 +214,7 @@ type ServiceScaleResult struct {
 	ServiceID string `json:"serviceId" doc:"The service ID or name the request named"`
 	Name      string `json:"name" doc:"The service name when the manager could be asked; otherwise what the request named"`
 	Result    string `json:"result" enum:"done,failed,skipped" doc:"done: the service has the replica count asked for (changed says whether an update was sent). failed: it could not be scaled; code says why. skipped: it has no replica count to set (not_scalable)"`
-	Code      string `json:"code,omitempty" enum:"not_scalable,service_changed,service_not_found,host_read_only,agent_policy_denied,agent_host_policy,no_manager_connected,no_quorum,registry_unresolved,scale_failed" doc:"Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message"`
+	Code      string `json:"code,omitempty" enum:"not_scalable,ingress_owned,service_changed,service_not_found,host_read_only,agent_policy_denied,agent_host_policy,no_manager_connected,no_quorum,registry_unresolved,scale_failed" doc:"Why a target failed or was skipped. not_scalable (with skipped): a global or job service has no replica count. ingress_owned (with skipped): the service is the ingress proxy TierPlan creates and updates itself, which is never scaled by hand; switch ingress off to remove it. service_changed: somebody else changed the service after it was read, so nothing was changed and nothing is retried; ask again. service_not_found: the swarm has no such service. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the manager's agent, so nothing was sent. agent_policy_denied: the manager's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. agent_host_policy: the service's spec gives tasks host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, a lowered sandbox, the host network) and the manager's agent refuses that unless its owner set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; every update carries the whole spec, so a service that already has host access cannot be scaled either. no_manager_connected: no manager of the swarm is connected, or the one reached is not a manager. no_quorum: the swarm has lost its quorum. registry_unresolved: the registry credential chosen for the image could not be read, so nothing was sent. scale_failed: the manager refused it; detail has its message"`
 	Detail    string `json:"detail,omitempty" doc:"The manager's message for scale_failed, at most 300 characters; for the other codes a plain sentence"`
 	Previous  *int64 `json:"previous,omitempty" doc:"The replica count the service had; absent when it was not read"`
 	Replicas  int64  `json:"replicas" doc:"The replica count that was asked for"`
@@ -480,7 +482,7 @@ func listServices(ctx context.Context, d ServicesDeps, envID string, in *Service
 		item := ServiceItem{
 			ID: row.ID, Name: row.Name, Mode: row.Mode, Running: row.Running, Desired: row.Desired,
 			UpdateState: row.UpdateState, Image: row.Image, Stack: row.Stack, TierPlanStackID: known.confirmedFor(row.Stack, row.Labels),
-			Agent: row.Agent, UpdatedAt: rfc3339(row.UpdatedAt),
+			Agent: row.Agent, Ingress: row.Ingress, UpdatedAt: rfc3339(row.UpdatedAt),
 			Ports: servicePortStrings(row.Ports), UpdateMessage: row.UpdateMessage, HasPreviousSpec: row.HasPreviousSpec,
 			CreatedAt: rfc3339(row.CreatedAt),
 		}
@@ -614,6 +616,9 @@ func scaleOne(ctx context.Context, d ServicesDeps, envID string, t ContainerActi
 			return err
 		}
 		out.id, name = detail.ID, detail.Name
+		if detail.Ingress {
+			return swarmops.ErrIngressOwned
+		}
 		if detail.Mode != "replicated" {
 			return dockerx.ErrNotScalable
 		}
@@ -637,7 +642,7 @@ func scaleOne(ctx context.Context, d ServicesDeps, envID string, t ContainerActi
 	}
 	code, detail := scaleError(err)
 	res.Result, res.Code, res.Detail = actionFailed, code, detail
-	if code == codeNotScalable {
+	if code == codeNotScalable || code == problemIngressOwned {
 		res.Result = actionSkipped
 	}
 	if code == codeScaleFailed || code == codeRegistryUnresolved {
@@ -715,6 +720,8 @@ var swarmWriteDetail = map[string]string{
 // scaleError maps the error of one scale to a result code and a sentence.
 func scaleError(err error) (code, detail string) {
 	switch {
+	case errors.Is(err, swarmops.ErrIngressOwned):
+		return problemIngressOwned, ingressOwnedMessage
 	case errors.Is(err, dockerx.ErrNotScalable):
 		return codeNotScalable, "A global or job service has no replica count to set."
 	case errors.Is(err, errRegistryUnresolved):

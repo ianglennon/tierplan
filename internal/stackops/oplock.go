@@ -17,6 +17,11 @@ const HolderKindJanitor = "janitor"
 // Workload names the service, container or stack being updated, and its JobID the job that runs the update.
 const HolderKindImageUpdate = "image_update"
 
+// HolderKindIngress is the Kind of the Holder of an environment's ingress objects: an enable, a disable or an
+// ensure pass over the proxy service, its network, its join token secret and its certificate cache volume
+// (Phase 24). Such a holder names no stack, and its Workload is "ingress".
+const HolderKindIngress = "ingress"
+
 // Holder is who holds an environment's operation lock: the stack, the job that runs the operation,
 // what it is (deploy, update, rollback, start, stop or remove), who started it and when.
 //

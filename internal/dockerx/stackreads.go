@@ -145,3 +145,14 @@ func (c *Client) VolumesWithLabel(ctx context.Context, key, value string) ([]Vol
 	slices.SortFunc(out, func(a, b VolumeRow) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
+
+// RunningContainers lists the containers that are running now, sorted by name then ID. It is
+// read-only and works on any engine, a swarm node's or a standalone host's. The ingress
+// preflight reads it to see which host ports the node already uses.
+func (c *Client) RunningContainers(ctx context.Context) ([]ContainerRow, error) {
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list running containers on %s: %w", c.t.Describe(), err)
+	}
+	return containerRows(cs.Items), nil
+}

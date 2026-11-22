@@ -178,6 +178,8 @@ function refusalOf(
         message: t("services.scale.errors.no_manager_connected", { environment }),
         agentPolicy: false,
       };
+    case "ingress_owned":
+      return { message: t("ingress.owned.refused"), agentPolicy: false };
     case "host_read_only":
       return { message: t("actions.refusal.host_read_only"), agentPolicy: false };
     case "agent_host_policy":
@@ -364,6 +366,7 @@ function noteWords(t: Translate, row: BulkRow): string {
   if (!eligible) {
     if (note === "global") return t("services.scale.errors.not_scalable_global");
     if (note === "job") return t("services.scale.errors.not_scalable_job");
+    if (note === "ingress") return t("ingress.owned.bulkNote");
     return "";
   }
   return stack ? t("services.scale.partOfStack", { stack }) : "";

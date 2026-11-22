@@ -35,6 +35,9 @@ const (
 	PushTooLarge = "too_large"
 	// PushWriteFailed: the bundle could not be written or recorded, and the session ends.
 	PushWriteFailed = "write_failed"
+	// PushDisabled: the environment's ingress is switched off, or the switch could not be read, so the node is sent
+	// nothing and nothing is recorded (D-12).
+	PushDisabled = "disabled"
 )
 
 // PushEvent is the outcome of one look at the environment's current bundle on behalf of one session. BundleID is
@@ -50,24 +53,30 @@ func (h *Hub) emit(ev PushEvent) {
 }
 
 // Run delivers changed bundles: it consumes the subscription NewHub took and, when an environment's bundle ID
-// changes, wakes the writer of every session of that environment. It returns when ctx ends or the hub is
-// closed. A hub built without a source has nothing to deliver, and Run only waits.
+// changes, or the notifier given to WithEnvChanges names an environment, wakes the writer of every session of that
+// environment. It returns when ctx ends or the hub is closed. A hub built without a source or an environment
+// notifier has nothing to deliver, and Run only waits.
 func (h *Hub) Run(ctx context.Context) {
-	if h.sub == nil {
-		select {
-		case <-ctx.Done():
-		case <-h.stop:
-		}
-		return
+	var srcC, envC <-chan struct{}
+	if h.sub != nil {
+		srcC = h.sub.C()
 	}
+	if h.envSub != nil {
+		envC = h.envSub.C()
+	}
+	// With nothing subscribed both channels are nil and the loop only waits for the end.
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-h.stop:
 			return
-		case <-h.sub.C():
+		case <-srcC:
 			for _, envID := range h.sub.Pending() {
+				h.wakeEnv(envID)
+			}
+		case <-envC:
+			for _, envID := range h.envSub.Pending() {
 				h.wakeEnv(envID)
 			}
 		}
@@ -114,6 +123,10 @@ func (h *Hub) deliver(ctx context.Context, s *Session) bool {
 	st := s.pushSnapshot()
 	if !st.hello {
 		return true // the hello wakes the writer again
+	}
+	if h.deliveryGate != nil && !h.deliveryGate(ctx, s.EnvID) {
+		h.emit(PushEvent{NodeID: s.NodeID, EnvID: s.EnvID, Outcome: PushDisabled})
+		return true
 	}
 	b, have := h.src.Current(s.EnvID)
 	ev := PushEvent{NodeID: s.NodeID, EnvID: s.EnvID, BundleID: b.ID}

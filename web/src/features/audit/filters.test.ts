@@ -871,6 +871,11 @@ describe("actionLabel (ingress)", () => {
     "ingress.node_enrolled",
     "ingress.node_removed",
     "ingress.vip_changed",
+    "ingress.access_logs_changed",
+    "ingress.wipe_queued",
+    "ingress.wipe_done",
+    "ingress.deploy_paused",
+    "ingress.deploy_resumed",
   ];
 
   it("labels every ingress action and lists it in the Action filter", () => {

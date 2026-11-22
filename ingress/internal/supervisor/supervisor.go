@@ -280,7 +280,7 @@ func prepareVolume(d *Deps) (ed25519.PrivateKey, error) {
 	if err := d.Store.Prepare(); err != nil {
 		return nil, fmt.Errorf("supervisor: prepare the volume: %w", err)
 	}
-	if err := d.Store.WriteStatic(ingressbundle.StaticTraefik()); err != nil {
+	if err := d.Store.WriteStatic(ingressbundle.StaticTraefikWith(d.Config.AccessLog)); err != nil {
 		return nil, fmt.Errorf("supervisor: write Traefik's static configuration: %w", err)
 	}
 	k, err := d.Identity.LoadOrCreateKey()

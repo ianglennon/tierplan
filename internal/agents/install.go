@@ -111,10 +111,17 @@ var releaseVersion = regexp.MustCompile(`^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Z
 // development or edge server has no release tag to match and installs edge
 // (RESEARCH Pitfall 23). Build metadata after a + is not part of a Docker tag.
 func AgentImage(serverVersion string) string {
+	return ImageFor(ImageRepository, serverVersion)
+}
+
+// ImageFor is repository with the tag a server of serverVersion installs: the exact X.Y.Z for a
+// release, edge otherwise. It is the one tag rule of every image TierPlan installs (the agent and
+// the ingress proxy), so a second image cannot drift from it.
+func ImageFor(repository, serverVersion string) string {
 	if m := releaseVersion.FindStringSubmatch(strings.TrimSpace(serverVersion)); m != nil {
-		return ImageRepository + ":" + m[1]
+		return repository + ":" + m[1]
 	}
-	return ImageRepository + ":edge"
+	return repository + ":edge"
 }
 
 // secretTagLen is how many trailing letters and digits of the environment ID go in a secret name.
@@ -134,6 +141,10 @@ func secretTag(envID string) string {
 	tag := b.String()
 	return tag[max(0, len(tag)-secretTagLen):]
 }
+
+// SecretTag is the part of a secret name that tells environments apart: the last twelve letters and
+// digits of envID, in lower case. The ingress deployer names its join token secrets with it too.
+func SecretTag(envID string) string { return secretTag(envID) }
 
 // SecretName is the Docker secret that holds generation g of the join token of environment
 // envID: tierplan-agent-token-g<N>-<tag>. Every environment has its own name, so the install

@@ -238,6 +238,12 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "ingress.join_token_rotated",
   "ingress.join_token_disabled",
   "ingress.node_enrol_refused",
+  // The ingress deployment (Phase 24).
+  "ingress.access_logs_changed",
+  "ingress.wipe_queued",
+  "ingress.wipe_done",
+  "ingress.deploy_paused",
+  "ingress.deploy_resumed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

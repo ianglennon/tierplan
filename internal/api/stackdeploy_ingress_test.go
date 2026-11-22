@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,7 @@ import (
 
 // Every deploy path refuses a hostname the ingress policy refuses (plan 18-13, D-18): the manual deploy of a swarm
 // and of a standalone stack, the git auto-deploy, rollback and restore, and Update images. The refusal comes before
-// anything is stored, and no path writes a claim (D-21). The seeding is that of plan 18-11 (seedIngressWorld).
+// anything is stored; the claims are written by the job once the check passed (plan 24-18). The seeding is that of plan 18-11 (seedIngressWorld).
 
 // ingressStandaloneCompose is a standalone compose file with one service per hostname, each declaring its host on
 // the service's labels (a standalone stack carries its labels there, a swarm stack under deploy.labels).
@@ -36,14 +37,14 @@ func ingressStandaloneCompose(hosts ...string) string {
 	return b.String()
 }
 
-// deployRefusedAs fails unless the deploy of the saved draft is refused 422 stack_invalid with a problem that names
+// deployRefusedAs fails unless the deploy of the saved draft is refused 409 ingress_refused with a problem that names
 // want, and unless nothing was stored or written.
 func deployRefusedAs(t *testing.T, f *envFix, c *roleCaller, stackID string, version int64, want string) {
 	t.Helper()
 	writes := len(f.fake.Writes())
 	rec := c.deploy(stackID, `{"draftVersion":`+itoaT(version)+`}`)
-	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
-		t.Fatalf("deploy: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_refused" {
+		t.Fatalf("deploy: %d %.400s, want 409 ingress_refused", rec.Code, rec.Body)
 	}
 	if !strings.Contains(rec.Body.String(), want) {
 		t.Errorf("answer = %.600s, want a problem that names %q", rec.Body, want)
@@ -67,6 +68,52 @@ func TestIngressGateDeploySwarmRefusesAReservedHost(t *testing.T) {
 	deployRefusedAs(t, f, admin, st.ID, v, seed.reservedHost)
 }
 
+// An ingress refusal is a 409 of its own only when the hostname is all that is wrong: a draft that also has another
+// error (here an unknown ingress label) is a 422 stack_invalid, which lists both.
+func TestIngressGateDeployKeepsStackInvalidForAComposeErrorBesideAReservedHost(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "gate-mixed")
+	v := saveCompose(t, admin, st.ID, ingressCompose(seed.reservedHost)+"  other:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.bogus: x\n", "[]")
+
+	rec := admin.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
+		t.Fatalf("deploy: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), seed.reservedHost) {
+		t.Errorf("answer = %.600s, want the reserved host listed beside the compose error", rec.Body)
+	}
+	if revs := f.revisions(t, st.ID); len(revs) != 0 {
+		t.Errorf("revisions = %+v, a refused deploy stores none", revs)
+	}
+}
+
+// The reason of an ingress refusal is the problem's detail, which the review page draws.
+func TestIngressGateDeployAnswersTheReasonInTheDetail(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "gate-detail")
+	v := saveCompose(t, admin, st.ID, ingressCompose(seed.reservedHost), "[]")
+
+	rec := admin.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
+
+	var p struct {
+		Status int    `json:"status"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_refused" || p.Status != http.StatusConflict || !strings.Contains(p.Detail, seed.reservedHost) {
+		t.Errorf("deploy: %d %.400s, want 409 ingress_refused naming %s in detail", rec.Code, rec.Body, seed.reservedHost)
+	}
+}
+
 func TestIngressGateDeploySwarmStartsForAFreeHostUnderTheDomain(t *testing.T) {
 	t.Parallel()
 	f, e := stackEnv(t, nil)
@@ -75,13 +122,13 @@ func TestIngressGateDeploySwarmStartsForAFreeHostUnderTheDomain(t *testing.T) {
 	st := newStack(t, admin, "gate-free")
 
 	f.deployGood(t, admin, st.ID, ingressCompose("free.apps.example.com"))
-	// The read-only gate wrote no claim: the host is still free for another stack to take.
+	// The job claimed the host once the gate and the check had passed (D-15), so the name is held by this stack.
 	world, err := f.stackDeps.Ingress.World(testsupport.Context(t), e.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, held := world.Claims["free.apps.example.com"]; held {
-		t.Error("the deploy claimed a hostname, want it left to a later phase (D-21)")
+	if c, held := world.Claims["free.apps.example.com"]; !held || c.StackName != "gate-free" {
+		t.Errorf("claim = %+v (held %v), want the host held by the deployed stack", c, held)
 	}
 }
 
@@ -116,8 +163,8 @@ func TestIngressGateDeployGitAutoDeployNamesNoOtherEnvironment(t *testing.T) {
 
 	// The same draft refused to an instance admin at the screen names the stack and the environment that hold it.
 	rec := instanceAdmin.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)
-	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
-		t.Fatalf("deploy: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_refused" {
+		t.Fatalf("deploy: %d %.400s, want 409 ingress_refused", rec.Code, rec.Body)
 	}
 	if body := rec.Body.String(); !strings.Contains(body, seed.otherStack) || !strings.Contains(body, seed.otherEnvName) {
 		t.Errorf("answer = %.600s, want the holder %q in %q named for an instance admin", body, seed.otherStack, seed.otherEnvName)
@@ -272,11 +319,11 @@ func unreserveHost(t *testing.T, f *envFix, e envBody, seed ingressWorldSeed, ho
 	}
 }
 
-// refusedAndStoredNothing fails unless rec is a 422 stack_invalid that names want, and the stack still has revisions revisions.
+// refusedAndStoredNothing fails unless rec is a 409 ingress_refused that names want, and the stack still has revisions revisions.
 func refusedAndStoredNothing(t *testing.T, f *envFix, rec *httptest.ResponseRecorder, stackID, want string, revisions int) {
 	t.Helper()
-	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_invalid" {
-		t.Fatalf("answer: %d %.400s, want 422 stack_invalid", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "ingress_refused" {
+		t.Fatalf("answer: %d %.400s, want 409 ingress_refused", rec.Code, rec.Body)
 	}
 	if !strings.Contains(rec.Body.String(), want) {
 		t.Errorf("answer = %.600s, want a problem that names %q", rec.Body, want)
@@ -314,6 +361,16 @@ func TestIngressGateRollbackRefusesAHostReservedSinceTheRevisionRanOnASwarmStack
 	}
 }
 
+// releaseClaims lets go of everything the stack holds, as happens when the stack that held a name is deployed again without
+// it or deleted: a name a deployed stack still holds cannot be reserved or claimed by another, so a test that makes a name
+// unavailable since a revision ran frees it first.
+func releaseClaims(t *testing.T, f *envFix, e envBody, stackID string) {
+	t.Helper()
+	if err := f.stackDeps.Ingress.ReleaseStack(testsupport.Context(t), e.ID, stackID, "admin", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestIngressGateRollbackRefusesARestoreOfAHostReservedSinceItRan(t *testing.T) {
 	t.Parallel()
 	f, e := stackEnv(t, nil)
@@ -322,6 +379,7 @@ func TestIngressGateRollbackRefusesARestoreOfAHostReservedSinceItRan(t *testing.
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "gate-restore")
 	f.deployGood(t, operator, st.ID, ingressCompose(gateHost))
+	releaseClaims(t, f, e, st.ID)
 	reserveHost(t, f, e, seed, gateHost)
 
 	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"mode":"restore","revision":1}`)
@@ -397,6 +455,7 @@ func TestIngressGateUpdateRefusesAHostReservedSinceTheRevisionRanOnASwarmStack(t
 	seed := seedIngressWorld(t, s.f, s.e)
 	s.f.deployGood(t, s.operator, s.st.ID, labelledShopCompose)
 	s.move(t, "web", 'b')
+	releaseClaims(t, s.f, s.e, s.st.ID)
 	reserveHost(t, s.f, s.e, seed, gateHost)
 	writtenBefore := len(s.f.fake.ServiceUpdates())
 
@@ -419,6 +478,7 @@ func TestIngressGateUpdateRefusesAHostReservedSinceTheRevisionRanOnAStandaloneSt
 	seed := seedIngressWorld(t, s.f, s.e)
 	s.f.deployGood(t, s.operator, s.st.ID, labelledStandaloneShopCompose)
 	s.move(t, "web", 'b')
+	releaseClaims(t, s.f, s.e, s.st.ID)
 	reserveHost(t, s.f, s.e, seed, gateHost)
 	_, calls := up.lastProject()
 
@@ -443,6 +503,7 @@ func TestIngressGateUpdateBulkRefusesAndNamesNoOtherEnvironment(t *testing.T) {
 	seed := seedIngressWorld(t, s.f, s.e)
 	s.f.deployGood(t, s.operator, s.st.ID, labelledShopCompose)
 	s.move(t, "web", 'b')
+	releaseClaims(t, s.f, s.e, s.st.ID)
 	if _, err := s.f.stackDeps.Ingress.ReplaceStackRoutes(testsupport.Context(t), ingressstore.ReplaceInput{
 		EnvID: seed.otherEnvID, StackID: seed.otherStackID, Actor: "bob",
 		Decls: []ingress.Declaration{{Service: "web", Host: gateHost, Label: "tierplan.ingress.host", Port: 80}},
@@ -468,8 +529,8 @@ func TestIngressGateUpdateBulkRefusesAndNamesNoOtherEnvironment(t *testing.T) {
 		t.Errorf("revisions = %+v, want the two the stack had: a refused update stores none", revs)
 	}
 	runs := s.f.runsOfBulk(t, ans.BulkID)
-	if len(runs) != 1 || runs[0].State != updates.RunRefused || runs[0].Reason != "stack_invalid" {
-		t.Fatalf("runs = %+v, want the one run refused as stack_invalid", runs)
+	if len(runs) != 1 || runs[0].State != updates.RunRefused || runs[0].Reason != "ingress_refused" {
+		t.Fatalf("runs = %+v, want the one run refused as ingress_refused", runs)
 	}
 	recorded := fmt.Sprintf("%+v %+v", runs[0], job.Items)
 	for _, leak := range []string{seed.otherStack, seed.otherEnvName, seed.otherEnvID, seed.otherStackID} {

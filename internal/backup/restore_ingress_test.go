@@ -6,6 +6,8 @@ package backup_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -168,5 +170,87 @@ func TestIngressPauseIsInTheRestoreTransaction(t *testing.T) {
 	}
 	if _, err := restoreInto(t, file2, t.TempDir(), targetVault(t)); err != nil {
 		t.Errorf("a backup with nothing to protect failed to restore: %v", err)
+	}
+}
+
+// ingressEnvPaused is the restored database's ingress_env row of an environment: whether it exists, the switch and the
+// pause.
+func ingressEnvPaused(t *testing.T, dataDir, envID string) (exists bool, enabled, paused int) {
+	t.Helper()
+	st, err := store.Open(context.Background(), dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	err = st.Read.QueryRow(`SELECT enabled, paused FROM ingress_env WHERE env_id = ?`, envID).Scan(&enabled, &paused)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, 0, 0
+	case err != nil:
+		t.Fatal(err)
+	}
+	return true, enabled, paused
+}
+
+// seedIngressEnvironments gives the instance being backed up three environments: one with ingress on, one that has a
+// row with ingress off, and one that has no ingress_env row at all.
+func (f *exportFixture) seedIngressEnvironments(t *testing.T) {
+	t.Helper()
+	f.exec(t, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, env_type) VALUES ('env-on', 'agent', 'On', '', 1, 1, 1, 'swarm')`)
+	f.exec(t, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, env_type) VALUES ('env-off', 'agent', 'Off', '', 1, 1, 1, 'swarm')`)
+	f.exec(t, `INSERT INTO ingress_env (env_id, enabled) VALUES ('env-on', 1)`)
+	f.exec(t, `INSERT INTO ingress_env (env_id, enabled) VALUES ('env-off', 0)`)
+}
+
+// TestRestorePausesEveryIngressEnvironment (D-42): a clone restored from a backup observes every swarm and changes
+// none until an Admin resumes it, whatever the environment's switch was. The environment that had no ingress state gets
+// a paused row; the switches are not touched.
+func TestRestorePausesEveryIngressEnvironment(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedIngressEnvironments(t)
+	_, file, err := f.export(t, exportPass, testOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	if _, err := restoreInto(t, file, dataDir, targetVault(t)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for _, c := range []struct {
+		env         string
+		wantEnabled int
+	}{{"env-on", 1}, {"env-off", 0}, {"env-1", 0}} {
+		exists, enabled, paused := ingressEnvPaused(t, dataDir, c.env)
+		if !exists || paused != 1 || enabled != c.wantEnabled {
+			t.Errorf("ingress_env of %s = exists %v enabled %d paused %d; want a row, enabled %d, paused 1", c.env, exists, enabled, paused, c.wantEnabled)
+		}
+	}
+}
+
+// TestIngressEnvPauseIsInTheRestoreTransaction: the environment pause is written by the transaction that commits the
+// restore. A trigger on the paused column that breaks the transaction at commit makes the restore fail whole, with the
+// live database untouched.
+func TestIngressEnvPauseIsInTheRestoreTransaction(t *testing.T) {
+	f := newExportFixture(t)
+	f.seedIngressEnvironments(t)
+	f.exec(t, `CREATE TABLE tripwire_parent (id INTEGER PRIMARY KEY)`)
+	f.exec(t, `CREATE TABLE tripwire_child (parent_id INTEGER REFERENCES tripwire_parent(id) DEFERRABLE INITIALLY DEFERRED)`)
+	f.exec(t, `CREATE TRIGGER tripwire_env AFTER UPDATE OF paused ON ingress_env
+		BEGIN INSERT INTO tripwire_child (parent_id) VALUES (999); END`)
+	_, file, err := f.export(t, exportPass, testOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, target, before := liveInstall(t)
+	staged, err := backup.Stage(context.Background(), bytes.NewReader(file), []byte(exportPass), dir, schemaOfBinary(t))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if err := staged.Prepare(context.Background(), target, restoreOptions); err == nil {
+		t.Fatal("Prepare succeeded although the transaction that pauses the ingress environments cannot commit")
+	}
+	assertNoStaging(t, dir)
+	if got := hashDatabase(t, dir); got != before {
+		t.Error("the live database changed")
 	}
 }

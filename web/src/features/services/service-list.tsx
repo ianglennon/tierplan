@@ -84,7 +84,7 @@ import { UpdateBadge } from "@/features/updates/update-badge";
 import { UpdateConfirmDialog } from "@/features/updates/update-confirm-dialog";
 import { UpdateMenuItems } from "@/features/updates/update-menu-items";
 import { usePermission } from "@/hooks/use-me";
-import { useNeeds } from "@/hooks/use-needs";
+import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -141,9 +141,16 @@ function RowActions({
   onOpenChange,
 }: RowActionsProps) {
   const t = useT();
-  const needs = useNeeds("services.control", envId);
-  const manage = useNeeds("services.manage", envId);
-  const canScale = service.mode === "replicated";
+  const controlNeeds = useNeeds("services.control", envId);
+  const manageNeeds = useNeeds("services.manage", envId);
+  // TierPlan's ingress proxy is TierPlan's own: each write item is shown unavailable with the one
+  // reason, whatever the caller's role (D-29). The server refuses each write anyway.
+  const owned: Needs | undefined = service.ingress
+    ? { allowed: false, reason: t("ingress.owned.reason") }
+    : undefined;
+  const needs = owned ?? controlNeeds;
+  const manage = owned ?? manageNeeds;
+  const canScale = service.mode === "replicated" || service.ingress;
   // Set when an item was chosen, so the menu does not hand focus back to its button before
   // the dialog has opened.
   const chose = useRef(false);
@@ -199,6 +206,7 @@ function RowActions({
                 className="max-md:min-h-11"
                 disabled={!needs.allowed && !needs.reason}
                 onSelect={() => {
+                  if (!needs.allowed) return;
                   chose.current = true;
                   onScale(service);
                 }}
@@ -234,7 +242,8 @@ function RowActions({
               serviceId={service.id}
               name={service.name}
               muted={service.restartLoop.state === "muted"}
-              needs={needs}
+              // Not a write to the service: the proxy keeps the mute for whoever may control services.
+              needs={controlNeeds}
             />
           ) : null}
           <UpdateMenuItems
@@ -245,7 +254,7 @@ function RowActions({
               chose.current = true;
             }}
             onIgnore={() => setIgnoring(true)}
-            onUpdate={service.agent ? undefined : () => setUpdating(true)}
+            onUpdate={service.agent || service.ingress ? undefined : () => setUpdating(true)}
           />
           <DropdownMenuSeparator />
           <RemoveServiceMenuItem
@@ -698,6 +707,7 @@ export function ServiceList({ envId, search, onSearchChange }: ServiceListProps)
             <TruncatedText>{s.name}</TruncatedText>
           </Link>
           {s.agent ? <SelfContainerBadge kind="agent-service" /> : null}
+          {s.ingress ? <SelfContainerBadge kind="ingress" /> : null}
           {s.restartLoop ? <RestartLoopBadge loop={s.restartLoop} /> : null}
         </span>
       ),

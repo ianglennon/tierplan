@@ -50,6 +50,7 @@ type ServiceSpecBody struct {
 	Stack           string         `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
 	TierPlanStackID string         `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
 	Agent           bool           `json:"agent" doc:"True for a TierPlan agent service"`
+	Ingress         bool           `json:"ingress" doc:"True for TierPlan's ingress proxy service (the tierplan-ingress service with TierPlan's component label): its spec is readable but every change is refused as ingress_owned, so the editor shows it read-only; switch ingress off to remove it"`
 	Masked          bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
 	Spec            map[string]any `json:"spec" doc:"The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden> unless the caller holds secrets.reveal"`
 	PreviousSpec    map[string]any `json:"previousSpec,omitempty" doc:"The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to"`
@@ -179,6 +180,7 @@ func registerServiceActions(r *httpx.Router, d ServicesDeps) {
 		OperationID: "removeService", Method: http.MethodDelete, Path: "/api/env/{envId}/services/{serviceId}",
 		Summary: "Remove a service",
 		Description: "Removes one service, once and never retried: the swarm stops its tasks and deletes the service. Its images, volumes, networks, secrets and configs stay. " +
+			"TierPlan's ingress proxy service is refused: 409 ingress_owned, before anything is sent; switch ingress off to remove it. " +
 			"A service that belongs to a stack (com.docker.stack.namespace) is refused: 409 stack_owned, with the stack in errors as stack, before anything is sent. " +
 			"TierPlan's own agent service is removed only when confirm is its name, else 422 confirmation_required and nothing is sent. " +
 			"404 service_not_found for a service that is not there; 409 not_a_swarm for a standalone host. " +
@@ -232,6 +234,9 @@ func forceUpdateService(ctx context.Context, d ServicesDeps, p *rbac.Principal, 
 			return err
 		}
 		wo.id, wo.name, wo.image = detail.ID, detail.Name, detail.Image
+		if detail.Ingress {
+			return swarmops.ErrIngressOwned
+		}
 		version := in.Body.Version
 		if version == 0 {
 			version = detail.Version
@@ -310,6 +315,9 @@ func rollbackService(ctx context.Context, d ServicesDeps, p *rbac.Principal, env
 			return err
 		}
 		wo.id, wo.name, wo.image = detail.ID, detail.Name, detail.Image
+		if detail.Ingress {
+			return swarmops.ErrIngressOwned
+		}
 		if detail.Version != in.Body.Version {
 			return dockerx.ErrServiceChanged
 		}
@@ -407,6 +415,9 @@ func removeService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID
 		wo.id, wo.name, wo.image = detail.ID, detail.Name, detail.Image
 		agent = detail.Agent
 		confirmed = detail.Agent && in.Confirm == detail.Name
+		if detail.Ingress {
+			return &serviceRemoveRefusedError{code: problemIngressOwned, problem: ingressOwnedError()}
+		}
 		if s, id, owned := stackOwner(detail.Labels); owned {
 			stack = s
 			known := loadStackIDs(writeCtx, d.Store, envID, d.Log)
@@ -456,6 +467,8 @@ func serviceActionProblem(d ServicesDeps, envID, failedType string, err error) (
 	var unresolvedErr *imageUnresolvedError
 	var refused *dockerx.RollbackRefusedError
 	switch {
+	case errors.Is(err, swarmops.ErrIngressOwned):
+		return problemIngressOwned, ingressOwnedError()
 	case errors.As(err, &unresolvedErr):
 		return problemImageUnresolved, &huma.ErrorModel{
 			Type: problemImageUnresolved, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,

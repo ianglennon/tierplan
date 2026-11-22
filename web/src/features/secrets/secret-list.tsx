@@ -22,6 +22,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchBox } from "@/features/containers/container-list";
+import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import {
   type Column,
   type ListQuery,
@@ -144,13 +145,16 @@ export function SecretList({
       id: "name",
       header: t("secrets.list.columns.name"),
       cell: (s) => (
-        <Link
-          to="/env/$envId/secrets/$secretId"
-          params={{ envId, secretId: s.id }}
-          className="block min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          <TruncatedText mono>{s.name}</TruncatedText>
-        </Link>
+        <span className="flex items-center gap-2">
+          <Link
+            to="/env/$envId/secrets/$secretId"
+            params={{ envId, secretId: s.id }}
+            className="block min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <TruncatedText mono>{s.name}</TruncatedText>
+          </Link>
+          {s.ingress ? <SelfContainerBadge kind="ingress" /> : null}
+        </span>
       ),
     },
     {
@@ -200,7 +204,9 @@ export function SecretList({
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-px px-1 text-end",
       cell: (s) => {
-        const reason = secretDeleteReason(t, manage.reason, s.usedBy);
+        const reason = secretDeleteReason(t, manage.reason, s.usedBy, false, s.ingress);
+        // The join token's secret is TierPlan's: a new version of it is refused as well.
+        const rotateWhy = rotateReason ?? (s.ingress ? t("ingress.owned.reason") : undefined);
         return (
           <span className="flex items-center justify-end gap-1">
             <Button asChild variant="ghost" size="sm" className="max-md:h-11">
@@ -212,13 +218,13 @@ export function SecretList({
                 {t("secrets.list.open")}
               </Link>
             </Button>
-            <NeedsTooltip reason={rotateReason}>
+            <NeedsTooltip reason={rotateWhy}>
               <Button
                 variant="ghost"
                 size="sm"
                 className="max-md:h-11"
                 aria-label={t("secrets.rotate.label", { name: s.name })}
-                onClick={rotateReason ? undefined : () => setRotating(s)}
+                onClick={rotateWhy ? undefined : () => setRotating(s)}
               >
                 {t("secrets.rotate.action")}
               </Button>

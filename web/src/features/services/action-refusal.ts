@@ -73,6 +73,8 @@ export function refusalOf(t: Translate, err: unknown, ctx: RefusalContext): Refu
       return say(t("services.refusal.no_manager_connected", { environment: ctx.environment }));
     case "host_read_only":
       return say(t("actions.refusal.host_read_only"));
+    case "ingress_owned":
+      return say(t("ingress.owned.refused"));
     case "agent_host_policy":
       return say(t("services.problems.agent_host_policy"));
     case "force_update_failed":

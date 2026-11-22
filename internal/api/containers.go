@@ -81,6 +81,7 @@ const (
 	stageConnectionLost = "connection_lost"
 	ownServer           = "server"
 	ownAgent            = "agent"
+	ownIngress          = "ingress"
 
 	// A bulk runs at most perNodeCalls calls at once on one node and bulkParallel
 	// targets at once overall, so 25 targets cannot flood one engine (T-04-25).
@@ -261,7 +262,7 @@ type ContainerDetailBody struct {
 	Masked    bool                   `json:"masked" doc:"True when any value was withheld from env, logConfig.options, command or entrypoint"`
 
 	IsSelf          bool   `json:"isSelf" doc:"True for the container TierPlan itself runs in"`
-	SelfKind        string `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container, empty otherwise"`
+	SelfKind        string `json:"selfKind" enum:",server,agent,ingress" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise"`
 	Project         string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack           string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
 	Service         string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
@@ -878,6 +879,10 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 		res.own = ownServer
 	case own.Labels[ownerLabelAgent] == ownerLabelAgentValue:
 		res.own = ownAgent
+	case isIngressTask(own.Labels):
+		// Not refused: Swarm replaces a stopped task of the proxy (U-07). It gets the care the agent's
+		// container gets, a typed name for a single action and a skip in a bulk.
+		res.own = ownIngress
 	}
 	recorded := false // the initiated row of an action on an own container is written
 	if res.own != "" && op.disruptive() {

@@ -17,3 +17,7 @@ var AssertSandboxed = assertSandboxed
 func WithLoader(ctx context.Context, fn func(context.Context, types.ConfigDetails, ...func(*loader.Options)) (*types.Project, error)) context.Context {
 	return context.WithValue(ctx, loaderKey{}, loadFunc(fn))
 }
+
+// AttachIngressForTest lets the tests of package stacks_test attach a project that has been changed
+// by hand after its load.
+var AttachIngressForTest = attachIngress

@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { HardDrive } from "lucide-react";
+import { HardDrive, Lock } from "lucide-react";
 import { useState } from "react";
 
 import { isVolumeGone, volumeDetailQuery } from "@/api/volumes";
@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UsedByList } from "@/components/used-by-list";
+import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { DeleteVolumesDialog } from "@/features/volumes/delete-volumes-dialog";
 import { useDocumentTitle } from "@/hooks/use-me";
@@ -156,14 +157,16 @@ export function VolumeDetailLayout({ envId, volumeName, node }: VolumeDetailLayo
 
   const usedBy = data?.usedBy ?? [];
   const inUse = usedBy.length > 0;
-  // Who may comes first, then what still uses the volume.
+  // Who may comes first, then whose the volume is (the ingress cache), then what still uses it.
   const reason = data
     ? remove.allowed
-      ? inUse
-        ? t("volumes.detail.inUse.reason", {
-            what: usedByWhat(t, data.usedByContainers, data.usedByServices),
-          })
-        : undefined
+      ? data.ingress
+        ? t("ingress.owned.reason")
+        : inUse
+          ? t("volumes.detail.inUse.reason", {
+              what: usedByWhat(t, data.usedByContainers, data.usedByServices),
+            })
+          : undefined
       : (remove.reason ?? t("needs.extra.volumes.delete"))
     : undefined;
   return (
@@ -194,6 +197,7 @@ export function VolumeDetailLayout({ envId, volumeName, node }: VolumeDetailLayo
                   {t("volumes.list.anonymous")}
                 </Badge>
               ) : null}
+              {data.ingress ? <SelfContainerBadge kind="ingress" /> : null}
             </div>
             <NeedsTooltip reason={reason}>
               <Button
@@ -211,7 +215,16 @@ export function VolumeDetailLayout({ envId, volumeName, node }: VolumeDetailLayo
           <Skeleton className="h-8 w-64" />
         )}
       </header>
-      {data && inUse ? (
+      {data?.ingress ? (
+        // Plain status, not a warning and not announced as an alert: an object TierPlan
+        // manages is expected, not a fault (U-03).
+        <Alert role="status">
+          <Lock aria-hidden="true" />
+          <AlertTitle>{t("ingress.owned.alertTitle")}</AlertTitle>
+          <AlertDescription>{t("ingress.owned.objectBody")}</AlertDescription>
+        </Alert>
+      ) : null}
+      {data && inUse && !data.ingress ? (
         <Alert variant="warning">
           <AlertTitle>{t("volumes.detail.inUse.title", { name: data.name })}</AlertTitle>
           <AlertDescription className="flex flex-col gap-2">

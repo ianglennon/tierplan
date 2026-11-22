@@ -37,8 +37,10 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresscert"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingressrecon"
 	"github.com/ianglennon/tierplan/internal/instance"
@@ -194,6 +196,14 @@ type authFixture struct {
 	stackDeps  api.StacksDeps
 	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
 	stackBeforeJob func(context.Context)
+	// stackBeforeLock is called just before a stack operation takes the environment's lock, which is after the
+	// operation read everything it judged the request with and before it writes anything (plan 24 review, IN-05).
+	stackBeforeLock func(envID string)
+	// ingressNotifier, when set, is the notifier of the stack routes' ingress store: a test subscribes to hear which
+	// environments the stack pipeline woke the reconciler for (plan 24-25).
+	ingressNotifier *ingress.Notifier
+	// stackIngressRoutes is what the stack routes' state is read from besides the store and the engine (plan 24-25).
+	stackIngressRoutes api.RouteSources
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
 	stackReadEnv func(context.Context, string) error
 	// stackClock is the clock the waits of a stack deploy run on; nil is the wall clock (plan 12-23).
@@ -330,6 +340,10 @@ type authFixture struct {
 	// them before a build; left nil the routes are registered without them, as a server with no hub is.
 	ingressLive          func(nodeID string) bool
 	ingressCurrentBundle func(envID string) (string, bool)
+	// ingressDeploy and ingressDeployJobs are the deployer and the job hub behind the ingress preview, enable and job
+	// routes (phase 24); a test sets both and builds again. Left nil the routes answer 503 ingress_unavailable.
+	ingressDeploy     *ingressdeploy.Service
+	ingressDeployJobs *jobs.Hub
 }
 
 // fixtureClock is the fixture's fake clock as a stackops.Clock. After is never used: the manager is not Run.
@@ -596,7 +610,13 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		if stackLogs.Now == nil {
 			stackLogs.Now = f.clk.now
 		}
+		// The certificate store of a real server, which the stack review reads the state of each hostname's certificate from and
+		// the ingress certificate routes use.
+		if f.ingressCertStore == nil {
+			f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
+		}
 		stackDeps := api.StacksDeps{
+			IngressCerts: f.ingressCertStore, IngressRoutes: f.stackIngressRoutes,
 			Logs:       stackLogs,
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
@@ -604,7 +624,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Updates:   updateSvc,
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
 			// The ingress store of a real server: the editor check and the review judge a stack's hostnames through it, and the tests seed it.
-			Ingress: ingressstore.New(ingressstore.Deps{St: f.st, Vault: f.v, Now: f.clk.now}),
+			Ingress: ingressstore.New(ingressstore.Deps{St: f.st, Vault: f.v, Now: f.clk.now, Notifier: f.ingressNotifier}),
 			// The address reader of a real server, which the editor's check compares an explicit subnet with.
 			AddressSpaces: addressSpaces,
 			GitConns:      gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,
@@ -615,6 +635,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			f.stackLocks = stackops.NewLocks()
 		}
 		stackDeps.Locks, stackDeps.Envs = f.stackLocks, f.envSvc
+		if f.stackBeforeLock != nil {
+			stackDeps.Locks = beforeLock{Locks: f.stackLocks, before: f.stackBeforeLock}
+		}
 		stackDeps = stackDeps.WithDeployCancels() // as the server does, before the deps are copied
 		f.stackDeps = stackDeps
 		// The image update routes deploy a stack through the stack's own engine, so they hold the same deps and the same lock.
@@ -679,7 +702,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Audit: f.aud, Checker: checker, Log: log,
 		CertSweep: func() { f.ingressSweeps.Add(1) },
 	})
-	f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
+	if f.ingressCertStore == nil {
+		f.ingressCertStore = ingresscert.NewStore(ingresscert.StoreDeps{St: f.st, Vault: f.v, Now: f.clk.now, Audit: f.aud})
+	}
 	certHub := jobs.New(jobs.Options{})
 	t.Cleanup(certHub.Close)
 	certMgr, certErr := ingresscert.New(ingresscert.Deps{
@@ -699,7 +724,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Manager: f.ingressCerts, Store: f.ingressCertStore, Domains: f.ingressStore, Audit: f.aud, Checker: checker, Log: log, Now: certNow,
 	})
 	f.ingressNodes = ingresshub.NewService(f.st, f.aud, f.clk.now)
-	api.RegisterIngressNodes(r, api.IngressNodesDeps{Service: f.ingressNodes, Live: f.ingressLive, CurrentBundle: f.ingressCurrentBundle, Log: log})
+	nodesDeps := api.IngressNodesDeps{Service: f.ingressNodes, Live: f.ingressLive, CurrentBundle: f.ingressCurrentBundle, Log: log}
+	if f.ingressDeploy != nil {
+		nodesDeps.Issuer = f.ingressDeploy
+	}
+	api.RegisterIngressNodes(r, nodesDeps)
+	api.RegisterIngressDeploy(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{
 		Repo: stackops.Repo{Store: f.st, Vault: f.v, Now: f.clk.now}, Sync: gitDeps.Sync, Access: f.access, Audit: f.aud, Log: log, Now: f.clk.now,
@@ -1609,4 +1639,15 @@ func atOnceWait() dockerx.AllocationWait {
 		ch <- time.Time{}
 		return ch
 	}}
+}
+
+// beforeLock is the operation lock with a hook that runs just before an environment's lock is taken.
+type beforeLock struct {
+	*stackops.Locks
+	before func(envID string)
+}
+
+func (l beforeLock) TryAcquire(envID string, h stackops.Holder) (func(), stackops.Holder, bool) {
+	l.before(envID)
+	return l.Locks.TryAcquire(envID, h)
 }

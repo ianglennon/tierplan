@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -215,7 +216,7 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 			"On a swarm the job checks the stack, looks up each image and pins it to a digest (the one the service runs, or a fresh lookup through a manager), creates the stack's networks, then its secrets and configs under names that end in a short hash of their content, then its services, through one manager, each once and never retried; each carries com.docker.stack.namespace and tierplan.stack.id, and each service com.docker.stack.image with the image as written. " +
 			"A service is done when it converges, not when the swarm took it: the job polls each service every 2 seconds, up to TIERPLAN_STACK_CONVERGE_TIMEOUT (10 minutes by default), until its tasks run on its current spec and its update completed. " +
 			"A secret or config that content changes replaces is removed at the end, once every service uses the new one. " +
-			"A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid. " +
+			"A compose file that does not load is 422 compose_invalid; one that uses a setting a swarm can't deploy at all is 422 compose_unsupported; one whose check finds an error is 422 stack_invalid, except that a stack whose only errors are hostnames another stack holds, a reserved one or one no registered domain covers is 409 ingress_refused, with the reason in detail, before anything is stored. " +
 			"A caller below env Admin is refused 403 privileged_compose, with each setting and its line in errors, when the stack asks for host access (a bind of the Docker socket or a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables. " +
 			"A name that something TierPlan does not manage holds (a swarm namespace or a Compose project) is 409 stack_name_clash. An environment that is no longer the kind of target the stack was created for is 409 target_changed. At most 5 jobs of one user run at once (429 too_many_deploys). " +
 			"Only one stack operation at a time runs on an environment: while one does, on any stack, a deploy is refused 409 operation_locked with errors naming the stack, the job and when it started, and nothing is stored. " +
@@ -477,14 +478,31 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		return nil, stackInternal(d, "read the ingress names", env.ID, err)
 	}
 	if st.Target == stacks.TargetStandalone {
-		return deployStandaloneStack(ctx, d, p, env, st, draft, body, userAgent, o, mode, update, masker, pol)
+		return deployStandaloneStack(ctx, d, p, viewer, env, st, draft, body, userAgent, o, mode, update, masker, pol)
 	}
 
 	// The draft is judged once, by the check pipeline the review ran, before anything is stored or
 	// started: a compose file that cannot be deployed is refused here, with the problems the review
 	// lists, and leaves no revision behind. The project it returns is the one that is converted,
 	// rendered and deployed.
-	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
+	// A routed service joins the shared ingress network exactly when ingress is on for this swarm environment (D-18,
+	// D-19). A read that fails refuses a copy that names an ingress label: converting it without the attachment would
+	// take a routed service off the network. A copy that names none has no routed service, so, as with the policy
+	// above, an unreadable ingress store never refuses it.
+	attach, err := ingressAttachFor(ctx, d, env.ID, st.Target)
+	if err != nil {
+		if declaresIngress(draft.Copy) {
+			return nil, deployableProblem(d, env.ID, err)
+		}
+		lg := d.Log
+		if lg == nil {
+			lg = slog.Default()
+		}
+		lg.WarnContext(ctx, "whether ingress is on could not be read; a stack that names no ingress label is deployed without an attachment",
+			"env", env.ID, "stack", st.ID, "error", err)
+		attach = nil
+	}
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol, Ingress: attach})
 	if err != nil {
 		return nil, deployableProblem(d, env.ID, err)
 	}
@@ -547,6 +565,19 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		}
 	}()
 
+	// Whether ingress is on was read before the lock, and a switch-on or switch-off can land in between. It is read
+	// again now that no other operation can run: a changed answer converts the stack again, so the claims written
+	// below and the services the job makes agree with the environment as it is now.
+	if loaded, err = reloadForAttach(ctx, d, st, draft.Copy, pol, attach, loaded); err != nil {
+		return nil, err
+	}
+
+	// The stack's hostname claims are written by the job, under this lock, with the routes this revision declares and the
+	// last good revision's to put back if it fails (D-15, D-16). They are read now, before the new revision exists.
+	claims, err := claimWriteFor(ctx, d, p, viewer, st, loaded.Project)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
 	rev, err := repo.NewRevision(ctx, st.ID, revisionCreator(ctx, repo, p), originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
@@ -578,6 +609,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
 		Caller: caller, Masker: rendering.masker,
 		Pins: repo, Subnets: repo, RevisionID: rev.ID, Update: update, Reviewed: body.Pins,
+		Ingress: claims,
 	}
 	out, err := launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
@@ -592,6 +624,35 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		return nil, err
 	}
 	return out, nil
+}
+
+// sameAttach says whether two attachments are the same: both none, or the same network.
+func sameAttach(a, b *stacks.IngressAttach) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Network == b.Network
+}
+
+// reloadForAttach reads whether ingress is on again, holding the environment's lock, and loads the draft again when the
+// answer is not the one it was loaded with (was). A read that fails keeps the load it has, as the read before the lock
+// does for a copy that names no ingress label, and refuses a copy that does.
+func reloadForAttach(ctx context.Context, d StacksDeps, st stackops.Stack, copy stacks.WorkingCopy, pol *stacks.IngressPolicy, was *stacks.IngressAttach, loaded *stacks.Loaded) (*stacks.Loaded, error) {
+	now, err := ingressAttachFor(ctx, d, st.EnvID, st.Target)
+	if err != nil {
+		if declaresIngress(copy) {
+			return nil, deployableProblem(d, st.EnvID, err)
+		}
+		return loaded, nil
+	}
+	if sameAttach(was, now) {
+		return loaded, nil
+	}
+	again, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: copy, Deadline: d.CheckDeadline, IngressPolicy: pol, Ingress: now})
+	if err != nil {
+		return nil, deployableProblem(d, st.EnvID, err)
+	}
+	return again, nil
 }
 
 // declaresIngress reports whether the working copy mentions an ingress label (ingress.LabelPrefix) in any file or
@@ -617,11 +678,12 @@ func declaresIngress(c stacks.WorkingCopy) bool {
 // same way, and the job runs the Compose SDK instead of the swarm engine. Every step before the lock is a
 // read or a check; nothing is stored or started until the draft, the objects, the pins, the host-access
 // policy and the name have all passed.
-func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker, pol *stacks.IngressPolicy) (*StackDeployOutput, error) {
+func deployStandaloneStack(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker, pol *stacks.IngressPolicy) (*StackDeployOutput, error) {
 	repo := d.repo()
+	// ingress: unattached, the standalone attach is Phase 25
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
 	if checked.Loaded == nil {
-		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+		return nil, stackInvalidOrRefused(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
 	if mode == deployModeUpdate {
 		if err := stackops.ValidateUpdateServices(checked.Loaded.Project, st.Target, st.Name, body.Services); err != nil {
@@ -632,7 +694,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		return nil, refuse(refusalObjects, objectProblem(err, masker))
 	}
 	if checked.Problems.Errors() > 0 {
-		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+		return nil, stackInvalidOrRefused(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
 	node, err := d.ops().StandaloneNode(ctx, env.ID)
 	if err != nil {
@@ -675,6 +737,11 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		}
 	}()
 
+	// Hostname ownership is install-wide, so a standalone stack claims its names as a swarm stack does (D-15, D-17).
+	claims, err := claimWriteFor(ctx, d, p, viewer, st, checked.Loaded.Project)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
+	}
 	rev, err := repo.NewRevision(ctx, st.ID, revisionCreator(ctx, repo, p), originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
@@ -704,6 +771,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		Subnets: repo,
 		// The job's own check refuses what this request refused (D-18).
 		IngressPolicy: pol,
+		Ingress:       claims,
 	}
 	return launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
@@ -842,6 +910,21 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		}
 	}()
 
+	// The revision was converted with the answer to whether ingress is on that was read before the lock. It is read
+	// again now that no other operation can run, and the revision is prepared again when it changed (a standalone
+	// host has no attachment).
+	if !standalone {
+		attach, aerr := ingressAttachFor(ctx, d, st.EnvID, st.Target)
+		if aerr != nil {
+			return nil, rollbackPrepareProblem(&stackops.PrepareError{Stage: stackops.PrepareIngress, Err: aerr, Masker: masker}, masker)
+		}
+		if !sameAttach(prep.Attach, attach) {
+			if prep, err = d.ops().PrepareRollbackWith(ctx, st, target, pins, pol); err != nil {
+				return nil, rollbackPrepareProblem(err, masker)
+			}
+		}
+	}
+
 	// The review was made against a deployed revision. A deploy that ended after it took the lock off before
 	// the job read as finished, so reading the newest good revision now, holding the lock, is the answer no
 	// other operation can change (T-08-11).
@@ -853,6 +936,13 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		if !found || good.Seq != req.ExpectedDeployed {
 			return nil, deployedChanged(st.Name, good.Seq)
 		}
+	}
+
+	// The roll back claims the hostnames of the revision it restores, and a restore the ones it already holds; both put the last
+	// good revision's back if they fail (D-17). A roll back is a person's request, so a refusal may name a holder they can view.
+	claims, err := claimWriteFor(ctx, d, p, p, st, prep.Loaded.Project)
+	if err != nil {
+		return nil, stackInternal(d, "read the ingress names", env.ID, err)
 	}
 
 	// The roll back is a revision of its own: a copy of the one it restores, with its images and its
@@ -884,6 +974,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 			Subnets: repo, RestoredSubnets: target.Subnets,
 			// The job's own check refuses what this request refused (D-18).
 			IngressPolicy: pol,
+			Ingress:       claims,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -900,6 +991,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		RestoredPlatforms: target.Platforms,
 		// And the subnets it gave its networks, so a network the roll back has to create again can have the same block.
 		Subnets: repo, RestoredSubnets: target.Subnets,
+		Ingress: claims,
 	}
 	l.items = stackops.DeployItemSpecs()
 	l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -1216,6 +1308,10 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	if resultWord == "cancelled" && cancelledBy != "" {
 		details["cancelledBy"] = cancelledBy
 	}
+	// A failed deploy whose hostname claims could not be put back says so: the names stay held (WR-11).
+	if res.ClaimsRevertFailed {
+		details["claimsRevert"] = "failed"
+	}
 	if rev.RestoredFrom > 0 {
 		details["restoredFrom"] = itoa(rev.RestoredFrom)
 	}
@@ -1272,14 +1368,17 @@ func servicesProblem(e *stackops.ServicesInvalidError) error {
 }
 
 // holderSentence says what holds an environment's operation lock, without a stop: a stack operation
-// names its stack, and the janitor's clean-up (which names none) says the janitor is cleaning the
-// environment.
+// names its stack, the janitor's clean-up (which names none) says the janitor is cleaning the
+// environment, and an ingress job says TierPlan is changing ingress there.
 func holderSentence(envName string, h stackops.Holder) string {
 	if h.Kind == stackops.HolderKindJanitor {
 		return "The janitor is cleaning " + envName
 	}
 	if h.Kind == stackops.HolderKindImageUpdate {
 		return "An image update of " + h.Workload + " is running on " + envName
+	}
+	if h.Kind == stackops.HolderKindIngress {
+		return "TierPlan is changing ingress on " + envName
 	}
 	return "Another stack operation is running on " + envName + ": " + h.StackName
 }
@@ -1304,6 +1403,13 @@ func operationLocked(envName string, h stackops.Holder) error {
 			{Location: "started", Message: started},
 		}
 	}
+	if h.Kind == stackops.HolderKindIngress {
+		details = []*huma.ErrorDetail{
+			{Location: "kind", Message: h.Kind},
+			{Location: "job", Message: h.JobID},
+			{Location: "started", Message: started},
+		}
+	}
 	if h.Kind == stackops.HolderKindImageUpdate {
 		details = []*huma.ErrorDetail{
 			{Location: "kind", Message: h.Kind},
@@ -1324,7 +1430,7 @@ func operationLocked(envName string, h stackops.Holder) error {
 func deployableProblem(d StacksDeps, envID string, err error) error {
 	var nd *stacks.NotDeployableError
 	if errors.As(err, &nd) {
-		return stackInvalid(nd.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
+		return stackInvalidOrRefused(nd.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
 	return stackInternal(d, "check", envID, err)
 }
@@ -1340,13 +1446,16 @@ func rollbackPrepareProblem(err error, m stacks.Masker) error {
 	case stackops.PrepareLoad:
 		var nd *stacks.NotDeployableError
 		if errors.As(pe.Err, &nd) {
-			return stackInvalid(nd.Problems, "That version has errors now, so it can't be deployed again.")
+			return stackInvalidOrRefused(nd.Problems, "That version has errors now, so it can't be deployed again.")
 		}
 		return httpx.Problem(http.StatusUnprocessableEntity, problemComposeInvalid, "That version can't be read, so it can't be deployed again.")
 	case stackops.PrepareObjects:
 		return objectProblem(pe.Err, m)
 	case stackops.PrepareConvert:
 		return convertProblem(pe.Err, m)
+	case stackops.PrepareIngress:
+		// The server could not read the ingress switch; the revision is not at fault.
+		return huma.Error500InternalServerError("could not read whether ingress is on for this environment, so nothing was changed")
 	}
 	var invalid *stackops.PinsInvalidError
 	service := ""

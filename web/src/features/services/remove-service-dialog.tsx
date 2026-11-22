@@ -87,6 +87,8 @@ export function RemoveServiceDialog({
         return t("services.refusal.no_quorum");
       case "host_read_only":
         return t("actions.refusal.host_read_only");
+      case "ingress_owned":
+        return t("ingress.owned.refused");
       case "agent_host_policy":
         return t("services.problems.agent_host_policy");
       case "agent_policy_denied":

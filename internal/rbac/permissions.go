@@ -151,7 +151,7 @@ var defaultRegistry = Registry{
 	{Name: PermGitRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View the git repositories and credentials that apply to this environment"},
 	{Name: PermGitManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Manage this environment's git repositories and credentials, the webhooks of its git stacks, and convert or detach git stacks"},
 	{Name: PermGitInstance, Scope: ScopeGlobal, Dangerous: true, Description: "Manage git repositories and credentials that apply to every environment"},
-	{Name: PermIngressManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer; create, rotate and disable the ingress join token, and list the ingress nodes"},
+	{Name: PermIngressManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer; create, rotate and disable the ingress join token, list the ingress nodes, and preview and switch ingress on for a swarm environment, read its ingress status, switch the proxy access log and resume a restored environment"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
@@ -81,6 +82,47 @@ func renderStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Stac
 // invalidStackProblem is the 422 for a working copy with errors: every error with its place.
 func invalidStackProblem(ps stacks.Problems) error {
 	return stackInvalid(ps, "The stack has errors, so there is nothing to render yet. Fix the problems the check lists.")
+}
+
+// problemIngressRefused is the type of the 409 a deploy, roll back or restore gets when the only things wrong are
+// hostnames the ingress world refuses: one another stack holds, a reserved one, or one no registered domain covers
+// (D-15). Nothing was changed, and no revision was made.
+const problemIngressRefused = "ingress_refused"
+
+// ingressRefusal is the 409 ingress_refused answer when every error of ps is a refusal by the ingress policy, with the
+// first one's sentence as its detail and each of them in errors; nil when ps holds any other error, which is a
+// stack_invalid (a compose error is not an ingress refusal), or holds no error at all. The sentences are already
+// redacted for the person who asked (the policy the check judged with was built from what they may see).
+func ingressRefusal(ps stacks.Problems) error {
+	var details []*huma.ErrorDetail
+	for _, p := range ps {
+		if p.Severity != stacks.SeverityError {
+			continue
+		}
+		switch p.Code {
+		case ingress.CodeDomainNotAllowed, ingress.CodeHostReserved, ingress.CodeHostTaken:
+			details = append(details, &huma.ErrorDetail{Location: p.File + ":" + strconv.Itoa(p.Line), Message: p.Message})
+		default:
+			return nil
+		}
+	}
+	if len(details) == 0 {
+		return nil
+	}
+	return &huma.ErrorModel{
+		Type: problemIngressRefused, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+		Detail: details[0].Message, Errors: details,
+	}
+}
+
+// stackInvalidOrRefused is stackInvalid for the answers to a deploy, a roll back and a restore: a draft whose only
+// errors are hostnames the ingress policy refuses is 409 ingress_refused, every other draft with errors the 422
+// stack_invalid.
+func stackInvalidOrRefused(ps stacks.Problems, detail string) error {
+	if err := ingressRefusal(ps); err != nil {
+		return err
+	}
+	return stackInvalid(ps, detail)
 }
 
 // stackInvalid is the 422 stack_invalid with every error of ps at its file and line.

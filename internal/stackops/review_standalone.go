@@ -170,6 +170,7 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 			rv.Summary.Volumes.Changed++
 		}
 	}
+	d.fillIngressStandalone(ctx, in, rv, project)
 	rv.Problems = rv.Problems.Sorted()
 	d.addRevertsDrift(ctx, in, rv, rawStandaloneRows(cmp, diff.Removed, standalonePins(items, pinned)), reviewMasker(in))
 	return nil
@@ -390,6 +391,7 @@ func (d Deps) preparedRevisions(ctx context.Context, in ReviewInput) ([]map[stri
 	var services []map[string]types.ServiceConfig
 	var copies []stacks.WorkingCopy
 	for _, rev := range revs {
+		// ingress: unattached, the standalone attach is Phase 25
 		checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: rev.Copy})
 		if checked.Loaded == nil {
 			continue

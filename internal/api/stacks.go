@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitsync"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
@@ -121,6 +122,14 @@ type StacksDeps struct {
 	// holds), which the editor check and the review judge a stack's ingress labels against, and which every deploy
 	// gate does too (D-18, D-19). Nil leaves the policy out everywhere; the label parser still runs.
 	Ingress *ingressstore.Store
+	// IngressCerts is the certificate store, which a review reads the state of each hostname's certificate from:
+	// whether one can be served, is still to be issued or is waiting. The review never reads a key or a chain from it.
+	// Nil leaves the certificate rows out of the review.
+	IngressCerts *ingresscert.Store
+	// IngressRoutes is what the state of a stack's routes is read from besides the store and the engine: the reconciler's
+	// current bundle and skipped list, and the ingress nodes (D-24). Nil leaves a route pending once the service runs and
+	// is attached.
+	IngressRoutes RouteSources
 	// Clock and ConvergeTimeout are what a swarm deploy waits on and for: the clock its polls and
 	// its timeout run on (nil is the wall clock), and how long each service gets to settle (zero is
 	// ten minutes; TIERPLAN_STACK_CONVERGE_TIMEOUT).
@@ -243,6 +252,7 @@ func (d StacksDeps) ops() stackops.Deps {
 	return stackops.Deps{
 		Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker,
 		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Platforms: d.Platforms, AddressSpaces: d.AddressSpaces, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, DownProject: d.DownProject, Log: d.Log,
+		Ingress: d.ingressOps(),
 	}
 }
 
@@ -277,7 +287,7 @@ type StackItem struct {
 type StackUnmanagedBody struct {
 	Orphan    bool   `json:"orphan" doc:"True when an object of the stack carries a tierplan.stack.id: TierPlan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack"`
 	Portainer bool   `json:"portainer" doc:"True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/"`
-	Owner     string `json:"owner" enum:",tierplan,agent" doc:"tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, empty for any other"`
+	Owner     string `json:"owner" enum:",tierplan,agent,ingress" doc:"tierplan for the stack the TierPlan server itself runs in, agent for a stack that holds a TierPlan agent, ingress for a group that holds TierPlan's ingress proxy (discovery leaves the proxy out of the listing, so it is a contract value only), empty for any other"`
 	Adoptable bool   `json:"adoptable" doc:"False for TierPlan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
 	Reason    string `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
 }
@@ -482,6 +492,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackResources(r, d)
 	registerStackHistory(r, d, newChangesLimiter())
 	registerStackDrift(r, d, newDriftLimiter())
+	registerStackRoutes(r, d)
 	registerUnmanagedStacks(r, d, registerStackLogs(r, d))
 	registerStackAdopt(r, d, newAdoptCheckLimiter())
 }

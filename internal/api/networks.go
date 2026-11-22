@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/netspace"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
@@ -205,6 +206,7 @@ type NetworkDetailBody struct {
 	Attachable bool   `json:"attachable" doc:"Standalone containers can join it"`
 	IPv6       bool   `json:"ipv6" doc:"IPv6 is enabled"`
 	BuiltIn    bool   `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted"`
+	Ingress    bool   `json:"ingress" doc:"True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it"`
 
 	Owner     string            `json:"owner" doc:"The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; empty when the network has neither"`
 	OwnerKind string            `json:"ownerKind" enum:"stack,project," doc:"stack, project, or empty when the network has no owner"`
@@ -388,6 +390,10 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 // node the request names, or on the environment's only node when it is not a swarm.
 func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID string, in *NetworkCreateInput) (*NetworkCreateOutput, error) {
 	body := in.Body
+	// The component label is TierPlan's own mark on its ingress objects (D-41): a create never sets it.
+	if hasComponentLabel(body.Labels) {
+		return nil, componentLabelError()
+	}
 	if err := validateAddressing(body.Subnet, body.Gateway, body.IPRange); err != nil {
 		return nil, err
 	}
@@ -718,6 +724,14 @@ func deleteNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	if dockerx.IsBuiltinNetwork(row.Name, row.Ingress) {
 		return refuse(http.StatusConflict, problemNetworkBuiltin, row.Name+" is built in and can't be deleted.")
 	}
+	owned, err := ingressOwnsNetwork(ctx, d.Aggregator, d.Log, envID, row.NodeID, row.ID, row.Name)
+	if err != nil {
+		recordRemoved(ctx, d, p, envID, in.UserAgent, row, node, codeActionFailed)
+		return err
+	}
+	if owned {
+		return refuse(http.StatusConflict, problemIngressOwned, ingressOwnedMessage)
+	}
 	code, status, detail, err := d.usedBy(ctx, envID, row)
 	if err != nil {
 		// The environment itself could not be read: say it as every read does.
@@ -769,6 +783,49 @@ func recordRemoved(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		details["node"] = node
 	}
 	recordNetwork(ctx, d, p, envID, userAgent, audit.ActionNetworkRemoved, row.ID, row.Name, code, details)
+}
+
+// ingressOwnsNetwork says whether the network is TierPlan's ingress network, from a fresh inspect: the
+// component label and the exact reserved name together (D-41), never the label alone and never the list's
+// copy of it. A network of any other name is not asked about. A network the engine no longer has is not
+// owned (the write that follows says it is gone); an inspect that fails any other way is an error, so a
+// write never goes ahead on a guess.
+func ingressOwnsNetwork(ctx context.Context, agg *envs.Aggregator, log *slog.Logger, envID, nodeID, networkID, name string) (bool, error) {
+	if name != ingress.NetworkName {
+		return false, nil
+	}
+	var detail dockerx.NetworkDetail
+	readCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	defer cancel()
+	err := agg.OnNode(readCtx, envID, nodeID, func(c *dockerx.Client) error {
+		var e error
+		detail, _, e = c.NetworkDetail(readCtx, networkID, false)
+		return e
+	})
+	switch {
+	case err == nil:
+		return ingress.OwnsNetwork(detail.Name, detail.Labels), nil
+	case dockerx.IsNotFound(err):
+		return false, nil
+	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
+		return false, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to TierPlan.")
+	}
+	return false, snapshotProblem(log, envID, err)
+}
+
+// refuseIngressNetwork is the 409 ingress_owned of a connect or a disconnect on the ingress network, which
+// is audited as every other refusal of the call is. It answers nil for any other network.
+func (d NetworksDeps) refuseIngressNetwork(ctx context.Context, envID string, row envs.NetworkRow, audited func(code string)) error {
+	owned, err := ingressOwnsNetwork(ctx, d.Aggregator, d.Log, envID, row.NodeID, row.ID, row.Name)
+	if err != nil {
+		audited(codeActionFailed)
+		return err
+	}
+	if owned {
+		audited(problemIngressOwned)
+		return ingressOwnedError()
+	}
+	return nil
 }
 
 // networkOwner is the stack or compose project a network belongs to, from its labels: a
@@ -962,6 +1019,7 @@ func getNetwork(ctx context.Context, d NetworksDeps, envID string, in *NetworkDe
 		ID: row.ID, Name: row.Name, Driver: row.Driver, Scope: row.Scope, Node: row.Node, NodeID: row.NodeID,
 		Created: rfc3339(detail.Created), Internal: detail.Internal, Attachable: detail.Attachable, IPv6: detail.IPv6,
 		BuiltIn: dockerx.IsBuiltinNetwork(row.Name, detail.Ingress || row.Ingress),
+		Ingress: ingress.OwnsNetwork(detail.Name, detail.Labels),
 		Owner:   owner, OwnerKind: kind, Labels: detail.Labels, Options: detail.Options,
 		IPAM:         make([]NetworkIPAMBody, 0, len(detail.IPAM)),
 		Attachments:  []NetworkAttachmentBody{},
@@ -1152,7 +1210,7 @@ func recordEndpoint(ctx context.Context, d NetworksDeps, p *rbac.Principal, envI
 // and at which stage of its audit trail the row is. The zero value is an ordinary
 // container, whose rows carry neither.
 type ownedAttempt struct {
-	// kind is ownServer or ownAgent; empty for any other container.
+	// kind is ownServer, ownAgent or ownIngress; empty for any other container.
 	kind string
 	// stage is stageCompleted or stageConnectionLost once the call was made.
 	stage string
@@ -1200,6 +1258,8 @@ func ownContainerGate(ctx context.Context, d NetworksDeps, p *rbac.Principal, en
 		attempt.kind = ownServer
 	case own.Labels[ownerLabelAgent] == ownerLabelAgentValue:
 		attempt.kind = ownAgent
+	case isIngressTask(own.Labels):
+		attempt.kind = ownIngress
 	default:
 		return attempt, "", nil
 	}
@@ -1249,6 +1309,9 @@ func connectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal, en
 	refuse := func(status int, code, detail string) error {
 		audited(code)
 		return httpx.Problem(status, code, detail)
+	}
+	if err := d.refuseIngressNetwork(ctx, envID, row, audited); err != nil {
+		return err
 	}
 	if a, err := netip.ParseAddr(ep.IPv4); ep.IPv4 != "" && (err != nil || !a.Is4()) {
 		return refuse(http.StatusUnprocessableEntity, problemAddressInvalid, "Enter an IPv4 address like 10.20.0.5.")
@@ -1349,6 +1412,9 @@ func disconnectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal,
 	var own ownedAttempt
 	audited := func(code string) {
 		recordEndpoint(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkDisconnected, row, ct, dockerx.EndpointSpec{}, code, own)
+	}
+	if err := d.refuseIngressNetwork(ctx, envID, row, audited); err != nil {
+		return err
 	}
 	// A local network of another node cannot hold this container.
 	if row.Scope != dockerx.ScopeSwarm && row.NodeID != ct.NodeID {

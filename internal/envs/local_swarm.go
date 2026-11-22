@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/engine"
 )
 
@@ -59,4 +60,44 @@ func (s *Service) RefuseLocalOnSwarmNode(ctx context.Context) error {
 		}
 	}
 	return ErrLocalIsSwarmNode
+}
+
+// SwarmMembership is what the server knows of the swarm its own Docker socket belongs to.
+type SwarmMembership struct {
+	// Known is false when the server cannot tell: no socket at the configured path, an engine that does not answer or whose
+	// info cannot be read. Member, ClusterID and NodeID mean nothing then.
+	Known bool
+	// Member is true for an active node of a swarm, manager or worker, and false for a standalone engine.
+	Member bool
+	// ClusterID is the swarm's cluster ID, kept for a manager: a worker does not learn it, so it is empty.
+	ClusterID string
+	// NodeID is the engine's node ID in the swarm it belongs to, for a manager and a worker alike.
+	NodeID string
+}
+
+// LocalSwarmMembership reads the swarm membership of the engine behind the server's own Docker socket, with one probe of the socket,
+// bounded by the monitor's probe timeout; nothing it learns is kept. A missing socket, an engine that does not answer and
+// one whose info cannot be read are not errors: they answer Known false.
+//
+// The ingress preflight compares it with the environment it is about to write to (D-09): a server that runs on a node of
+// that very swarm must not publish its own ports 80 and 443 in a way that collides with the proxy. A manager reports the
+// cluster it belongs to, and a worker only its node ID, so the comparison has to use both.
+func (s *Service) LocalSwarmMembership(ctx context.Context) (SwarmMembership, error) {
+	path, err := engine.ParseDockerHost(s.dockerHost)
+	if err != nil || !engine.SocketExists(path) {
+		return SwarmMembership{}, nil
+	}
+	res, err := s.probe(ctx, engine.LocalSocketTransport{Path: path})
+	if err != nil {
+		return SwarmMembership{}, nil
+	}
+	switch res.Type {
+	case dockerx.TypeSwarmManager:
+		return SwarmMembership{Known: true, Member: true, ClusterID: res.SwarmClusterID, NodeID: res.SwarmNodeID}, nil
+	case dockerx.TypeSwarmWorker:
+		return SwarmMembership{Known: true, Member: true, NodeID: res.SwarmNodeID}, nil
+	case dockerx.TypeStandalone:
+		return SwarmMembership{Known: true}, nil
+	}
+	return SwarmMembership{}, nil
 }

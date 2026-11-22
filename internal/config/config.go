@@ -790,17 +790,30 @@ func NormalisePublicURL(raw string) (string, error) { return normalisePublicURL(
 // scheme, http included, is an error. It is the one place that builds the address,
 // so the install commands, the welcome and Settings agree.
 func AgentEndpoint(baseURL string) (string, error) {
+	return wssEndpoint(baseURL, "/agent/connect")
+}
+
+// IngressEndpoint is the address the ingress proxy dials for the URL it is told to use, the agent URL or else the
+// public URL: the same host, port and base path, https as wss, with /ingress/connect on the end (D-08). It shares
+// every rule of AgentEndpoint, and is the one place that builds the address, so the proxy service the deployer
+// writes carries only what an Admin configured and never a name a request supplied.
+func IngressEndpoint(baseURL string) (string, error) {
+	return wssEndpoint(baseURL, "/ingress/connect")
+}
+
+// wssEndpoint is the wss address of a path on the host of an https base URL.
+func wssEndpoint(baseURL, suffix string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil {
 		return "", fmt.Errorf("parse the URL: %w", err)
 	}
 	if strings.ToLower(u.Scheme) != "https" {
-		return "", fmt.Errorf("the URL %q is not https: agents dial wss only", baseURL)
+		return "", fmt.Errorf("the URL %q is not https: TierPlan's own channels dial wss only", baseURL)
 	}
 	if u.Host == "" {
 		return "", fmt.Errorf("the URL %q has no host", baseURL)
 	}
-	out := url.URL{Scheme: "wss", Host: u.Host, Path: strings.TrimRight(u.Path, "/") + "/agent/connect"}
+	out := url.URL{Scheme: "wss", Host: u.Host, Path: strings.TrimRight(u.Path, "/") + suffix}
 	return out.String(), nil
 }
 

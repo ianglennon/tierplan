@@ -110,6 +110,8 @@ function rollbackRefusal(t: Translate, err: DeployRequestError, envName: string)
       return t("stackDeploy.rollback.errors.target");
     case "stack_name_clash":
       return t("stackDeploy.rollback.errors.clash");
+    case "ingress_refused":
+      return t("stackDeploy.rollback.errors.refused");
     case "revision_not_good":
       return t("stackRollback.console.errors.notGood");
     case "revision_not_found":

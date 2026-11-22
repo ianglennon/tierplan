@@ -15,6 +15,7 @@ import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/components/ui/em
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AddressesUsedCell, isOverlay } from "@/features/address-space/subnet-map";
 import { SearchBox } from "@/features/containers/container-list";
+import { SelfContainerBadge } from "@/features/containers/self-container-badge";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { CreateNetworkDialog } from "@/features/networks/create-network-dialog";
 import { DeleteNetworkDialog } from "@/features/networks/delete-network-dialog";
@@ -77,14 +78,17 @@ export function NetworkList({ envId, node, q, onNodeChange, onSearchChange }: Ne
       id: "name",
       header: t(`${key}.columns.name`),
       cell: (n) => (
-        <Link
-          to="/env/$envId/networks/$networkId"
-          params={{ envId, networkId: n.id }}
-          search={{ node: n.nodeId }}
-          className="block min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-        >
-          <TruncatedText>{n.name}</TruncatedText>
-        </Link>
+        <span className="flex items-center gap-2">
+          <Link
+            to="/env/$envId/networks/$networkId"
+            params={{ envId, networkId: n.id }}
+            search={{ node: n.nodeId }}
+            className="block min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            <TruncatedText>{n.name}</TruncatedText>
+          </Link>
+          {n.ingress ? <SelfContainerBadge kind="ingress" /> : null}
+        </span>
       ),
     },
     {

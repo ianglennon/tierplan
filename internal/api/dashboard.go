@@ -20,6 +20,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/store"
 	"github.com/ianglennon/tierplan/internal/updates"
@@ -177,7 +178,7 @@ type ContainerItem struct {
 	Ports           []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
 	IsSelf          bool     `json:"isSelf" doc:"True for the container TierPlan itself runs in (D-27)"`
 	Health          string   `json:"health" enum:"none,starting,healthy,unhealthy" doc:"The container's health: none when it has no healthcheck"`
-	SelfKind        string   `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
+	SelfKind        string   `json:"selfKind" enum:",server,agent,ingress" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
 	ReadOnly        bool     `json:"readOnly" doc:"True when the host of this container's node is read-only, so no change to it will be accepted"`
 	Project         string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack           string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
@@ -204,6 +205,7 @@ type VolumeItem struct {
 	Anonymous        bool   `json:"anonymous" doc:"True for a volume Docker made for a container without a name: it has the com.docker.volume.anonymous label, or on an engine without it a name of 64 hexadecimal characters"`
 	Project          string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the volume has none"`
 	Stack            string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the volume has none"`
+	Ingress          bool   `json:"ingress" doc:"True for the proxy's certificate cache volume (the component label and the reserved name tierplan-ingress-cache): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it"`
 }
 
 // NetworkItem is one row of the networks list.
@@ -217,6 +219,7 @@ type NetworkItem struct {
 	Subnets []string `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty when the network has none"`
 	Created string   `json:"created,omitempty" format:"date-time"`
 	BuiltIn bool     `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own, which can never be deleted"`
+	Ingress bool     `json:"ingress" doc:"True for TierPlan's ingress network (the component label and the reserved name tierplan-ingress): read-only here, with every write refused as ingress_owned. Switch ingress off to remove it"`
 	// AttachedContainers and AttachedServices are what the network cannot be deleted
 	// while any of them exist.
 	AttachedContainers int    `json:"attachedContainers" doc:"Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node"`
@@ -488,7 +491,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 	httpx.Register(r, op("listContainers", "/api/env/{envId}/containers",
 		"List the containers of an environment",
 		"Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. "+
-			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap)."),
+			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server, agent or ingress for TierPlan's own containers) and readOnly (its host refuses changes), and its update object (what is known about its image, from the stored checks; updates=available keeps only the containers with an update available, before the cap)."),
 		need(rbac.PermContainersRead),
 		func(ctx context.Context, in *ContainerListInput) (*ContainerListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
@@ -556,7 +559,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				return VolumeItem{
 					Node: v.Node, NodeID: v.NodeID, Name: v.Name, Driver: v.Driver, Created: rfc3339(v.Created),
 					UsedByContainers: containers, UsedByServices: services, Anonymous: v.Anonymous,
-					Project: v.Labels[labelProject], Stack: v.Labels[labelStack],
+					Project: v.Labels[labelProject], Stack: v.Labels[labelStack], Ingress: ingress.OwnsVolume(v.Name, v.Labels),
 				}
 			})
 			return &VolumeListOutput{CacheControl: "no-store", Body: VolumeListBody{
@@ -583,7 +586,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				return NetworkItem{
 					AddressesUsed: fullness[n.ID],
 					Node:          n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created),
-					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), AttachedContainers: containers, AttachedServices: services,
+					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), Ingress: ingress.OwnsNetwork(n.Name, n.Labels), AttachedContainers: containers, AttachedServices: services,
 					Owner: owner, OwnerKind: kind, Internal: n.Internal, Attachable: n.Attachable, IPv6: n.IPv6,
 				}
 			})

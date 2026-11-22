@@ -26,7 +26,43 @@ func TestStaticConfig(t *testing.T) {
 	if got, want := sortedKeys(doc), []string{"entryPoints", "global", "log", "ping", "providers"}; !slices.Equal(got, want) {
 		t.Fatalf("top-level keys = %v, want %v", got, want)
 	}
+	assertBaseSections(t, doc)
+}
 
+// TestStaticConfigWithAccessLog pins the access-log form (D-31, D-32): every base section is unchanged and
+// one accessLog block is added, JSON on stdout with every header dropped, so the value of an Authorization
+// or Cookie header can never reach the log (PROH-24-02).
+func TestStaticConfigWithAccessLog(t *testing.T) {
+	var doc map[string]any
+	if err := yaml.Unmarshal(ingressbundle.StaticTraefikWith(true), &doc); err != nil {
+		t.Fatalf("the access-log static file does not parse: %v", err)
+	}
+	if got, want := sortedKeys(doc), []string{"accessLog", "entryPoints", "global", "log", "ping", "providers"}; !slices.Equal(got, want) {
+		t.Fatalf("top-level keys = %v, want %v", got, want)
+	}
+	assertBaseSections(t, doc)
+
+	accessLog := section(t, doc, "accessLog")
+	if got := sortedKeys(accessLog); !slices.Equal(got, []string{"fields", "format"}) {
+		t.Errorf("accessLog keys = %v, want fields and format: no filePath, so the log goes to stdout", got)
+	}
+	if _, ok := accessLog["filePath"]; ok {
+		t.Error("accessLog.filePath is set: the log must go to stdout")
+	}
+	expect(t, "accessLog.format", accessLog["format"], "json")
+	fields := section(t, accessLog, "fields")
+	expect(t, "accessLog.fields.defaultMode", fields["defaultMode"], "keep")
+	headers := section(t, fields, "headers")
+	if got := sortedKeys(headers); !slices.Equal(got, []string{"defaultMode"}) {
+		t.Errorf("accessLog.fields.headers keys = %v: no header may be kept by name", got)
+	}
+	expect(t, "accessLog.fields.headers.defaultMode", headers["defaultMode"], "drop")
+}
+
+// assertBaseSections checks every section the base static file has, whether or not an access log is added
+// to it. The caller checks the top-level key set, which is what differs between the two forms.
+func assertBaseSections(t *testing.T, doc map[string]any) {
+	t.Helper()
 	global := section(t, doc, "global")
 	if got := sortedKeys(global); !slices.Equal(got, []string{"checkNewVersion", "sendAnonymousUsage"}) {
 		t.Errorf("global keys = %v", got)

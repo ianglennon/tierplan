@@ -24,6 +24,7 @@ export function serviceDetail(extra: Partial<ServiceDetailBody> = {}): ServiceDe
     stack: "",
     tierplanStackId: "",
     agent: false,
+    ingress: false,
     createdAt: "2026-10-01T10:00:00Z",
     updatedAt: "2026-10-02T11:30:00Z",
     image: {
@@ -152,6 +153,7 @@ export function specBody(extra: Partial<ServiceSpecBody> = {}): ServiceSpecBody 
     stack: "",
     tierplanStackId: "",
     agent: false,
+    ingress: false,
     masked: true,
     spec: editSpec(),
     ...extra,

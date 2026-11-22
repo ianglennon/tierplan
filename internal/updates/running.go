@@ -10,6 +10,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
@@ -67,12 +68,14 @@ func (w Workload) Checkable() bool { return w.Ref.Tag != "" && w.LocalStore != L
 
 // ServiceWorkloads turns the services of a swarm read into workloads. The TierPlan agent service and
 // the services of the job modes are not workloads: the agent updates through its own mechanism, and a
-// job runs once and is gone (RESEARCH Pitfall 14). A service at scale 0 is still one. A service whose
+// job runs once and is gone (RESEARCH Pitfall 14). The ingress proxy is not one either: its image follows the
+// server. The exemption is the proxy's flag or the component label alone, because skipping an update fails
+// safe (D-28, D-41). A service at scale 0 is still one. A service whose
 // image cannot be read as a reference is left out. EnvID is the caller's to set.
 func ServiceWorkloads(rows []dockerx.ServiceRow) []Workload {
 	var out []Workload
 	for _, r := range rows {
-		if r.Agent || r.Mode == "replicated-job" || r.Mode == "global-job" {
+		if r.Agent || r.Ingress || ingress.HasComponentLabel(r.Labels) || r.Mode == "replicated-job" || r.Mode == "global-job" {
 			continue
 		}
 		spec, err := registry.ParseRef(r.Image)
@@ -205,10 +208,14 @@ func isImageID(s string) bool {
 // an image ID, so the tag moved. It gives the reference when no label does, and the digest when the store
 // dropped the image.
 func needsImageText(c envs.ContainerRow) bool {
-	return isImageID(c.Image) && !isAgent(c)
+	return isImageID(c.Image) && !isAgent(c) && !isIngress(c)
 }
 
 func isAgent(c envs.ContainerRow) bool { return c.Labels[labelAgent] == "true" }
+
+// isIngress says whether c carries the ingress component label, which is enough to leave it out (D-28): the proxy's image
+// follows the server.
+func isIngress(c envs.ContainerRow) bool { return ingress.HasComponentLabel(c.Labels) }
 
 // ImageTextWanted lists the IDs of the containers of agg whose reference is only to be had from an
 // inspect, in the order of the aggregate.
@@ -245,7 +252,7 @@ func ContainerWorkloads(agg envs.Aggregate, text func(containerID string) (strin
 	}
 	var out []Workload
 	for _, c := range agg.Containers {
-		if isAgent(c) {
+		if isAgent(c) || isIngress(c) {
 			continue
 		}
 		w := Workload{

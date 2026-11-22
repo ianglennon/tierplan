@@ -476,6 +476,10 @@ type IngressEnv struct {
 	UpdatedAt     int64
 	UpdatedBy     string
 	CertsVersion  int64
+	AccessLogs    int64
+	Paused        int64
+	EnsureAt      int64
+	EnsureError   string
 }
 
 type IngressHostname struct {
@@ -522,6 +526,13 @@ type IngressNode struct {
 	RevokedBy        string
 	RevokeReason     string
 	ReenrolBlocked   int64
+}
+
+type IngressPendingWipe struct {
+	EnvID       string
+	SwarmNodeID string
+	Volume      string
+	CreatedAt   int64
 }
 
 type IngressReserved struct {

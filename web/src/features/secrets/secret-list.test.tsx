@@ -50,6 +50,7 @@ const secret = (name: string, extra: Partial<SecretItem> = {}): SecretItem => ({
   labels: {},
   owner: "",
   ownerKind: "",
+  ingress: false,
   tierplanStackId: "",
   createdAt: "2026-10-01T10:00:00Z",
   updatedAt: "2026-10-02T10:00:00Z",

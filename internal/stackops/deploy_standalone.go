@@ -101,6 +101,10 @@ type StandaloneDeployInput struct {
 	// Masker hides the stack's secret values in every text a remote system sent that the deploy puts in
 	// its job.
 	Masker stacks.Masker
+	// Ingress, when not nil, is how the deploy stores the stack's hostname claims, and puts them back when it does not
+	// end well, exactly as a swarm deploy does (D-13, D-15, D-16). A standalone stack's routes are skipped with no
+	// backend until Phase 25, but the names are held all the same. Nil writes and reverts nothing (D-17).
+	Ingress *ClaimWrite
 	// OnDone, when set, is called once with the result before the job's last item is finished.
 	OnDone func(DeployResult)
 }
@@ -127,7 +131,16 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	var events *composeEvents
 	// cleanup, once the SDK's up has begun, removes what it left behind when the deploy stops.
 	var cleanup func()
+	// claims says whether this deploy stored the stack's claims (and what the stack held before), so a deploy that does not
+	// end well puts them back.
+	var claims claimWrite
 	defer func() {
+		// First, with the operation lock still held: a hostname only the failed revision asked for is free at once (D-16).
+		if claims.Written && !res.OK() {
+			if err := d.revertClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress.Actor, in.Ingress.CanView, claims.Prior); err != nil {
+				noteClaimsRevertFailed(&res, prog, &final)
+			}
+		}
 		if in.OnDone != nil {
 			in.OnDone(res)
 		}
@@ -208,6 +221,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.log().Warn("a standalone host could not be written to before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
+	// ingress: unattached, the standalone attach is Phase 25
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy, IngressPolicy: in.IngressPolicy})
 	if checked.Loaded == nil || checked.Problems.Errors() > 0 {
 		d.log().Warn("a standalone stack no longer passes its check at deploy time", "environment", in.EnvID, "stack", in.Stack.Name)
@@ -272,6 +286,20 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		return failWith(ItemCheck, CodeNoFreeSubnet, subnets.Missing[0], subnets.Message(subnets.Missing[0]))
 	}
 	applyProjectSubnets(project, subnets)
+	// The claims are stored last of all, under the lock and after every check passed, so a refusal leaves the host as
+	// it was (D-15).
+	if ctx.Err() != nil {
+		return fail(ItemCheck, CodeCancelled, "")
+	}
+	written, cerr := d.writeClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress)
+	switch {
+	case cerr != nil:
+		d.log().Error("a stack's hostname claims could not be stored before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", cerr)
+		return failWith(ItemCheck, CodePolicyUnavailable, "", "The hostnames of the stack could not be checked, so nothing was deployed.")
+	case written.Refused:
+		return failWith(ItemCheck, CodeIngressRefused, "", in.Masker.Mask(CodeMessage(CodeIngressRefused)+" "+written.Reason))
+	}
+	claims = written
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
 	// 2. Look up images: decide which image each service is sent with (D-15, D-17). A service that runs the

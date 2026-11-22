@@ -1,0 +1,120 @@
+{
+  "stackIngress": {
+    "review": {
+      "title": "Ingress",
+      "summary": "{{added}} added, {{kept}} kept, {{released}} released.",
+      "refused": "A hostname this stack asks for is taken or not allowed. Nothing was changed. Fix the labels and review again.",
+      "none": "—",
+      "routes": {
+        "heading": "Routes",
+        "label": "Routes",
+        "columns": {
+          "change": "Change",
+          "hostname": "Hostname",
+          "path": "Path",
+          "service": "Service",
+          "port": "Port",
+          "scheme": "Scheme",
+          "note": "Note"
+        },
+        "change": {
+          "added": "Added",
+          "kept": "Kept",
+          "released": "Released"
+        },
+        "noBackend": "Not served on this host yet."
+      },
+      "certificates": {
+        "heading": "Certificates",
+        "label": "Certificates",
+        "columns": {
+          "hostname": "Hostname",
+          "certificate": "Certificate",
+          "detail": "Detail"
+        },
+        "state": {
+          "issued": "Already issued",
+          "willIssue": "Will be issued",
+          "waiting": "Waiting"
+        },
+        "footnote": "A certificate that isn't ready never stops a deploy. The route serves as soon as it is."
+      },
+      "network": {
+        "heading": "Network",
+        "label": "Network changes",
+        "columns": {
+          "service": "Service",
+          "change": "Change",
+          "effect": "Effect"
+        },
+        "joins": "Joins {{network}}",
+        "leaves": "Leaves {{network}}",
+        "replaces": "Replaces its tasks",
+        "noRestart": "No restart",
+        "footnote": "TierPlan attaches routed services to the ingress network itself. It never appears in your compose file."
+      }
+    },
+    "routes": {
+      "title": "Routes",
+      "label": "Routes",
+      "columns": {
+        "route": "Route",
+        "service": "Service",
+        "state": "State"
+      },
+      "state": {
+        "serving": {
+          "label": "Serving"
+        },
+        "pending": {
+          "label": "Rolling out",
+          "detail": "Not every node has it yet."
+        },
+        "waiting_certificate": {
+          "label": "Waiting for certificate"
+        },
+        "backend_not_running": {
+          "label": "Backend not running",
+          "stopped": "The stack is stopped.",
+          "noTask": "{{service}} has no running task."
+        },
+        "not_attached": {
+          "label": "Not attached",
+          "detail": "Redeploy the stack to attach it to ingress."
+        },
+        "ingress_off": {
+          "label": "Ingress is off",
+          "detail": "It serves once ingress is switched on and the stack is redeployed."
+        },
+        "not_served_yet": {
+          "label": "Not served yet",
+          "detail": "Not served on this host yet. The stack keeps its hostnames."
+        }
+      },
+      "stopped": "This stack is stopped. Its hostnames stay reserved for it.",
+      "notAttached": "These routes serve after the stack is redeployed.",
+      "reviewAndDeploy": "Review and deploy",
+      "error": "Couldn't read the routes.",
+      "retry": "Retry reading routes",
+      "showAll": "Show all {{count}}",
+      "showFewer": "Show fewer",
+      "reason": {
+        "no_certificate": "No certificate has been issued for this hostname yet.",
+        "certificate_not_ready": "The certificate is still being issued, or isn't ready to serve yet."
+      }
+    }
+  },
+  "ingress": {
+    "owned": {
+      "reason": "Managed by TierPlan. Switch ingress off to remove it.",
+      "refused": "This is managed by TierPlan ingress. Switch ingress off to remove it. Nothing was changed.",
+      "alertTitle": "Managed by TierPlan ingress",
+      "serviceBody": "TierPlan creates and updates this itself. To remove it, switch ingress off. You can still read its logs and inspect it.",
+      "objectBody": "TierPlan creates and removes this itself. To remove it, switch ingress off.",
+      "editorTitle": "TierPlan ingress can't be edited here",
+      "editorBody": "TierPlan creates and updates this service itself. Switch ingress off to remove it.",
+      "back": "Back to service",
+      "bulkNote": "Managed by TierPlan ingress"
+    }
+  }
+}

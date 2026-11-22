@@ -168,6 +168,7 @@ func (in AdoptInput) pastedCopy() stacks.WorkingCopy {
 // reviewed or stored for it.
 func checkPasted(ctx context.Context, in AdoptInput) (stacks.CheckResult, stacks.WorkingCopy, bool) {
 	copy := in.pastedCopy()
+	// ingress: unattached, adopt is never attached (D-20)
 	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Name, Target: in.Target, Copy: copy})
 	return res, copy, res.Loaded == nil || res.Problems.Errors() > 0
 }

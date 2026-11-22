@@ -373,6 +373,24 @@ func (s *Staged) rewrite(ctx context.Context, st *store.Store, export, target *v
 		now.UnixNano()); err != nil {
 		return fmt.Errorf("pause ingress certificates after the restore: %w", err)
 	}
+	// A clone restored from a backup must not reconfigure the original's swarm or rotate its join token: it holds the
+	// original's ingress state, and its ensure loop would otherwise write to the swarm at the first tick. Every
+	// environment is paused, enabled or not, so a later enable waits too; an Admin resumes each environment (24-17), and
+	// the enable preflight refuses while it is paused (24-12). An environment with no ingress_env row gets a paused one
+	// (the first statement), then every row that is not yet paused is (the second). The statements are inline here
+	// and not sqlc queries: the restore sets updated_at too, and a second copy would drift. Written in this transaction, so no restored database
+	// exists without the marker (D-42).
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO ingress_env (env_id, paused, updated_at) SELECT e.id, 1, ? FROM environments e "+
+			"WHERE NOT EXISTS (SELECT 1 FROM ingress_env i WHERE i.env_id = e.id)",
+		now.UnixNano()); err != nil {
+		return fmt.Errorf("add a paused ingress state for the environments that have none after the restore: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE ingress_env SET paused = 1, updated_at = ? WHERE paused = 0",
+		now.UnixNano()); err != nil {
+		return fmt.Errorf("pause every environment's ingress after the restore: %w", err)
+	}
 	// The HSTS ramp starts again on a restore: a restored clone may serve a different certificate
 	// history, so it must not resume a long lifetime on its first day. The admin's choice
 	// (hsts_enabled) and the bound on what browsers may still hold (hsts_held_until) travel, so the

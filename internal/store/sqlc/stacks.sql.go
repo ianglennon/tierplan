@@ -838,6 +838,42 @@ func (q *Queries) ListDraftsByEnv(ctx context.Context, envID string) ([]ListDraf
 	return items, nil
 }
 
+const listInterruptedStacks = `-- name: ListInterruptedStacks :many
+SELECT DISTINCT stack_id, env_id FROM stack_deploys
+WHERE state = 'running' AND kind IN ('deploy', 'update', 'rollback')
+ORDER BY env_id, stack_id
+`
+
+type ListInterruptedStacksRow struct {
+	StackID string
+	EnvID   string
+}
+
+// The stacks that have a deploy, an update or a roll back still running at startup, once each, read before the operations are
+// ended: the hostname claims such a stack holds go back to its last good revision (D-45).
+func (q *Queries) ListInterruptedStacks(ctx context.Context) ([]ListInterruptedStacksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listInterruptedStacks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListInterruptedStacksRow
+	for rows.Next() {
+		var i ListInterruptedStacksRow
+		if err := rows.Scan(&i.StackID, &i.EnvID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLatestRevisionTimesByEnv = `-- name: ListLatestRevisionTimesByEnv :many
 SELECT r.stack_id, CAST(MAX(r.created_at) AS INTEGER) AS taken_at FROM stack_snapshots r
 JOIN stacks s ON s.id = r.stack_id
