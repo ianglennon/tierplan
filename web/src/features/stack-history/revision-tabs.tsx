@@ -8,7 +8,7 @@ import { revisionQuery } from "@/api/stack-history";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { RevisionChanges } from "@/features/stack-history/revision-changes";
 import { RevisionContents } from "@/features/stack-history/revision-contents";
 import { RevisionRendered } from "@/features/stack-history/revision-rendered";
@@ -77,20 +77,22 @@ export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-3">
-      <TabsList variant="line" aria-label={t("stackRevision.tabs.label", { seq })}>
-        <TabsTrigger value="changes" className="max-md:h-11">
-          {t("stackRevision.tabs.changes")}
-        </TabsTrigger>
-        <TabsTrigger value="yaml" className="max-md:h-11">
-          {t("stackRevision.tabs.yaml")}
-        </TabsTrigger>
-        <TabsTrigger value="rendered" className="max-md:h-11">
-          {t("stackRevision.tabs.rendered")}
-        </TabsTrigger>
-        <TabsTrigger value="contents" className="max-md:h-11">
-          {t("stackRevision.tabs.contents")}
-        </TabsTrigger>
-      </TabsList>
+      <TabsScroller>
+        <TabsList variant="line" aria-label={t("stackRevision.tabs.label", { seq })}>
+          <TabsTrigger value="changes" className="max-md:h-11">
+            {t("stackRevision.tabs.changes")}
+          </TabsTrigger>
+          <TabsTrigger value="yaml" className="max-md:h-11">
+            {t("stackRevision.tabs.yaml")}
+          </TabsTrigger>
+          <TabsTrigger value="rendered" className="max-md:h-11">
+            {t("stackRevision.tabs.rendered")}
+          </TabsTrigger>
+          <TabsTrigger value="contents" className="max-md:h-11">
+            {t("stackRevision.tabs.contents")}
+          </TabsTrigger>
+        </TabsList>
+      </TabsScroller>
       <TabsContent value="changes" className="flex min-w-0 flex-col gap-2">
         <RevisionChanges
           envId={envId}

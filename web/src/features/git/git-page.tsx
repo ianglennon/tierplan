@@ -15,7 +15,7 @@ import {
   useTestGitRepo,
 } from "@/api/git";
 import { NoPermission } from "@/components/full-page-state";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { MAX_QUERY } from "@/features/containers/list-search";
 import { CredentialSheet, PlaceholderCredentialSheet } from "@/features/git/credential-sheet";
 import { CredentialTable } from "@/features/git/credential-table";
@@ -79,36 +79,38 @@ export function GitTabs() {
   const t = useT();
   return (
     <Tabs value="" className="gap-4">
-      <TabsList variant="line" aria-label={t("git.tabs.label")} className="h-9 max-md:h-11">
-        <TabsTrigger
-          value="repositories"
-          asChild
-          className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-        >
-          <Link
-            to="/git"
-            activeOptions={{ exact: true }}
-            activeProps={{ "data-active": true }}
-            inactiveProps={{ "data-active": undefined }}
+      <TabsScroller>
+        <TabsList variant="line" aria-label={t("git.tabs.label")} className="h-9 max-md:h-11">
+          <TabsTrigger
+            value="repositories"
+            asChild
+            className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
           >
-            {t("git.tabs.repositories")}
-          </Link>
-        </TabsTrigger>
-        <TabsTrigger
-          value="credentials"
-          asChild
-          className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-        >
-          <Link
-            to="/git/credentials"
-            activeOptions={{ exact: true }}
-            activeProps={{ "data-active": true }}
-            inactiveProps={{ "data-active": undefined }}
+            <Link
+              to="/git"
+              activeOptions={{ exact: true }}
+              activeProps={{ "data-active": true }}
+              inactiveProps={{ "data-active": undefined }}
+            >
+              {t("git.tabs.repositories")}
+            </Link>
+          </TabsTrigger>
+          <TabsTrigger
+            value="credentials"
+            asChild
+            className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
           >
-            {t("git.tabs.credentials")}
-          </Link>
-        </TabsTrigger>
-      </TabsList>
+            <Link
+              to="/git/credentials"
+              activeOptions={{ exact: true }}
+              activeProps={{ "data-active": true }}
+              inactiveProps={{ "data-active": undefined }}
+            >
+              {t("git.tabs.credentials")}
+            </Link>
+          </TabsTrigger>
+        </TabsList>
+      </TabsScroller>
     </Tabs>
   );
 }

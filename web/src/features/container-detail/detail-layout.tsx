@@ -19,7 +19,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HeaderActions } from "@/features/container-detail/header-actions";
 import { CONTAINER_TABS, type ContainerTab } from "@/features/container-detail/tabs";
@@ -216,32 +216,34 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
         </Alert>
       ) : null}
       <Tabs value="" className="gap-4">
-        <TabsList
-          variant="line"
-          aria-label={t("containerdetail.tabs.label")}
-          className="h-9 max-md:h-11"
-        >
-          {CONTAINER_TABS.map((tab) => (
-            <NeedsTooltip key={tab.id} reason={unavailableReason(tab as ContainerTab)}>
-              <TabsTrigger
-                value={tab.id}
-                asChild
-                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-              >
-                <Link
-                  to={tab.to}
-                  params={{ envId, containerId }}
-                  search={{ node }}
-                  activeOptions={{ exact: tab.exact }}
-                  activeProps={{ "data-active": true }}
-                  inactiveProps={{ "data-active": undefined }}
+        <TabsScroller>
+          <TabsList
+            variant="line"
+            aria-label={t("containerdetail.tabs.label")}
+            className="h-9 max-md:h-11"
+          >
+            {CONTAINER_TABS.map((tab) => (
+              <NeedsTooltip key={tab.id} reason={unavailableReason(tab as ContainerTab)}>
+                <TabsTrigger
+                  value={tab.id}
+                  asChild
+                  className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
                 >
-                  {t(tab.labelKey)}
-                </Link>
-              </TabsTrigger>
-            </NeedsTooltip>
-          ))}
-        </TabsList>
+                  <Link
+                    to={tab.to}
+                    params={{ envId, containerId }}
+                    search={{ node }}
+                    activeOptions={{ exact: tab.exact }}
+                    activeProps={{ "data-active": true }}
+                    inactiveProps={{ "data-active": undefined }}
+                  >
+                    {t(tab.labelKey)}
+                  </Link>
+                </TabsTrigger>
+              </NeedsTooltip>
+            ))}
+          </TabsList>
+        </TabsScroller>
       </Tabs>
       <Outlet />
     </div>

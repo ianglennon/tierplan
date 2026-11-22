@@ -20,7 +20,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { hasPermission, useDocumentTitle, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -150,59 +150,61 @@ export function EnvSettingsLayout({ envId }: EnvSettingsLayoutProps) {
         </div>
         {canAccess || canShells ? (
           <Tabs value="" className="mt-2 gap-4">
-            <TabsList
-              variant="line"
-              aria-label={t("envaccess.tabs.label")}
-              className="h-9 max-md:h-11"
-            >
-              <TabsTrigger
-                value="settings"
-                asChild
-                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
+            <TabsScroller>
+              <TabsList
+                variant="line"
+                aria-label={t("envaccess.tabs.label")}
+                className="h-9 max-md:h-11"
               >
-                <Link
-                  to="/settings/environments/$envId"
-                  params={{ envId }}
-                  activeOptions={{ exact: true }}
-                  activeProps={{ "data-active": true }}
-                  inactiveProps={{ "data-active": undefined }}
-                >
-                  {t("envaccess.tabs.settings")}
-                </Link>
-              </TabsTrigger>
-              {canAccess ? (
                 <TabsTrigger
-                  value="access"
+                  value="settings"
                   asChild
                   className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
                 >
                   <Link
-                    to="/settings/environments/$envId/access"
+                    to="/settings/environments/$envId"
                     params={{ envId }}
+                    activeOptions={{ exact: true }}
                     activeProps={{ "data-active": true }}
                     inactiveProps={{ "data-active": undefined }}
                   >
-                    {t("envaccess.tabs.access")}
+                    {t("envaccess.tabs.settings")}
                   </Link>
                 </TabsTrigger>
-              ) : null}
-              {canShells ? (
-                <TabsTrigger
-                  value="shells"
-                  asChild
-                  className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-                >
-                  <Link
-                    to="/settings/environments/$envId/shells"
-                    params={{ envId }}
-                    activeProps={{ "data-active": true }}
-                    inactiveProps={{ "data-active": undefined }}
+                {canAccess ? (
+                  <TabsTrigger
+                    value="access"
+                    asChild
+                    className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
                   >
-                    {t("activeshells.tab")}
-                  </Link>
-                </TabsTrigger>
-              ) : null}
-            </TabsList>
+                    <Link
+                      to="/settings/environments/$envId/access"
+                      params={{ envId }}
+                      activeProps={{ "data-active": true }}
+                      inactiveProps={{ "data-active": undefined }}
+                    >
+                      {t("envaccess.tabs.access")}
+                    </Link>
+                  </TabsTrigger>
+                ) : null}
+                {canShells ? (
+                  <TabsTrigger
+                    value="shells"
+                    asChild
+                    className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
+                  >
+                    <Link
+                      to="/settings/environments/$envId/shells"
+                      params={{ envId }}
+                      activeProps={{ "data-active": true }}
+                      inactiveProps={{ "data-active": undefined }}
+                    >
+                      {t("activeshells.tab")}
+                    </Link>
+                  </TabsTrigger>
+                ) : null}
+              </TabsList>
+            </TabsScroller>
           </Tabs>
         ) : null}
       </header>

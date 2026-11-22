@@ -3,7 +3,7 @@
 
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { SETTINGS_TABS, visibleSettingsTabs } from "@/features/settings/tabs";
 import { useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -32,7 +32,7 @@ function SettingsLayout() {
         {/* Five tabs are wider than a phone. The bar scrolls inside this wrapper
             instead of widening the page, and the wrapper's bottom padding keeps
             the 2px active indicator, which hangs below the tabs, from being clipped. */}
-        <div className="-mb-2 max-w-full overflow-x-auto pb-2">
+        <TabsScroller>
           <TabsList variant="line" aria-label={t("settings.tabsLabel")} className="h-9 max-md:h-11">
             {tabs.map((tab) => (
               <TabsTrigger
@@ -51,7 +51,7 @@ function SettingsLayout() {
               </TabsTrigger>
             ))}
           </TabsList>
-        </div>
+        </TabsScroller>
         <TabsContent value={active ?? ""} className="text-base">
           <Outlet />
         </TabsContent>

@@ -19,7 +19,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { UsedByList } from "@/components/used-by-list";
 import { SelfContainerBadge } from "@/features/containers/self-container-badge";
@@ -252,30 +252,32 @@ export function SecretDetailLayout({ envId, secretId }: SecretDetailLayoutProps)
         </Alert>
       ) : null}
       <Tabs value="" className="gap-4">
-        <TabsList
-          variant="line"
-          aria-label={t("secrets.detail.tabs.label")}
-          className="h-9 max-md:h-11"
-        >
-          {TABS.map((tab) => (
-            <TabsTrigger
-              key={tab.id}
-              value={tab.id}
-              asChild
-              className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-            >
-              <Link
-                to={tab.to}
-                params={{ envId, secretId }}
-                activeOptions={{ exact: tab.exact }}
-                activeProps={{ "data-active": true }}
-                inactiveProps={{ "data-active": undefined }}
+        <TabsScroller>
+          <TabsList
+            variant="line"
+            aria-label={t("secrets.detail.tabs.label")}
+            className="h-9 max-md:h-11"
+          >
+            {TABS.map((tab) => (
+              <TabsTrigger
+                key={tab.id}
+                value={tab.id}
+                asChild
+                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
               >
-                {t(tab.labelKey)}
-              </Link>
-            </TabsTrigger>
-          ))}
-        </TabsList>
+                <Link
+                  to={tab.to}
+                  params={{ envId, secretId }}
+                  activeOptions={{ exact: tab.exact }}
+                  activeProps={{ "data-active": true }}
+                  inactiveProps={{ "data-active": undefined }}
+                >
+                  {t(tab.labelKey)}
+                </Link>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </TabsScroller>
       </Tabs>
       <Outlet />
       {data && manage.allowed && control.allowed ? (

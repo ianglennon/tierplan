@@ -10,7 +10,7 @@ import { environmentsQuery } from "@/api/environments";
 import { NoPermission } from "@/components/full-page-state";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { FreeSpaceTips } from "@/features/pool-guide/free-space-tips";
 import { DEFAULT_SWARM_INPUTS, type SwarmInputs } from "@/features/pool-guide/generate";
 import { MigrationRunbook } from "@/features/pool-guide/migration-runbook";
@@ -101,7 +101,7 @@ export function PoolGuidePage({ envId, part }: PoolGuidePageProps) {
         {/* On a narrow screen the four tabs scroll sideways inside this wrapper. Its bottom
             padding keeps the 2px active underline, which hangs below the tabs, inside the
             scrolling box, so neither axis shows a 1px scroll. */}
-        <div className="-mb-2 max-w-full overflow-x-auto pb-2">
+        <TabsScroller>
           <TabsList
             variant="line"
             aria-label={t("poolGuide.tabs.label")}
@@ -127,7 +127,7 @@ export function PoolGuidePage({ envId, part }: PoolGuidePageProps) {
               </TabsTrigger>
             ))}
           </TabsList>
-        </div>
+        </TabsScroller>
       </Tabs>
       {waiting ? (
         <Skeleton className="h-40 w-full" aria-busy="true" />

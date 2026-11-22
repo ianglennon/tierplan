@@ -35,7 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { FileEditor, type FileEditorHandle } from "@/features/stack-editor/file-editor";
 import { FileRail } from "@/features/stack-editor/file-rail";
@@ -489,21 +489,23 @@ export function StackEditorPage({
           onPaneChange?.(next as EditorPane);
         }}
       >
-        <TabsList
-          variant="line"
-          aria-label={t("stackEditor.panes.label")}
-          className="h-9 max-md:h-11"
-        >
-          <TabsTrigger value="files" className="max-md:h-11">
-            {t("stackEditor.panes.files")}
-          </TabsTrigger>
-          <TabsTrigger value="variables" className="max-md:h-11">
-            {t("stackEditor.panes.variables")}
-          </TabsTrigger>
-          <TabsTrigger value="rendered" className="max-md:h-11">
-            {t("stackEditor.panes.rendered")}
-          </TabsTrigger>
-        </TabsList>
+        <TabsScroller>
+          <TabsList
+            variant="line"
+            aria-label={t("stackEditor.panes.label")}
+            className="h-9 max-md:h-11"
+          >
+            <TabsTrigger value="files" className="max-md:h-11">
+              {t("stackEditor.panes.files")}
+            </TabsTrigger>
+            <TabsTrigger value="variables" className="max-md:h-11">
+              {t("stackEditor.panes.variables")}
+            </TabsTrigger>
+            <TabsTrigger value="rendered" className="max-md:h-11">
+              {t("stackEditor.panes.rendered")}
+            </TabsTrigger>
+          </TabsList>
+        </TabsScroller>
       </Tabs>
       {activePane === "rendered" ? (
         <RenderedView
