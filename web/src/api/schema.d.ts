@@ -3677,7 +3677,7 @@ export interface paths {
         };
         /**
          * What each route of a stack is doing now
-         * @description Answers each route the stack holds with its hostname, path, service and a state: serving, pending, waiting_certificate (with the reason), backend_not_running (stopped is true when the stack is stopped), not_attached, ingress_off or not_served_yet (a stack on a standalone host). The first of these that holds is the state, in that order of the list: not served yet, ingress off, then the backend not running, then not attached, then waiting for a certificate, then pending. The state is worked out when asked from the stored claims, the services on the swarm, the proxy's current bundle and what each active node applied; nothing is stored. A stack that holds no route answers an empty list. The answer never carries a certificate, a key or a token. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         * @description Answers each route the stack holds with its hostname, path, service and a state: serving, pending, waiting_certificate (with the reason), backend_not_running (stopped is true when the stack is stopped), not_attached, or ingress_off. The first of these that holds is the state, in this order: ingress off, then the backend not running, then not attached, then waiting for a certificate, then pending. The state is worked out when asked from the stored claims, the services on the swarm or the containers on the standalone host, the proxy's current bundle and what each active node applied; nothing is stored. A stack that holds no route answers an empty list. The answer never carries a certificate, a key or a token. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
          */
         get: operations["getStackRoutes"];
         put?: never;
@@ -16334,10 +16334,10 @@ export interface components {
             /** @description The service's name in the compose file */
             service: string;
             /**
-             * @description serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. not_served_yet: the stack runs on a standalone host, which ingress does not serve yet; its routes keep their hostnames and the other states are not worked out for it. Derived when read, stored nowhere
+             * @description serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. Derived when read, stored nowhere
              * @enum {string}
              */
-            state: "serving" | "pending" | "waiting_certificate" | "backend_not_running" | "not_attached" | "ingress_off" | "not_served_yet";
+            state: "serving" | "pending" | "waiting_certificate" | "backend_not_running" | "not_attached" | "ingress_off";
             /** @description True when state is backend_not_running because the stack is stopped. A stopped stack keeps its hostnames */
             stopped: boolean;
         };

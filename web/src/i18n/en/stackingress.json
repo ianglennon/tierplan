@@ -85,10 +85,6 @@
         "ingress_off": {
           "label": "Ingress is off",
           "detail": "It serves once ingress is switched on and the stack is redeployed."
-        },
-        "not_served_yet": {
-          "label": "Not served yet",
-          "detail": "Not served on this host yet. The stack keeps its hostnames."
         }
       },
       "stopped": "This stack is stopped. Its hostnames stay reserved for it.",

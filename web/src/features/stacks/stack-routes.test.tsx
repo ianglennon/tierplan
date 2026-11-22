@@ -136,13 +136,6 @@ describe("the stack's Routes card", () => {
       "It serves once ingress is switched on and the stack is redeployed.",
       "border-status-unknown",
     ],
-    [
-      "not_served_yet",
-      {},
-      "Not served yet",
-      "Not served on this host yet. The stack keeps its hostnames.",
-      "border-status-unknown",
-    ],
   ])("draws %s with its dot, label and detail", async (state, extra, label, detail, dot) => {
     serve([route({ state, ...extra })]);
     mount();

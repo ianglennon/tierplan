@@ -46,7 +46,6 @@ function dotOf(route: StackRoute): HealthState {
     case "backend_not_running":
       return route.stopped ? "unknown" : "offline";
     case "ingress_off":
-    case "not_served_yet":
       return "pending";
   }
 }
@@ -105,7 +104,6 @@ export function StackRoutes({ envId, stack }: StackRoutesProps) {
       case "pending":
       case "not_attached":
       case "ingress_off":
-      case "not_served_yet":
         return t(`stackIngress.routes.state.${state}.detail`);
       case "waiting_certificate": {
         if (route.reason === "") return "";
