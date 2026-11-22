@@ -133,7 +133,7 @@ func (s *Service) checkDisable(ctx context.Context, info EnvInfo, canView func(e
 	if state.Paused {
 		return []Finding{{
 			Code: CodePaused, Severity: SeverityError,
-			Message: "Ingress on this environment was paused by a restore. Resume it first.",
+			Message: "Ingress cannot be switched off while a restore has it paused. Resume it first.",
 		}}, nil
 	}
 	routes, err := s.d.Store.LiveRoutes(ctx, info.ID)

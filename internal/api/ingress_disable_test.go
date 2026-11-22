@@ -174,7 +174,9 @@ func TestDisableRouteRefusedWhileRoutesLive(t *testing.T) {
 			Value    []string
 		} `json:"errors"`
 	}](t, rec)
+	// The detail says once that ingress cannot be switched off: the finding's sentence already says so.
 	if rec.Code != http.StatusConflict || p.Type != "ingress_routes_live" || !strings.Contains(p.Detail, "routes are live") ||
+		strings.Count(p.Detail, "cannot be switched off") != 1 ||
 		len(p.Errors) != 1 || p.Errors[0].Location != "ingress_routes_live" || !slices.Equal(p.Errors[0].Value, []string{"shop.apps.example.com/ (stack web)"}) {
 		t.Fatalf("disable: %d %s", rec.Code, rec.Body)
 	}

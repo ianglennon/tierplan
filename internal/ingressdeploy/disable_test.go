@@ -565,6 +565,9 @@ func TestDisableRefusedWhilePaused(t *testing.T) {
 	if got.Code != "ingress_paused" {
 		t.Errorf("code = %q", got.Code)
 	}
+	if want := "Ingress cannot be switched off while a restore has it paused. Resume it first."; got.Message != want {
+		t.Errorf("message = %q, want %q", got.Message, want)
+	}
 }
 
 // TestDisableEdges: with every node reachable nothing is unreachable; an environment with no nodes still loses its service,

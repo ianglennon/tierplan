@@ -654,7 +654,8 @@ func serveIngressJobStream(w http.ResponseWriter, req *http.Request, d IngressDe
 
 // ingressDisableProblem is the 409 for a switch-off that was refused: its type is the code of the first finding
 // (ingress_paused or ingress_routes_live), and each finding is listed with its code as the location, its sentence as the
-// message and its items, the routes and their stacks, as the value.
+// message and its items, the routes and their stacks, as the value. Each sentence already says that ingress cannot be
+// switched off, so the detail is the sentences alone.
 func ingressDisableProblem(e *ingressdeploy.DisableRefusedError) error {
 	var details []*huma.ErrorDetail
 	var msgs []string
@@ -672,7 +673,7 @@ func ingressDisableProblem(e *ingressdeploy.DisableRefusedError) error {
 	}
 	return &huma.ErrorModel{
 		Type: typ, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-		Detail: "Ingress cannot be switched off: " + strings.Join(msgs, " "), Errors: details,
+		Detail: strings.Join(msgs, " "), Errors: details,
 	}
 }
 

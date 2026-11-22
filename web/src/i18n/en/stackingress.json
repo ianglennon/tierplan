@@ -100,7 +100,7 @@
       "showFewer": "Show fewer",
       "reason": {
         "no_certificate": "No certificate has been issued for this hostname yet.",
-        "certificate_not_ready": "A certificate exists but can't be served yet."
+        "certificate_not_ready": "The certificate is still being issued, or isn't ready to serve yet."
       }
     }
   },
