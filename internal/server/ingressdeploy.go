@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // ingressDeployDeps are what newIngressDeploy reads from the rest of the server.
@@ -141,17 +142,32 @@ func (r ingressEnvReader) Info(ctx context.Context, envID string) (ingressdeploy
 	if err != nil {
 		return ingressdeploy.EnvInfo{}, err
 	}
+	return envInfoFrom(envID, row, in), nil
+}
+
+// envInfoFrom maps an environment row and its rollup input to what the deployer decides on. A standalone environment is
+// one node: for the local socket its AgentID is the environment's own ID, which stackops.Deps.StandaloneNode routes
+// writes by, and its reachability is the local probe's; for an agent host it is the host's one agent.
+func envInfoFrom(envID string, row sqlc.Environment, in envs.RollupInput) ingressdeploy.EnvInfo {
 	info := ingressdeploy.EnvInfo{ID: envID, Name: row.Name, ClusterID: row.SwarmClusterID.String}
 	if in.Kind != envs.KindAgent {
 		// The local socket is one node, and its ID is the environment's.
-		info.Swarm = in.Local.Probe.Type == dockerx.TypeSwarmManager
-		info.ManagerConnected = info.Swarm
-		if info.Swarm {
-			info.Nodes = []ingressdeploy.NodeInfo{{SwarmNodeID: in.Local.Probe.SwarmNodeID, AgentID: envID, Name: in.Local.Probe.Hostname, Role: "manager", Connected: true}}
+		probe := in.Local.Probe
+		if probe.Type == dockerx.TypeSwarmManager {
+			info.Swarm = true
+			info.ManagerConnected = true
+			info.Nodes = []ingressdeploy.NodeInfo{{SwarmNodeID: probe.SwarmNodeID, AgentID: envID, Name: probe.Hostname, Role: "manager", Connected: true}}
+			return info
 		}
-		return info, nil
+		info.Local = true
+		info.EngineID = probe.EngineID
+		info.Nodes = []ingressdeploy.NodeInfo{{AgentID: envID, Name: probe.Hostname, Connected: in.Local.State == envs.StateOnline}}
+		return info
 	}
 	info.Swarm = in.EnvType == "swarm"
+	if !info.Swarm {
+		info.EngineID = row.EngineID.String
+	}
 	for _, ag := range in.Agents {
 		if ag.Revoked {
 			continue
@@ -162,8 +178,11 @@ func (r ingressEnvReader) Info(ctx context.Context, envID string) (ingressdeploy
 		if ag.Role == "manager" && ag.Connected {
 			info.ManagerConnected = true
 		}
+		if !info.Swarm {
+			break // a standalone host has the one agent
+		}
 	}
-	return info, nil
+	return info
 }
 
 // ownChallenge is the validation method the server's own certificate is ordered with now, read from the ACME manager.

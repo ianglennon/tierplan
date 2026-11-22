@@ -46,8 +46,14 @@ type NodeInfo struct {
 // EnvInfo is what the deployer needs to know of an environment before it touches it.
 type EnvInfo struct {
 	ID, Name string
-	// Swarm is true for a swarm environment; ingress is not available on any other (D-34).
+	// Swarm is true for a swarm environment; ingress is available on any other only as a standalone host (Phase 25).
+	// A standalone environment has exactly one node: its AgentID is the ID writes are routed by (the environment's own ID
+	// for the local socket, the agent's ID otherwise) and its Connected says whether the host can be reached.
 	Swarm bool
+	// Local is true for TierPlan's own local-socket environment, so the host is TierPlan's own (D-04).
+	Local bool
+	// EngineID is the standalone host's engine ID, "" when it is not known.
+	EngineID string
 	// ClusterID is the swarm cluster the environment's agents report, "" when none has.
 	ClusterID string
 	// ManagerConnected is true when a manager node's agent is connected, so the cluster can be written to.
