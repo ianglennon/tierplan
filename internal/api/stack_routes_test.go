@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingressrender"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
@@ -148,22 +150,6 @@ func TestStackRoutesRoute(t *testing.T) {
 		}
 	})
 
-	t.Run("a standalone stack's routes read not served yet, whatever the swarm says", func(t *testing.T) {
-		if _, err := f.st.Write.Exec(`UPDATE stacks SET target = 'standalone' WHERE id = ?`, st.ID); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _, _ = f.st.Write.Exec(`UPDATE stacks SET target = 'swarm' WHERE id = ?`, st.ID) })
-		_, got := routeStates(t, viewer, st.ID)
-		if len(got.Routes) != 2 {
-			t.Fatalf("routes = %+v, want both", got.Routes)
-		}
-		for _, r := range got.Routes {
-			if r.State != "not_served_yet" || r.Stopped {
-				t.Errorf("route = %+v, want not_served_yet, not stopped", r)
-			}
-		}
-	})
-
 	t.Run("the body never carries a certificate, a key or a token", func(t *testing.T) {
 		rec := viewer.do(http.MethodGet, routesPath(st.ID), "")
 		for _, bad := range []string{"PRIVATE KEY", "BEGIN CERTIFICATE", "token", "chain"} {
@@ -222,6 +208,107 @@ func TestStackRoutesRoute(t *testing.T) {
 			}
 			if got.Routes[0].State != tc.state || got.Routes[0].Reason != tc.why {
 				t.Errorf("route = %+v, want %s %q", got.Routes[0], tc.state, tc.why)
+			}
+		})
+	}
+}
+
+// standaloneRoutesRig is a standalone environment (the server's own host) whose engine holds containers, with one
+// stack named solo that claims one route to its service web. The route sources are the fake the caller can move.
+func standaloneRoutesRig(t *testing.T, containers []dockertest.FakeContainer, ingressOn bool) (*roleCaller, stackAnswer, *routeSourcesFake, string) {
+	t.Helper()
+	const host = "solo.apps.example.com"
+	src := &routeSourcesFake{}
+	cfg := swarmManagerEngine()
+	cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+	cfg.Containers = containers
+	f := newEnvFix(t, cfg)
+	f.clusters = envs.NewClusters(f.svc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+	f.svc.WithClusters(f.clusters)
+	f.stackIngressRoutes = src
+	f.h = f.build(t)
+	e := f.add(t)
+	awaitOnline(t, f.mon, e.ID)
+	seedIngressWorld(t, f, e)
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	// The stack is a row of its own: creating it through the API is refused while a project of that name already runs
+	// on the host, which is the case this reads.
+	if _, err := f.st.Write.Exec(
+		`INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES (?, ?, ?, 'standalone', 'tester', 1)`,
+		"stack-solo", e.ID, "solo"); err != nil {
+		t.Fatalf("seed the standalone stack: %v", err)
+	}
+	st := stackAnswer{ID: "stack-solo", Name: "solo", Target: "standalone"}
+	ctx := context.Background()
+	decl := ingress.Declaration{Service: "web", Host: host, Label: "tierplan.ingress.host", Port: 80}
+	if _, err := f.stackDeps.Ingress.ReplaceStackRoutes(ctx, ingressstore.ReplaceInput{EnvID: e.ID, StackID: st.ID, Actor: "admin", Decls: []ingress.Declaration{decl}}); err != nil {
+		t.Fatalf("claim %s: %v", host, err)
+	}
+	if _, err := f.stackDeps.Ingress.SetEnabled(ctx, e.ID, ingressOn, "admin", nil); err != nil {
+		t.Fatal(err)
+	}
+	return viewer, st, src, host + "/"
+}
+
+// A standalone stack's routes are read from the host's containers of its Compose project, through the
+// environment's one node, and then follow the bundle and the nodes as a swarm stack's do (plan 25-05, D-33).
+func TestStackRoutesStandaloneStates(t *testing.T) {
+	t.Parallel()
+	web := func(id, state, project string, networks ...string) dockertest.FakeContainer {
+		eps := map[string]dockertest.FakeEndpoint{}
+		for _, n := range networks {
+			eps[n] = dockertest.FakeEndpoint{NetworkID: "id-" + n}
+		}
+		return dockertest.FakeContainer{
+			ID: id, Names: []string{"/" + id}, Image: "nginx:1.27", State: state, Networks: eps,
+			Labels: map[string]string{"com.docker.compose.project": project, "com.docker.compose.service": "web"},
+		}
+	}
+	served := func(src *routeSourcesFake, host string) {
+		b := ingressbundle.Bundle{ID: "b1"}
+		b.Manifest.Routes = append(b.Manifest.Routes, ingressbundle.RouteEntry{Hostname: host, PathPrefix: "/", Stack: "solo"})
+		*src = routeSourcesFake{bundle: b, have: true, nodes: []ingresshub.Node{{Status: "active", AppliedBundleID: "b1"}}}
+	}
+	cases := []struct {
+		name       string
+		containers []dockertest.FakeContainer
+		ingressOn  bool
+		set        func(src *routeSourcesFake, host string)
+		state, why string
+	}{
+		{"a running container on the ingress network, no bundle yet, is pending",
+			[]dockertest.FakeContainer{web("w1", "running", "solo", ingress.NetworkName)}, true, nil, "pending", ""},
+		{"a running container the bundle holds and every node applied is serving",
+			[]dockertest.FakeContainer{web("w1", "running", "solo", "solo_default", ingress.NetworkName)}, true, served, "serving", ""},
+		{"a route left out for a certificate is waiting, with the reason",
+			[]dockertest.FakeContainer{web("w1", "running", "solo", ingress.NetworkName)}, true, func(src *routeSourcesFake, host string) {
+				*src = routeSourcesFake{
+					bundle: ingressbundle.Bundle{ID: "b1"}, have: true, nodes: []ingresshub.Node{{Status: "active", AppliedBundleID: "b1"}},
+					skipped: []ingressrender.Skipped{{Hostname: host, PathPrefix: "/", Reason: ingressrender.SkipNoCertificate}},
+				}
+			}, "waiting_certificate", "no_certificate"},
+		{"a running container on no ingress network is not attached",
+			[]dockertest.FakeContainer{web("w1", "running", "solo", "solo_default")}, true, nil, "not_attached", ""},
+		{"an exited container is no running backend",
+			[]dockertest.FakeContainer{web("w1", "exited", "solo", ingress.NetworkName)}, true, nil, "backend_not_running", ""},
+		{"a running container of another project is no backend of this stack",
+			[]dockertest.FakeContainer{web("w1", "running", "other", ingress.NetworkName)}, true, nil, "backend_not_running", ""},
+		{"with ingress off the route reads ingress off",
+			[]dockertest.FakeContainer{web("w1", "running", "solo", ingress.NetworkName)}, false, nil, "ingress_off", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			viewer, st, src, key := standaloneRoutesRig(t, tc.containers, tc.ingressOn)
+			if tc.set != nil {
+				tc.set(src, strings.TrimSuffix(key, "/"))
+			}
+			_, got := routeStates(t, viewer, st.ID)
+			if len(got.Routes) != 1 || got.Routes[0].Hostname+got.Routes[0].Path != key {
+				t.Fatalf("routes = %+v, want the one route %s", got.Routes, key)
+			}
+			if r := got.Routes[0]; r.State != tc.state || r.Reason != tc.why || r.Stopped {
+				t.Errorf("route = %+v, want %s %q, not stopped", r, tc.state, tc.why)
 			}
 		})
 	}

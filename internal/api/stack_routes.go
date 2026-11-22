@@ -40,7 +40,7 @@ type StackRouteBody struct {
 	Hostname string `json:"hostname" doc:"The route's hostname"`
 	Path     string `json:"path" doc:"The path prefix the route serves, / for the whole host"`
 	Service  string `json:"service" doc:"The service's name in the compose file"`
-	State    string `json:"state" enum:"serving,pending,waiting_certificate,backend_not_running,not_attached,ingress_off,not_served_yet" doc:"serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. not_served_yet: the stack runs on a standalone host, which ingress does not serve yet; its routes keep their hostnames and the other states are not worked out for it. Derived when read, stored nowhere"`
+	State    string `json:"state" enum:"serving,pending,waiting_certificate,backend_not_running,not_attached,ingress_off" doc:"serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. Derived when read, stored nowhere"`
 	Reason   string `json:"reason" doc:"For waiting_certificate, why the certificate is not served: no_certificate (none yet) or certificate_not_ready (one exists and cannot be served yet). Empty for every other state"`
 	Stopped  bool   `json:"stopped" doc:"True when state is backend_not_running because the stack is stopped. A stopped stack keeps its hostnames"`
 }
@@ -60,9 +60,9 @@ func registerStackRoutes(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "getStackRoutes", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/routes",
 		Summary: "What each route of a stack is doing now",
-		Description: "Answers each route the stack holds with its hostname, path, service and a state: serving, pending, waiting_certificate (with the reason), backend_not_running (stopped is true when the stack is stopped), not_attached, ingress_off or not_served_yet (a stack on a standalone host). " +
-			"The first of these that holds is the state, in that order of the list: not served yet, ingress off, then the backend not running, then not attached, then waiting for a certificate, then pending. " +
-			"The state is worked out when asked from the stored claims, the services on the swarm, the proxy's current bundle and what each active node applied; nothing is stored. " +
+		Description: "Answers each route the stack holds with its hostname, path, service and a state: serving, pending, waiting_certificate (with the reason), backend_not_running (stopped is true when the stack is stopped), not_attached, or ingress_off. " +
+			"The first of these that holds is the state, in this order: ingress off, then the backend not running, then not attached, then waiting for a certificate, then pending. " +
+			"The state is worked out when asked from the stored claims, the services on the swarm or the containers on the standalone host, the proxy's current bundle and what each active node applied; nothing is stored. " +
 			"A stack that holds no route answers an empty list. The answer never carries a certificate, a key or a token. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
@@ -99,13 +99,15 @@ func getStackRoutes(ctx context.Context, d StacksDeps, in *StackPathInput) (*Sta
 	}
 	input := stackops.RouteStateInput{
 		Enabled: snap.Settings.Enabled, Stopped: st.Stopped, Routes: routes,
-		// Standalone serving arrives with the Phase 25 work; until then no route of a standalone stack is worked out
-		// against the swarm, which would read a healthy running container as no backend.
-		NotServed: st.Target != stacks.TargetSwarm,
 	}
-	// What runs and what the nodes hold matter only to a route that gets that far in the order of the states.
-	if input.Enabled && !input.Stopped && !input.NotServed {
-		if err := readRunning(ctx, d, env.ID, st, &input); err != nil {
+	// What runs and what the nodes hold matter only to a route that gets that far in the order of the states. A swarm
+	// stack is read from the swarm, a standalone one from the host's own containers.
+	if input.Enabled && !input.Stopped {
+		read := readRunning
+		if st.Target != stacks.TargetSwarm {
+			read = readRunningStandalone
+		}
+		if err := read(ctx, d, env.ID, st, &input); err != nil {
 			return nil, snapshotProblem(d.Log, env.ID, err)
 		}
 		d.readBundleState(ctx, env.ID, &input)
@@ -154,6 +156,39 @@ func readRunning(ctx context.Context, d StacksDeps, envID string, st stackops.St
 			for _, n := range ref.Networks {
 				if n == ingress.NetworkName || netID != "" && n == netID {
 					in.Attached[strings.TrimPrefix(ref.Name, prefix)] = true
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// readRunningStandalone reads, from the environment's one host, how many containers of each of the stack's services run
+// and whether any of them is on the ingress network. The containers are the host's own, found by the Compose project
+// label the stack's name is; it answers counts and one flag per service and nothing else of a container (T-25-10).
+func readRunningStandalone(ctx context.Context, d StacksDeps, envID string, st stackops.Stack, in *stackops.RouteStateInput) error {
+	if d.Aggregator == nil {
+		return errors.New("api: no aggregator to read the host with")
+	}
+	node, err := d.ops().StandaloneNode(ctx, envID)
+	if err != nil {
+		return err
+	}
+	in.Running, in.Attached = map[string]int{}, map[string]bool{}
+	return d.Aggregator.OnNode(ctx, envID, node, func(c *dockerx.Client) error {
+		rows, err := c.ContainersWithLabel(ctx, stacks.LabelComposeProject, st.Name)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			service := row.Labels[stacks.LabelComposeService]
+			if service == "" || row.State != "running" {
+				continue
+			}
+			in.Running[service]++
+			for _, n := range row.Networks {
+				if n.Name == ingress.NetworkName {
+					in.Attached[service] = true
 				}
 			}
 		}
