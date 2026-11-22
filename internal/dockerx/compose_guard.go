@@ -8,8 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"strings"
 
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+
+	"github.com/ianglennon/tierplan/internal/ingress"
 )
 
 // ErrComposeForbidden is what the guard answers when the Compose SDK asks the engine for something a
@@ -392,4 +397,72 @@ func (guardClient) CheckpointRemove(_ context.Context, _ string, _ client.Checkp
 func (guardClient) CheckpointList(_ context.Context, _ string, _ client.CheckpointListOptions) (client.CheckpointListResult, error) {
 	var zero client.CheckpointListResult
 	return zero, forbidden("CheckpointList")
+}
+
+// composeServiceLabel is the label the Compose SDK puts on every container it creates, naming the service.
+const composeServiceLabel = "com.docker.compose.service"
+
+// ingressAliases is the alias list the guard lets reach the engine on the shared ingress network: the aliases
+// the SDK built, less the bare compose service name and the container's own name, which the SDK adds to every
+// endpoint (create.go getAliases). Every other alias keeps its place; nil when none is left.
+func ingressAliases(aliases []string, service, container string) []string {
+	container = strings.TrimPrefix(container, "/")
+	var kept []string
+	for _, a := range aliases {
+		if (service != "" && a == service) || (container != "" && strings.TrimPrefix(a, "/") == container) {
+			continue
+		}
+		kept = append(kept, a)
+	}
+	return kept
+}
+
+// ingressEndpoint returns a copy of ep with the bare names removed from its aliases. The caller's endpoint is
+// never edited: the SDK keeps using it after the call.
+func ingressEndpoint(ep *network.EndpointSettings, service, container string) *network.EndpointSettings {
+	cp := *ep
+	cp.Aliases = ingressAliases(ep.Aliases, service, container)
+	return &cp
+}
+
+// ContainerCreate forwards a create to the engine with one change, on the shared ingress network only: the
+// SDK adds the bare compose service name (and the container name) as an alias on every network a container
+// joins, and on the one bridge every stack of a host shares, another stack's container could answer a
+// sibling's name by embedded DNS (D-27, PROH-25-05). A routed service is reached there only by its unique
+// alias, which the deployer puts in the endpoint, so the bare names are dropped. Only the endpoint keyed by
+// ingress.NetworkName is touched; the options and the map the SDK built are copied, not edited, so the agent
+// allowlist sees the rewritten body and the SDK's own view is unchanged.
+func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	if o.NetworkingConfig != nil {
+		if ep := o.NetworkingConfig.EndpointsConfig[ingress.NetworkName]; ep != nil {
+			var service string
+			if o.Config != nil {
+				service = o.Config.Labels[composeServiceLabel]
+			}
+			nc := *o.NetworkingConfig
+			nc.EndpointsConfig = maps.Clone(o.NetworkingConfig.EndpointsConfig)
+			nc.EndpointsConfig[ingress.NetworkName] = ingressEndpoint(ep, service, o.Name)
+			o.NetworkingConfig = &nc
+		}
+	}
+	return g.APIClient.ContainerCreate(ctx, o)
+}
+
+// NetworkConnect is the same rewrite for an engine older than API 1.44, where the SDK joins the extra networks
+// of a container one by one after the create with the same endpoint settings. The network is named by name,
+// as the SDK passes it. The container's compose service label is read from the engine only when the endpoint
+// has aliases to rewrite.
+func (g guardClient) NetworkConnect(ctx context.Context, networkID string, o client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
+	if networkID == ingress.NetworkName && o.EndpointConfig != nil && len(o.EndpointConfig.Aliases) > 0 {
+		res, err := g.APIClient.ContainerInspect(ctx, o.Container, client.ContainerInspectOptions{})
+		if err != nil {
+			return client.NetworkConnectResult{}, err
+		}
+		var service string
+		if res.Container.Config != nil {
+			service = res.Container.Config.Labels[composeServiceLabel]
+		}
+		o.EndpointConfig = ingressEndpoint(o.EndpointConfig, service, res.Container.Name)
+	}
+	return g.APIClient.NetworkConnect(ctx, networkID, o)
 }
