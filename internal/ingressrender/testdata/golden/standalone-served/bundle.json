@@ -1,0 +1,43 @@
+{
+  "id": "4807f92bae36fccaaa7c384b812e21e36fb0f294b9726b02f64cdcad74fed467",
+  "schema": 1,
+  "version": {
+    "config": 8,
+    "certs": 5,
+    "own": 0
+  },
+  "manifest": {
+    "schema": 1,
+    "files": [
+      {
+        "path": "certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key",
+        "sha256": "50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d",
+        "mode": 384,
+        "step": 1
+      },
+      {
+        "path": "certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt",
+        "sha256": "6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98",
+        "mode": 420,
+        "step": 1
+      },
+      {
+        "path": "dynamic/tierplan.yml",
+        "sha256": "e5aa8ce8a7a75278f0d8594cdb4a205829bdb3d4fa5abfe7be4a1e4ec12b5515",
+        "mode": 420,
+        "step": 2
+      }
+    ],
+    "routes": [
+      {
+        "router": "r-e340fc02a46e",
+        "hostname": "old.example.com",
+        "pathPrefix": "/",
+        "stack": "legacy",
+        "service": "app",
+        "hash": "e340fc02a46e41720720bb8e78e4973205365b8c452de1c256a0877ded9d43aa"
+      }
+    ]
+  },
+  "skipped": []
+}

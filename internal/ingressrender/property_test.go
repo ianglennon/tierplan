@@ -17,12 +17,18 @@ import (
 func richestInput() Input {
 	strip := swarmRoute("app.example.com", "/api", "shop", "api", 9000)
 	strip.Strip = true
+	// A system-owned route has no backend until Phase 28, so it keeps the no_backend reason in the fixture.
+	system := swarmRoute("sys.example.com", "/", "", "ui", 8080)
+	system.OwnerKind = ingress.OwnerSystem
+	system.StackName = ""
+	system.Target = ""
 	return Input{
 		Snapshot: ingress.Snapshot{
 			Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 11},
 			Claims: []ingress.SnapshotClaim{
 				claimFor("app.example.com"), claimFor("other.example.com"), claimFor("pending.example.com"),
 				claimFor("bare.example.com"), standaloneClaim("old.example.com"),
+				{Claim: ingress.Claim{Hostname: "sys.example.com", OwnerKind: ingress.OwnerSystem}},
 			},
 			Routes: []ingress.SnapshotRoute{
 				swarmRoute("app.example.com", "/", "shop", "web", 8080),
@@ -34,6 +40,7 @@ func richestInput() Input {
 				swarmRoute("pending.example.com", "/", "shop", "web", 8080),
 				swarmRoute("bare.example.com", "/", "shop", "web", 8080),
 				standaloneRoute("old.example.com", "/", "legacy", "app", 80),
+				system,
 			},
 		},
 		Certs: []HostCert{
@@ -41,6 +48,7 @@ func richestInput() Input {
 			{Hostname: "other.example.com", ChainPEM: chainA, KeyPEM: keyA},
 			{Hostname: "pending.example.com", Reason: SkipCertificateNotReady},
 			{Hostname: "old.example.com", ChainPEM: chainA, KeyPEM: keyA},
+			{Hostname: "sys.example.com", ChainPEM: chainA, KeyPEM: keyA},
 		},
 		CertsVersion: 5,
 	}
