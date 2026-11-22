@@ -116,6 +116,11 @@ type ComposeUpOptions struct {
 	// is the one on the container: a container changed by hand on the host keeps its labels, and the SDK
 	// compares labels only (mustRecreate), so it would leave such a container as it is.
 	ForceRecreate []string
+	// NoWait makes the up return once the containers are started, without waiting for them to be running or
+	// healthy; WaitTimeout is then unused. It is for TierPlan's own ingress proxy, whose health check cannot
+	// pass before it has enrolled, so enabling ends when the project is up and readiness is read from the
+	// status afterwards (D-13).
+	NoWait bool
 }
 
 // The kinds of resource a ComposeEvent is about.
@@ -329,7 +334,7 @@ func composeUpOptions(p *types.Project, o ComposeUpOptions) api.UpOptions {
 	}
 	return api.UpOptions{
 		Create: create,
-		Start:  api.StartOptions{Project: p, Wait: true, WaitTimeout: o.WaitTimeout},
+		Start:  api.StartOptions{Project: p, Wait: !o.NoWait, WaitTimeout: o.WaitTimeout},
 	}
 }
 
