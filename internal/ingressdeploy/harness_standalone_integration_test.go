@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
+
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
@@ -69,6 +71,8 @@ type hostEnv struct {
 	now   func() time.Time
 	clock *tunneltest.Clock
 	tun   *tunneltest.Server
+	// agent is the host's agent connection (nil for the local socket), which stopTierPlan closes.
+	agent *tunneltest.Conn
 	srv   *ingresstest.Server
 	mon   *envs.Monitor
 	esvc  *envs.Service
@@ -342,6 +346,7 @@ func (e *hostEnv) connectAgent() {
 	if c.Welcome == nil {
 		t.Fatalf("the agent of %s was refused: %+v (err %v)", e.host.Hostname, c.Refuse, c.Err)
 	}
+	e.agent = c
 	e.nodeID = c.Identity.AgentID
 	c.ProxyDocker(t, sock)
 	tunneltest.SendHeartbeat(t, c.OpenControl(t), true, e.clock.Now().UnixMilli())
@@ -377,6 +382,36 @@ func (e *hostEnv) startDeploy() {
 	var once sync.Once
 	e.stopDeploy = func() { once.Do(func() { stop(); wg.Wait() }) }
 	t.Cleanup(e.stopDeploy)
+}
+
+// stopTierPlan stops TierPlan's side as the server stopping does: the deployer's loops end, the ingress hub stops answering
+// and closes its sessions, and the agent's tunnel is closed. It is safe to call more than once, and the cleanups it stands in
+// for run it again.
+func (e *hostEnv) stopTierPlan() {
+	e.t.Helper()
+	e.stopDeploy()
+	e.srv.Stop()
+	if e.agent != nil {
+		_ = e.agent.Mux.Close()
+		_ = e.agent.WS.CloseNow()
+	}
+}
+
+// restartHost stops the dind host and starts it again, which is a reboot of the machine as far as its engine is concerned: the
+// engine and every container stop, and the host keeps its address, its writable layers and its volumes. What the harness
+// derived from the host's engine address while it was up is not used again, because TierPlan's side is expected to be stopped.
+func (e *hostEnv) restartHost() {
+	e.t.Helper()
+	stop, cancelStop := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelStop()
+	if err := dockertest.StopNode(stop, e.host); err != nil {
+		e.t.Fatalf("stop the host: %v", err)
+	}
+	start, cancelStart := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancelStart()
+	if err := dockertest.StartNode(start, e.host); err != nil {
+		e.t.Fatalf("start the host: %v", err)
+	}
 }
 
 // enable switches ingress on and waits for the job.
@@ -612,8 +647,21 @@ func (e *hostEnv) deployStack(name, compose string) (*stack, stackops.DeployResu
 	}
 	in := stackops.StandaloneDeployInput{
 		EnvID: e.envID, NodeID: e.nodeID, Stack: st, Copy: copy, Pins: e.repo, Subnets: e.repo, RevisionID: rev.ID, Caller: e.rootCaller(),
-		Ingress: &stackops.ClaimWrite{Decls: stacks.IngressDeclarations(loaded.Project, stacks.TargetStandalone), Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}},
+		Ingress: e.claimWrite(loaded.Project),
 	}
+	return e.runDeploy(st, rev, in)
+}
+
+// claimWrite is the claim write a deploy of project carries, as the API's deploy builds it.
+func (e *hostEnv) claimWrite(project *types.Project) *stackops.ClaimWrite {
+	return &stackops.ClaimWrite{Decls: stacks.IngressDeclarations(project, stacks.TargetStandalone), Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}}
+}
+
+// runDeploy runs DeployStandalone for in as a job and waits for it. It marks revision rev good when the deploy succeeded.
+func (e *hostEnv) runDeploy(st stackops.Stack, rev stackops.Snapshot, in stackops.StandaloneDeployInput) (*stack, stackops.DeployResult, jobs.Job) {
+	t := e.t
+	t.Helper()
+	ctx := testsupport.Context(t)
 	var res stackops.DeployResult
 	done := make(chan struct{})
 	job, err := e.jobs.Start(jobs.Spec{Kind: "stack_deploy", EnvID: e.envID, Owner: "user:test", Items: stackops.StandaloneItemSpecs()},
@@ -739,4 +787,164 @@ func (e *hostEnv) claimsOf(st *stack) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// freshStack reads the stack's record as the store holds it now.
+func (e *hostEnv) freshStack(st *stack) stackops.Stack {
+	e.t.Helper()
+	got, err := e.repo.Stack(testsupport.Context(e.t), e.envID, st.ID)
+	if err != nil {
+		e.t.Fatalf("read the stack %s: %v", st.Name, err)
+	}
+	return got
+}
+
+// redeploy saves compose as the stack's draft and deploys it as a new revision, as a person's second deploy does.
+func (e *hostEnv) redeploy(st *stack, compose string) (*stack, stackops.DeployResult, jobs.Job) {
+	t := e.t
+	t.Helper()
+	ctx := testsupport.Context(t)
+	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}}
+	draft, err := e.repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatalf("read the draft of %s: %v", st.Name, err)
+	}
+	if _, _, err := e.repo.SaveDraft(ctx, st.ID, draft.Version, "user:test", copy); err != nil {
+		t.Fatalf("save the draft of %s: %v", st.Name, err)
+	}
+	rev, err := e.repo.NewRevision(ctx, st.ID, "user:test", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatalf("NewRevision: %v", err)
+	}
+	attach, err := e.ops.AttachFor(ctx, e.envID, stacks.TargetStandalone)
+	if err != nil {
+		t.Fatalf("AttachFor: %v", err)
+	}
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: copy, Ingress: attach})
+	if err != nil {
+		t.Fatalf("the stack is not deployable: %v", err)
+	}
+	stk := e.freshStack(st)
+	in := stackops.StandaloneDeployInput{
+		EnvID: e.envID, NodeID: e.nodeID, Stack: stk, Copy: copy, Pins: e.repo, Subnets: e.repo, RevisionID: rev.ID, Caller: e.rootCaller(),
+		Ingress: e.claimWrite(loaded.Project),
+	}
+	return e.runDeploy(stk, rev, in)
+}
+
+// rollback restores revision seq of the stack the way a person's roll back does: the revision is prepared as the roll back
+// prepares it, copied as a revision of its own and deployed with the images it stored.
+func (e *hostEnv) rollback(st *stack, seq int64) (*stack, stackops.DeployResult, jobs.Job) {
+	t := e.t
+	t.Helper()
+	ctx := testsupport.Context(t)
+	stk := e.freshStack(st)
+	target, err := e.repo.Revision(ctx, st.ID, seq)
+	if err != nil {
+		t.Fatalf("read revision %d of %s: %v", seq, st.Name, err)
+	}
+	pins, err := e.repo.RevisionPins(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("read the pins of revision %d: %v", seq, err)
+	}
+	prep, err := e.deps.PrepareRollbackStandalone(ctx, stk, target, pins)
+	if err != nil {
+		t.Fatalf("revision %d cannot be rolled back to: %v", seq, err)
+	}
+	rev, err := e.repo.CopyRevision(ctx, target, "user:test", stackops.OriginRollback)
+	if err != nil {
+		t.Fatalf("copy revision %d: %v", seq, err)
+	}
+	in := stackops.StandaloneDeployInput{
+		EnvID: e.envID, NodeID: e.nodeID, Stack: stk, Copy: target.Copy, Reviewed: pins, Rollback: true,
+		Pins: e.repo, RevisionID: rev.ID, Caller: e.rootCaller(), Subnets: e.repo, RestoredSubnets: target.Subnets,
+		Ingress: e.claimWrite(prep.Loaded.Project),
+	}
+	return e.runDeploy(stk, rev, in)
+}
+
+// drift is the stack's drift check against its newest good revision, as the drift route makes it.
+func (e *hostEnv) drift(st *stack) stackops.DriftResult {
+	t := e.t
+	t.Helper()
+	ctx := testsupport.Context(t)
+	stk := e.freshStack(st)
+	good, ok, err := e.repo.LatestGoodRevision(ctx, st.ID)
+	if err != nil || !ok {
+		t.Fatalf("read the deployed revision of %s: %v (found %v)", st.Name, err, ok)
+	}
+	pins, err := e.repo.RevisionPins(ctx, good.ID)
+	if err != nil {
+		t.Fatalf("read the pins of revision %d: %v", good.Seq, err)
+	}
+	res, err := e.deps.Drift(ctx, stackops.DriftInput{EnvID: e.envID, Stack: stk, Deployed: &good, Pins: pins, Audit: e.st})
+	if err != nil {
+		t.Fatalf("drift of %s: %v", st.Name, err)
+	}
+	return res
+}
+
+// review is the review of the stack's draft against what the host runs, as the review route makes it with ingress as it is now.
+func (e *hostEnv) review(st *stack) stackops.Review {
+	t := e.t
+	t.Helper()
+	ctx := testsupport.Context(t)
+	stk := e.freshStack(st)
+	draft, err := e.repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatalf("read the draft of %s: %v", st.Name, err)
+	}
+	good, ok, err := e.repo.LatestGoodRevision(ctx, st.ID)
+	if err != nil || !ok {
+		t.Fatalf("read the deployed revision of %s: %v (found %v)", st.Name, err, ok)
+	}
+	attach, err := e.ops.AttachFor(ctx, e.envID, stacks.TargetStandalone)
+	if err != nil {
+		t.Fatalf("AttachFor: %v", err)
+	}
+	rv, err := e.deps.Review(ctx, stackops.ReviewInput{
+		EnvID: e.envID, Stack: stk, Copy: draft.Copy, DraftVersion: draft.Version, Pins: e.repo, Subnets: e.repo, Revisions: e.repo,
+		Caller: e.rootCaller(), Audit: e.st, Ingress: attach,
+		Previous: &good.Copy, Deployed: &stackops.DeployedRevision{Seq: good.Seq, By: good.CreatedBy, At: good.CreatedAt}, BaseSeq: draft.BaseSeq,
+	})
+	if err != nil {
+		t.Fatalf("review of %s: %v", st.Name, err)
+	}
+	return rv
+}
+
+// remove removes the stack, its definition with it, through the standalone removal.
+func (e *hostEnv) remove(st *stack) stackops.RemoveResult {
+	t := e.t
+	t.Helper()
+	var res stackops.RemoveResult
+	done := make(chan struct{})
+	job, err := e.jobs.Start(jobs.Spec{Kind: "stack_remove", EnvID: e.envID, Owner: "user:test", Items: stackops.RemoveItemSpecs(st.Target, nil, false)},
+		func(jctx context.Context, rep *jobs.Reporter) {
+			defer close(done)
+			res = e.deps.Remove(jctx, stackops.RemoveInput{
+				EnvID: e.envID, NodeID: e.nodeID, Stack: e.freshStack(st), Caller: e.rootCaller(), Store: e.repo,
+				ClaimActor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"},
+			}, rep)
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.waitJob(job.ID)
+	testsupport.Await(t, "the removal function to return", done)
+	return res
+}
+
+// awaitNotServed waits until the host's port 443 no longer answers host with the stack's page: the route is gone from the
+// proxy, or the proxy has nothing to show for the name.
+func (e *hostEnv) awaitNotServed(host, marker string) {
+	t := e.t
+	t.Helper()
+	dockertest.Wait(t, serveBound, "https://"+host+" on "+e.host.Hostname+":443 to stop reaching the backend", func() (bool, string) {
+		status, body, err := e.httpsGet(host)
+		if err != nil {
+			return true, ""
+		}
+		return status != http.StatusOK || !strings.Contains(body, marker), fmt.Sprintf("still served: status %d", status)
+	})
 }
