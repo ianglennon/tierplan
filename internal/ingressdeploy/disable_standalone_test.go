@@ -6,6 +6,10 @@ package ingressdeploy_test
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -475,5 +479,51 @@ func TestStandaloneDisableLeavesAVolumeAContainerStillMounts(t *testing.T) {
 		if it := itemOf(job, id); it.State != jobs.ItemSkipped {
 			t.Errorf("%s = %q, want skipped", id, it.State)
 		}
+	}
+}
+
+// brokenEngine is an engine that is up but fails every call, as a host whose read goes wrong does.
+type brokenEngine struct{ srv *httptest.Server }
+
+func newBrokenEngine(t *testing.T) *brokenEngine {
+	t.Helper()
+	version := regexp.MustCompile(`^/v[0-9.]+`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("API-Version", "1.52")
+		w.Header().Set("Content-Type", "application/json")
+		if version.ReplaceAllString(r.URL.Path, "") == "/_ping" {
+			_, _ = w.Write([]byte("OK"))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"read broke"}`))
+	}))
+	t.Cleanup(srv.Close)
+	return &brokenEngine{srv: srv}
+}
+
+func (b *brokenEngine) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", b.srv.Listener.Addr().String())
+}
+
+func (b *brokenEngine) Describe() string { return "tcp://" + b.srv.Listener.Addr().String() }
+
+// TestStandaloneDisablePreviewNamesTheContainerComposeMakes: a host that cannot be read still gets a preview, which names
+// the container as Compose names it, with its -1 (IN-B4).
+func TestStandaloneDisablePreviewNamesTheContainerComposeMakes(t *testing.T) {
+	r := newStandaloneDisableRig(t, nil)
+	cli, err := dockerx.New(newBrokenEngine(t))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	r.eng.cli = cli
+	prev, err := r.svc.PreviewDisable(testsupport.Context(t), r.envID, seesAll)
+	if err != nil {
+		t.Fatalf("PreviewDisable: %v", err)
+	}
+	if want := ingress.ProjectName + "-" + ingress.ProxyComposeService + "-1"; prev.Removes.Container != want {
+		t.Errorf("removes.container = %q, want %q", prev.Removes.Container, want)
 	}
 }

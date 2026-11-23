@@ -112,7 +112,8 @@ func (s *Service) previewDisableStandalone(ctx context.Context, info EnvInfo, ca
 	if err != nil {
 		// Read failed: the preview lists the names it would try, as the swarm's does.
 		s.log().Warn("could not read the host for a switch-off preview", "environment", info.ID, "error", err)
-		res.Removes.Container, res.Removes.Network = ingress.ProjectName+"-"+ingress.ProxyComposeService, ingress.NetworkName
+		// StandaloneProject sets no container name, so Compose names the one container <project>-<service>-1.
+		res.Removes.Container, res.Removes.Network = ingress.ProjectName+"-"+ingress.ProxyComposeService+"-1", ingress.NetworkName
 		return res, nil
 	}
 	if l.proxy != nil {
