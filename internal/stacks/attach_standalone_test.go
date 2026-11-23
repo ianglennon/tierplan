@@ -299,3 +299,43 @@ networks:
 		t.Errorf("swarm: ingress_container_name keys = %v, want none", got)
 	}
 }
+
+// The re-audit's ways onto the bridge (T-25-47): network_mode naming the ingress network counts as being on it, and a
+// hostname there is refused like a container name (the engine answers a hostname on a user bridge since Engine 25).
+func TestStandaloneHostnameAndNetworkModeOnIngressAreRefused(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27
+    hostname: other-web-b86c19eb
+    labels:
+      tierplan.ingress.host: app.example.com
+      tierplan.ingress.port: "80"
+  moded:
+    image: nginx:1.27
+    network_mode: tierplan-ingress
+    container_name: other-api-0a1b2c3d
+    hostname: other-api-0a1b2c3d
+  db:
+    image: postgres:16
+    hostname: db.internal
+`
+	var got []string
+	for _, p := range standaloneCheck(compose).Problems {
+		if p.Code == stacks.CodeIngressContainerName || p.Code == stacks.CodeIngressHostname {
+			if p.Severity != stacks.SeverityError || p.Line == 0 {
+				t.Errorf("problem %+v, want a placed error", p)
+			}
+			got = append(got, p.Code+" "+p.Key)
+		}
+	}
+	sort.Strings(got)
+	want := []string{
+		"ingress_container_name services.moded.container_name",
+		"ingress_hostname services.moded.hostname",
+		"ingress_hostname services.web.hostname",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("problems = %v, want %v", got, want)
+	}
+}

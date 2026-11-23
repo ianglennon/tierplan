@@ -447,30 +447,46 @@ func networkModeProblems(project *types.Project, idx *PositionIndex, routed []st
 // container_name, so only a standalone host refuses.
 const CodeIngressContainerName = "ingress_container_name"
 
+// CodeIngressHostname is the same for hostname: since Engine 25 the engine also answers a container's hostname on a
+// user-defined bridge (T-25-47).
+const CodeIngressHostname = "ingress_hostname"
+
 // containerNameProblems reports each service of a standalone stack that is on the shared ingress network, whether the
-// file declares it or the routing attachment put it there, and sets container_name. The error is at the container_name
-// key. It judges the project after the attachment.
+// file declares it, names it as the network mode or the routing attachment put it there, and sets container_name or
+// hostname. Each error is at its key. It judges the project after the attachment. A file that reaches the network by its
+// ID is not seen here; the deploy guard refuses it on the network the engine resolves.
 func containerNameProblems(project *types.Project, idx *PositionIndex) Problems {
 	var out Problems
-	for _, name := range sortedKeys(project.Services) {
-		svc := project.Services[name]
-		if svc.ContainerName == "" || !onIngressNetwork(project, svc) {
-			continue
-		}
-		path := "services." + name + ".container_name"
+	add := func(name, key, code, msg string) {
+		path := "services." + name + "." + key
 		node, file := idx.locateAny(path, "services."+name)
 		line, col, endLine, endCol := at(node)
 		out = append(out, Problem{
-			Severity: SeverityError, Code: CodeIngressContainerName, File: file, Key: path,
-			Line: line, Col: col, EndLine: endLine, EndCol: endCol,
-			Message: name + " is on the ingress network and sets container_name. On that network a container keeps the name TierPlan gives it, so it cannot take another stack's route name. Remove container_name.",
+			Severity: SeverityError, Code: code, File: file, Key: path,
+			Line: line, Col: col, EndLine: endLine, EndCol: endCol, Message: msg,
 		})
+	}
+	for _, name := range sortedKeys(project.Services) {
+		svc := project.Services[name]
+		if !onIngressNetwork(project, svc) {
+			continue
+		}
+		if svc.ContainerName != "" {
+			add(name, "container_name", CodeIngressContainerName, name+" is on the ingress network and sets container_name. On that network a container keeps the name TierPlan gives it, so it cannot take another stack's route name. Remove container_name.")
+		}
+		if svc.Hostname != "" {
+			add(name, "hostname", CodeIngressHostname, name+" is on the ingress network and sets hostname. The ingress network answers a container's hostname as a name, so it could take another stack's route name. Remove hostname.")
+		}
 	}
 	return out
 }
 
-// onIngressNetwork reports whether svc lists the shared ingress network, by its key or by a key whose network is named so.
+// onIngressNetwork reports whether svc is on the shared ingress network: as its network mode, by the network's key, or
+// by a key whose network is named so.
 func onIngressNetwork(project *types.Project, svc types.ServiceConfig) bool {
+	if svc.NetworkMode == ingress.NetworkName {
+		return true
+	}
 	for key := range svc.Networks {
 		if key == ingress.NetworkName {
 			return true
