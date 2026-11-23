@@ -1,5 +1,6 @@
 {
   "containers": {
+    "readOnlyIngress": "TierPlan's ingress proxy for this host. Switch ingress off to remove it.",
     "list": {
       "search": {
         "label": "Search containers",

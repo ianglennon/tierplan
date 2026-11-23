@@ -88,6 +88,8 @@ export function reasonOf(
       return t("actions.refusal.agent_policy_denied");
     case "host_read_only":
       return t("actions.refusal.host_read_only");
+    case "ingress_owned":
+      return t("containers.readOnlyIngress");
     case "container_running":
       return t("actions.refusal.container_running", { name: who.name });
     default:

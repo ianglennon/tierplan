@@ -25,7 +25,7 @@ import {
   requestReasonOf,
 } from "@/features/containers/action-dialog";
 import type { BulkReport } from "@/features/containers/bulk-result-dialog";
-import { eligibleFor, ownKind } from "@/features/containers/eligibility";
+import { appliesTo, ownKind, readOnlyIngress } from "@/features/containers/eligibility";
 import { pendingFingerprint, pendingKey, usePendingApi } from "@/features/containers/pending";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
@@ -145,13 +145,16 @@ export function ContainerRowActions({
   // button before the dialog has opened.
   const chose = useRef(false);
 
-  const canStart = eligibleFor("start", row);
-  const canStop = eligibleFor("stop", row);
-  const canRestart = eligibleFor("restart", row);
-  const canPause = eligibleFor("pause", row);
-  const canUnpause = eligibleFor("unpause", row);
-  const canKill = eligibleFor("kill", row);
-  const canRemove = eligibleFor("remove", row);
+  // The standalone ingress proxy is TierPlan's and read-only (D-09): the menu lists what fits its
+  // state, every action off with one reason, and Open stays. The server refuses them regardless.
+  const ingressRO = readOnlyIngress(row);
+  const canStart = appliesTo("start", row);
+  const canStop = appliesTo("stop", row);
+  const canRestart = appliesTo("restart", row);
+  const canPause = appliesTo("pause", row);
+  const canUnpause = appliesTo("unpause", row);
+  const canKill = appliesTo("kill", row);
+  const canRemove = appliesTo("remove", row);
   if (!canStart && !canStop && !canRestart && !canPause && !canUnpause && !canKill && !canRemove)
     return null;
   // One of TierPlan's own containers asks for its name before it is stopped,
@@ -160,10 +163,14 @@ export function ContainerRowActions({
 
   // Unavailable: the reason when the caller's role is short or the host is
   // read-only, and just unavailable while the role is not yet known.
-  const unavailable = !needs.allowed || row.readOnly;
-  const reason = needs.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined);
-  const removeUnavailable = !removeNeeds.allowed || row.readOnly;
-  const removeReason = removeNeeds.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined);
+  const unavailable = ingressRO || !needs.allowed || row.readOnly;
+  const reason = ingressRO
+    ? t("containers.readOnlyIngress")
+    : (needs.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined));
+  const removeUnavailable = ingressRO || !removeNeeds.allowed || row.readOnly;
+  const removeReason = ingressRO
+    ? t("containers.readOnlyIngress")
+    : (removeNeeds.reason ?? (row.readOnly ? t("actions.readOnlyHost") : undefined));
 
   function ask(verb: DialogVerb) {
     setDialogVerb(verb);
