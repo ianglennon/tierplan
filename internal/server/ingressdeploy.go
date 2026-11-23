@@ -160,15 +160,23 @@ func envInfoFrom(envID string, row sqlc.Environment, in envs.RollupInput) ingres
 	if in.Kind != envs.KindAgent {
 		// The local socket is one node, and its ID is the environment's.
 		probe := in.Local.Probe
-		if probe.Type == dockerx.TypeSwarmManager {
+		switch probe.Type {
+		case dockerx.TypeSwarmManager:
 			info.Swarm = true
 			info.ManagerConnected = true
 			info.Nodes = []ingressdeploy.NodeInfo{{SwarmNodeID: probe.SwarmNodeID, AgentID: envID, Name: probe.Hostname, Role: "manager", Connected: true}}
 			return info
+		case dockerx.TypeSwarmWorker:
+			// A worker is a swarm node, as envs.Clusters.IsSwarm has it: its stacks are swarm stacks, so it is not a standalone
+			// host for ingress, and the swarm path refuses it for want of a manager (WR-A4).
+			info.Swarm = true
+			info.Nodes = []ingressdeploy.NodeInfo{{SwarmNodeID: probe.SwarmNodeID, AgentID: envID, Name: probe.Hostname, Role: "worker", Connected: in.Local.State == envs.StateOnline}}
+			return info
 		}
 		info.Local = true
 		info.EngineID = probe.EngineID
-		info.Nodes = []ingressdeploy.NodeInfo{{AgentID: envID, Name: probe.Hostname, Connected: in.Local.State == envs.StateOnline}}
+		// An engine that has not been probed yet could be a swarm node, so it is not a connected standalone host.
+		info.Nodes = []ingressdeploy.NodeInfo{{AgentID: envID, Name: probe.Hostname, Connected: probe.Type != "" && in.Local.State == envs.StateOnline}}
 		return info
 	}
 	info.Swarm = in.EnvType == "swarm"

@@ -55,6 +55,38 @@ func TestEnvInfoFromStandaloneLocal(t *testing.T) {
 	}
 }
 
+// A local socket that is a swarm worker is a swarm node, as envs.Clusters.IsSwarm has it: it is never a standalone host for
+// ingress, so the swarm path refuses it for want of a manager (WR-A4). An engine that has not been probed is not a connected
+// standalone host either, since what it is is not known.
+func TestEnvInfoFromLocalWorkerAndUnprobed(t *testing.T) {
+	t.Parallel()
+	row := sqlc.Environment{ID: "env-w", Name: "Local", Kind: envs.KindLocal}
+	t.Run("a swarm worker", func(t *testing.T) {
+		in := envs.RollupInput{Kind: envs.KindLocal, Local: envs.Status{
+			State: envs.StateOnline,
+			Probe: dockerx.ProbeResult{Type: dockerx.TypeSwarmWorker, Hostname: "w1", SwarmNodeID: "sn-9", EngineID: "E9"},
+		}}
+		got := envInfoFrom("env-w", row, in)
+		want := ingressdeploy.EnvInfo{
+			ID: "env-w", Name: "Local", Swarm: true,
+			Nodes: []ingressdeploy.NodeInfo{{SwarmNodeID: "sn-9", AgentID: "env-w", Name: "w1", Role: "worker", Connected: true}},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("envInfoFrom = %+v, want %+v", got, want)
+		}
+		if got.Local || got.ManagerConnected {
+			t.Errorf("a worker is Local %v, ManagerConnected %v; want neither", got.Local, got.ManagerConnected)
+		}
+	})
+	t.Run("an engine not probed yet", func(t *testing.T) {
+		in := envs.RollupInput{Kind: envs.KindLocal, Local: envs.Status{State: envs.StateOnline}}
+		got := envInfoFrom("env-w", row, in)
+		if len(got.Nodes) != 1 || got.Nodes[0].Connected || got.Swarm {
+			t.Errorf("envInfoFrom = %+v, want one node that is not connected and no swarm", got)
+		}
+	})
+}
+
 func TestEnvInfoFromStandaloneAgent(t *testing.T) {
 	t.Parallel()
 	row := sqlc.Environment{
