@@ -5,11 +5,13 @@
 package ingressdeploy_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/proto/testsupport"
@@ -120,6 +122,65 @@ func TestStandaloneStackLifecycleOnIngress(t *testing.T) {
 		t.Errorf("a removed stack holds %v, want nothing", held)
 	}
 	e.awaitNotServed(host, webBody("shop"))
+}
+
+// TestStandaloneDisableOnHost is SC 3 and D-20 on a real standalone host. Switching ingress off is refused while a stack holds its
+// route, with nothing changed. Once the stack is gone a container of someone else's on the ingress network stops the switch-off at
+// the network item, naming it, and the steps after it are not run; once it is gone a second switch-off finishes, and the host
+// holds no proxy container, no ingress network and no certificate cache volume (PROH-25-06).
+func TestStandaloneDisableOnHost(t *testing.T) {
+	e := startHostEnv(t, false)
+	e.startRegistry()
+	requireJobDone(t, e.enable())
+	e.awaitReady()
+	host := "closing." + testDomain
+	closing, res, job := e.deployStack("closing", "services:\n"+e.routedService("web", webBody("closing"), host))
+	requireDeployed(t, "closing", res, job)
+
+	// Refused while the route is held, and the host is as it was.
+	_, err := e.deploy.Disable(testsupport.Context(t), testActor, testOwner, e.envID, func(string) bool { return true })
+	var refused *ingressdeploy.DisableRefusedError
+	if !errors.As(err, &refused) || len(refused.Findings) != 1 || refused.Findings[0].Code != ingressdeploy.CodeRoutesLive {
+		t.Fatalf("Disable with a live route returned %v, want a refusal with the one finding %s", err, ingressdeploy.CodeRoutesLive)
+	}
+	if got := e.hostObjects(); !slices.Equal(got, []string{"container", "network", "volume"}) {
+		t.Fatalf("after the refusal the host holds %v, want the proxy container, the network and the volume", got)
+	}
+	if st, err := e.deploy.Status(testsupport.Context(t), e.envID); err != nil || !st.Enabled {
+		t.Fatalf("status after the refusal = %+v (err %v), want ingress still on", st, err)
+	}
+
+	if r := e.remove(closing); !r.OK() {
+		t.Fatalf("remove = %+v", r)
+	}
+
+	// A container of someone else's on the ingress network: the switch-off names it and does not go on.
+	e.sh("docker run -d --name stray --network " + ingress.NetworkName + " " + e.webImage + " sleep 600")
+	failed := e.disable()
+	if got := itemStateOf(failed, ingressdeploy.ItemNetwork); got != "failed:"+ingressdeploy.CodeDisableNetworkFailed {
+		t.Fatalf("the network item of the switch-off with a stray container is %q, want failed:%s (items %+v)", got, ingressdeploy.CodeDisableNetworkFailed, failed.Items)
+	}
+	for _, it := range failed.Items {
+		if it.ID == ingressdeploy.ItemNetwork && !strings.Contains(it.Detail, "stray") {
+			t.Errorf("the network item's detail is %q, want it to name the container stray", it.Detail)
+		}
+	}
+	for _, id := range []string{ingressdeploy.ItemVolumes, ingressdeploy.ItemToken, ingressdeploy.ItemNodes} {
+		if got := itemStateOf(failed, id); !strings.HasPrefix(got, jobs.ItemSkipped+":") {
+			t.Errorf("item %s of the failed switch-off is %q, want it not run", id, got)
+		}
+	}
+	// The key cache is still there: it is the last thing to go.
+	if got := e.hostObjects(); !slices.Contains(got, "volume") {
+		t.Errorf("after the failed switch-off the host holds %v, want the volume kept for the next attempt", got)
+	}
+
+	// Without the stray container the same switch-off finishes, and nothing of the proxy's is left.
+	e.sh("docker rm -f stray")
+	requireJobDone(t, e.disable())
+	if got := e.hostObjects(); len(got) != 0 {
+		t.Errorf("after the switch-off the host holds %v, want no proxy container, no ingress network and no cache volume", got)
+	}
 }
 
 // hostObjects are the kinds of the proxy's objects the host holds: container (of the proxy's compose project), network and
