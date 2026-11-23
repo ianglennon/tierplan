@@ -128,6 +128,8 @@ function refusalOf(e: ShellOpenError | undefined): Refusal | null {
       return "notRunning";
     case "own_container":
       return "ownContainer";
+    case "ingress_owned":
+      return "ingressOwned";
     case "no_shell":
       return "noShell";
     case "agent_policy_denied":
@@ -465,7 +467,8 @@ function ShellPanelBody({
   // first, then what the server last refused.
   const failure = state.failure;
   let refusal: Refusal | null = null;
-  if (row?.selfKind) refusal = "ownContainer";
+  if (row?.ingressOwned) refusal = "ingressOwned";
+  else if (row?.selfKind) refusal = "ownContainer";
   else if (row?.readOnly) refusal = "readOnly";
   else if (running === false) refusal = "notRunning";
   else refusal = refusalOf(failure);

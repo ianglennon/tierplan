@@ -266,7 +266,13 @@ function MountsCard({ envId, detail }: { envId: string; detail: ContainerDetail 
 function NetworksCard({ envId, detail }: { envId: string; detail: ContainerDetail }) {
   const t = useT();
   const missing = useMissing();
-  const connect = useNeeds("networks.connect", envId);
+  const needs = useNeeds("networks.connect", envId);
+  // The standalone ingress proxy's networks are the ensure loop's, not rewired by hand (D-09):
+  // Connect and Disconnect say why. Who may comes first.
+  const connect =
+    needs.allowed && detail.ingressOwned
+      ? { allowed: false, reason: t("containers.readOnlyIngress") }
+      : needs;
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState<DisconnectDialogTarget | null>(null);
   return (

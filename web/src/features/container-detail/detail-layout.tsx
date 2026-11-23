@@ -157,6 +157,7 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
   const unavailableReason = (tab: ContainerTab): string | undefined => {
     if (tab.needs !== "containers.exec") return undefined;
     if (!shellNeeds.allowed) return shellNeeds.reason;
+    if (data?.ingressOwned) return t("containers.readOnlyIngress");
     if (data?.selfKind) return t("terminal.refusal.ownContainer");
     return undefined;
   };

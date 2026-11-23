@@ -158,7 +158,13 @@ function useChoices(props: FormProps): { choices: Choice[]; loading: boolean; bl
           .map((a) => keyOf(a.nodeId, a.id)),
       );
       const rows = (containers.data?.items ?? [])
-        .filter((c) => !on.has(keyOf(c.nodeId, c.id)) && (swarmWide || c.nodeId === network.nodeId))
+        .filter(
+          (c) =>
+            // The standalone ingress proxy is TierPlan's: its networks are the ensure loop's (D-09).
+            !c.ingressOwned &&
+            !on.has(keyOf(c.nodeId, c.id)) &&
+            (swarmWide || c.nodeId === network.nodeId),
+        )
         .map((c) => ({
           key: keyOf(c.nodeId, c.id),
           id: c.id,
@@ -252,6 +258,8 @@ function ConnectForm(props: FormProps) {
         return t("networks.connect.errors.networkGone", names);
       case "container_not_found":
         return t("networks.connect.errors.containerGone", names);
+      case "ingress_owned":
+        return t("containers.readOnlyIngress");
       case "host_read_only":
         return t("networks.errors.hostReadOnly");
       case "node_unavailable":

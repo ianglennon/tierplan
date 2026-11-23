@@ -17,7 +17,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ActionDialog, type DialogVerb } from "@/features/containers/action-dialog";
-import { eligibleFor, ownKind } from "@/features/containers/eligibility";
+import {
+  appliesTo,
+  eligibleFor,
+  ownKind,
+  readOnlyIngress,
+} from "@/features/containers/eligibility";
 import { type ImmediateAction, useImmediateAction } from "@/features/containers/row-actions";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { MuteMenuItem } from "@/features/restart-loop/mute-menu-item";
@@ -100,7 +105,11 @@ export function HeaderActions({ envId, detail }: HeaderActionsProps) {
     detail.update?.state === "update_available" && gate.shown && ownKind(row) === "";
   const canAdopt = canUpdate && gate.adopt === true && !!detail.project;
 
-  const can = (verb: Parameters<typeof eligibleFor>[0]) => eligibleFor(verb, row);
+  // The standalone ingress proxy is TierPlan's and read-only (D-09): the controls that fit its state
+  // stay on the page, off, with the one reason. The server refuses each regardless.
+  const ingressRO = readOnlyIngress(row);
+  const can = (verb: Parameters<typeof eligibleFor>[0]) =>
+    ingressRO ? appliesTo(verb, row) : eligibleFor(verb, row);
   const own = ownKind(row) !== "";
   const running = detail.state === "running";
 
@@ -158,8 +167,12 @@ export function HeaderActions({ envId, detail }: HeaderActionsProps) {
   // Unavailable: the reason when the caller's role is short or the host is
   // read-only, and just unavailable while the role is not yet known.
   const readOnlyReason = detail.readOnly ? t("actions.readOnlyHost") : undefined;
-  const reasonFor = (e: Entry) => (e.remove ? removeNeeds : needs).reason ?? readOnlyReason;
-  const unavailable = (e: Entry) => !(e.remove ? removeNeeds : needs).allowed || detail.readOnly;
+  const reasonFor = (e: Entry) =>
+    ingressRO
+      ? t("containers.readOnlyIngress")
+      : ((e.remove ? removeNeeds : needs).reason ?? readOnlyReason);
+  const unavailable = (e: Entry) =>
+    ingressRO || !(e.remove ? removeNeeds : needs).allowed || detail.readOnly;
 
   function choose(e: Entry, viaMenu: boolean) {
     if (busy) return;
