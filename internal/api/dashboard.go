@@ -178,7 +178,8 @@ type ContainerItem struct {
 	Ports           []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
 	IsSelf          bool     `json:"isSelf" doc:"True for the container TierPlan itself runs in (D-27)"`
 	Health          string   `json:"health" enum:"none,starting,healthy,unhealthy" doc:"The container's health: none when it has no healthcheck"`
-	SelfKind        string   `json:"selfKind" enum:",server,agent,ingress" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
+	SelfKind        string   `json:"selfKind" enum:",server,agent,ingress" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
+	IngressOwned    bool     `json:"ingressOwned" doc:"True for TierPlan's standalone ingress proxy container: read-only, every write is refused with ingress_owned. Switch ingress off to remove it"`
 	ReadOnly        bool     `json:"readOnly" doc:"True when the host of this container's node is read-only, so no change to it will be accepted"`
 	Project         string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack           string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
@@ -528,7 +529,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 					RestartLoop: loop,
 					Node:        c.Node, NodeID: c.NodeID, ID: c.ID, Name: c.Name, State: c.State, Status: c.Status, Image: c.Image,
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
-					Health: c.Health, SelfKind: selfKindOf(isSelf(c.ID), c.Labels), ReadOnly: readOnly[c.NodeID],
+					Health: c.Health, SelfKind: selfKindOf(isSelf(c.ID), c.Labels), IngressOwned: isIngressStandalone(c.Labels), ReadOnly: readOnly[c.NodeID],
 					Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
 					TierPlanStackID: known.confirmedFor(containerStack(c.Labels), c.Labels),
 					Update:          updateOfContainer(judged, c.ID, known),

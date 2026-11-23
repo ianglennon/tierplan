@@ -164,7 +164,7 @@ type ContainerActionResult struct {
 	ID     string `json:"id" doc:"The container ID or name the request named"`
 	Name   string `json:"name" doc:"The container name when the engine could be asked; otherwise the ID or name the request named"`
 	Result string `json:"result" enum:"done,failed,skipped" doc:"done: the engine accepted the action. failed: it was refused or could not be sent; code says why. skipped: not acted on because it is one of TierPlan's own containers in a bulk"`
-	Code   string `json:"code,omitempty" enum:"own_container,node_unreachable,not_found,host_read_only,agent_policy_denied,container_running,connection_lost,action_failed" doc:"Why a target failed. own_container (with result skipped): TierPlan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message"`
+	Code   string `json:"code,omitempty" enum:"own_container,ingress_owned,node_unreachable,not_found,host_read_only,agent_policy_denied,container_running,connection_lost,action_failed" doc:"Why a target failed. ingress_owned: the container is TierPlan's standalone ingress proxy, which only switching ingress off removes; with result failed for a single target and skipped in a bulk, and nothing is sent. own_container (with result skipped): TierPlan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message"`
 	Detail string `json:"detail,omitempty" doc:"The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence"`
 }
 
@@ -262,7 +262,8 @@ type ContainerDetailBody struct {
 	Masked    bool                   `json:"masked" doc:"True when any value was withheld from env, logConfig.options, command or entrypoint"`
 
 	IsSelf          bool   `json:"isSelf" doc:"True for the container TierPlan itself runs in"`
-	SelfKind        string `json:"selfKind" enum:",server,agent,ingress" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise"`
+	SelfKind        string `json:"selfKind" enum:",server,agent,ingress" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), empty otherwise"`
+	IngressOwned    bool   `json:"ingressOwned" doc:"True for TierPlan's standalone ingress proxy container: read-only, every write is refused with ingress_owned. Switch ingress off to remove it"`
 	Project         string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack           string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
 	Service         string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
@@ -585,7 +586,7 @@ func containerDetailBody(c dockerx.ContainerDetail, nodeID string, node envs.Nod
 		Networks: make([]ContainerNetworkBody, 0, len(c.Networks)), Labels: c.Labels,
 		Env: env, LogConfig: ContainerLogConfigBody{Type: c.LogConfig.Type, Options: opts},
 		Masked: !reveal && (len(env) > 0 || len(opts) > 0 || cmdMasked || entrypointMasked),
-		IsSelf: self, SelfKind: selfKindOf(self, c.Labels),
+		IsSelf: self, SelfKind: selfKindOf(self, c.Labels), IngressOwned: isIngressStandalone(c.Labels),
 		Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
 	}
 	for _, p := range c.Ports {
@@ -873,6 +874,19 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 	}
 	if own.Name != "" {
 		res.Name = own.Name
+	}
+	// The standalone proxy has no orchestrator to put it back, so every write to it is refused, decided
+	// here from the fresh inspect: the component label and the reserved project and service (D-09, D-41).
+	// Nothing is sent and no initiated row is written; a bulk skips it, as it does an own container.
+	if isIngressStandalone(own.Labels) {
+		res.own = ownIngress
+		res.Code, res.Detail = problemIngressOwned, ingressOwnedMessage
+		if op.single {
+			res.Result = actionFailed
+		} else {
+			res.Result = actionSkipped
+		}
+		return res
 	}
 	switch {
 	case isSelf(own.ID):

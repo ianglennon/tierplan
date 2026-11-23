@@ -102,19 +102,29 @@ func statusCounts(rows []envs.ContainerRow) StatusCountsBody {
 }
 
 // selfKindOf says whether a container is TierPlan's own server ("server"), one of
-// its agents ("agent"), a task of its ingress proxy ("ingress") or none of them
-// (""). A label can be set by anyone, so this only adds care in the UI; the
-// action endpoint decides ownership again from a fresh inspect (T-04-32).
+// its agents ("agent"), a task of its swarm ingress proxy or its standalone proxy
+// container ("ingress") or none of them (""). A label can be set by anyone, so this
+// only adds care in the UI; the action endpoint decides ownership again from a fresh
+// inspect (T-04-32).
 func selfKindOf(isSelf bool, labels map[string]string) string {
 	switch {
 	case isSelf:
 		return "server"
 	case labels[labelAgent] == "true":
 		return "agent"
-	case isIngressTask(labels):
+	case isIngressTask(labels), isIngressStandalone(labels):
 		return "ingress"
 	}
 	return ""
+}
+
+// isIngressStandalone says whether a container's labels are those of the standalone ingress proxy: the
+// component label, the reserved compose project and the proxy's compose service (D-09, D-41). It is refused
+// every write where a swarm task is only asked for a typed name, because a swarm replaces a stopped task and
+// a standalone host has no orchestrator: a stop or a remove would keep ingress down until the next ensure
+// pass. The component label alone is user-controlled, so a container that sets only it is not the proxy.
+func isIngressStandalone(labels map[string]string) bool {
+	return ingress.OwnsProxyContainer(labels)
 }
 
 // isIngressTask says whether a container's labels are those of a task of TierPlan's ingress proxy: the
