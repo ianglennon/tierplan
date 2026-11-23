@@ -247,3 +247,137 @@ func TestStandaloneEnableTakesTheOperationLock(t *testing.T) {
 		t.Error("the lock is held after the job ended")
 	}
 }
+
+// convergedHost is a host that holds everything an enable wants, the proxy created with the token of the given ID.
+func convergedHost(tokenID string) hostFixture {
+	return hostFixture{
+		Proxy:         &proxyFixture{Image: ingressdeploy.IngressImage(testServerVersion), TokenLabel: tokenID},
+		NetworkSubnet: "10.0.8.0/24", Volume: true,
+	}
+}
+
+// TestStandaloneEnableOnAConvergedHostWritesNothing: a host that holds the running proxy as wanted, its network and
+// volume, and an active node row is left alone: no token is issued, nothing is deployed, the system items end as
+// unchanged and ingress is switched on.
+func TestStandaloneEnableOnAConvergedHostWritesNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		nodeRow  bool
+		labelled bool
+	}{
+		{name: "enrolled", nodeRow: true},
+		{name: "not yet enrolled, current token label", labelled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStandaloneRig(t, standaloneRigOptions{})
+			ctx := testsupport.Context(t)
+			tok, err := r.tokens.IssueToken(ctx, testActor, r.envID, "", "test")
+			if err != nil {
+				t.Fatalf("IssueToken: %v", err)
+			}
+			r.sys.setHost(convergedHost(tok.ID))
+			if tc.nodeRow {
+				r.addNodeRow("active")
+			}
+			before := len(r.fake.Writes())
+			job := r.enable(ingressdeploy.EnableRequest{})
+			wantStandaloneDone(t, job)
+			if r.sys.deployCount() != 0 {
+				t.Errorf("deploys = %d, want 0", r.sys.deployCount())
+			}
+			if got := len(r.fake.Writes()); got != before {
+				t.Errorf("the host was written to: %v", r.fake.Writes())
+			}
+			st, err := r.tokens.TokenStatus(ctx, r.envID)
+			if err != nil || st.Generation != 1 || st.ID != tok.ID {
+				t.Errorf("TokenStatus = %+v, %v; want the token unchanged at generation 1", st, err)
+			}
+			if it := itemOf(job, ingressdeploy.ItemToken); it.Result["issued"] != "false" {
+				t.Errorf("token item result = %v, want not issued", it.Result)
+			}
+			for _, sp := range stackops.SystemItemSpecs() {
+				if it := itemOf(job, sp.ID); it.Result["unchanged"] != "true" {
+					t.Errorf("item %s result = %v, want unchanged", sp.ID, it.Result)
+				}
+			}
+			if state, err := r.istore.DeployState(ctx, r.envID); err != nil || !state.Enabled {
+				t.Errorf("DeployState = %+v, %v; want enabled", state, err)
+			}
+		})
+	}
+}
+
+// TestStandaloneEnableAfterDisableIssuesAToken: the token was disabled by a switch-off and the container is gone: the
+// enable issues the next generation and deploys with it.
+func TestStandaloneEnableAfterDisableIssuesAToken(t *testing.T) {
+	r := newStandaloneRig(t, standaloneRigOptions{})
+	ctx := testsupport.Context(t)
+	first, err := r.tokens.IssueToken(ctx, testActor, r.envID, "", "test")
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+	if err := r.tokens.DisableToken(ctx, testActor, r.envID, "", "test"); err != nil {
+		t.Fatalf("DisableToken: %v", err)
+	}
+	r.sys.setHost(hostFixture{Volume: true})
+	wantStandaloneDone(t, r.enable(ingressdeploy.EnableRequest{}))
+	st, err := r.tokens.TokenStatus(ctx, r.envID)
+	if err != nil || st.Generation != 2 || st.Disabled || st.ID == first.ID {
+		t.Fatalf("TokenStatus = %+v, %v; want a new enabled token, generation 2", st, err)
+	}
+	if r.sys.deployCount() != 1 {
+		t.Fatalf("deploys = %d, want 1", r.sys.deployCount())
+	}
+	svc := r.sys.deploys[0].Project.Services[ingress.ProxyComposeService]
+	if svc.CustomLabels[ingressdeploy.TokenLabel] != st.ID || !strings.HasPrefix(r.sys.tokens[0], ingresswire.TokenPrefix) {
+		t.Errorf("the deploy carried token label %q and value of %d bytes, want the new token", svc.CustomLabels[ingressdeploy.TokenLabel], len(r.sys.tokens[0]))
+	}
+}
+
+// TestStandalonePreflightBasics: a host that is not connected, a paused environment and an unset address each refuse
+// the preview as a finding and the enable as a preflight error, with nothing written and no job started.
+func TestStandalonePreflightBasics(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		code  string
+		setup func(*testing.T, *standaloneRig)
+		deps  func(*ingressdeploy.Deps)
+	}{
+		{name: "host not connected", code: ingressdeploy.CodeHostUnreachable, setup: func(_ *testing.T, r *standaloneRig) {
+			r.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected = false })
+		}},
+		{name: "no node at all", code: ingressdeploy.CodeHostUnreachable, setup: func(_ *testing.T, r *standaloneRig) {
+			r.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes = nil })
+		}},
+		{name: "paused", code: ingressdeploy.CodePaused, setup: func(t *testing.T, r *standaloneRig) {
+			if _, err := r.istore.SetPaused(testsupport.Context(t), r.envID, true, "restore", nil); err != nil {
+				t.Fatalf("SetPaused: %v", err)
+			}
+		}},
+		{name: "url unset", code: ingressdeploy.CodeURLUnset, deps: func(d *ingressdeploy.Deps) { d.URL = func() string { return "" } }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStandaloneRig(t, standaloneRigOptions{deps: tc.deps})
+			if tc.setup != nil {
+				tc.setup(t, r)
+			}
+			res, err := r.svc.Preview(testsupport.Context(t), r.envID, ingressdeploy.EnableRequest{})
+			if err != nil {
+				t.Fatalf("Preview: %v", err)
+			}
+			if f, ok := findingOf(res.Findings, tc.code); !ok || f.Severity != ingressdeploy.SeverityError {
+				t.Fatalf("preview findings = %+v, want %s as an error", res.Findings, tc.code)
+			}
+			if !res.Plan.Standalone {
+				t.Error("the preview's plan is not marked standalone")
+			}
+			wantRefusal(t, r.rig, ingressdeploy.EnableRequest{}, tc.code)
+			if r.sys.deployCount() != 0 {
+				t.Error("a refused enable deployed")
+			}
+			if st, _ := r.tokens.TokenStatus(testsupport.Context(t), r.envID); st.Exists {
+				t.Error("a refused enable issued a join token")
+			}
+		})
+	}
+}
