@@ -159,3 +159,27 @@ func TestNewIngressDeployWiresTheSystemDeployer(t *testing.T) {
 		t.Errorf("Preview of a standalone environment answered a swarm plan: %+v", res.Plan)
 	}
 }
+
+// The host read the server gives the ingress stacks adapter reaches a standalone environment's node through the
+// aggregator, so a host that is not connected is an error and the read never runs (D-16, D-18).
+func TestIngressHostReadNeedsAConnectedHost(t *testing.T) {
+	ctx := testsupport.Context(t)
+	srv, err := Build(ctx, testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": filepath.Join(t.TempDir(), "data")}), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if _, err := srv.store.Write.ExecContext(ctx,
+		`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, env_type)
+		 VALUES ('env-host', 'agent', 'Edge host', '', 1, 1, 1, 'standalone')`); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	err = ingressHostRead(srv.aggregator)(ctx, "env-host", func(*dockerx.Client) error { ran = true; return nil })
+	if err == nil {
+		t.Error("host read of a standalone environment with no connected host answered no error")
+	}
+	if ran {
+		t.Error("the read ran on a host that is not connected")
+	}
+}
