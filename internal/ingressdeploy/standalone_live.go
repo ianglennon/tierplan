@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
@@ -19,6 +20,8 @@ import (
 type standaloneLive struct {
 	// proxy is the proxy container of the compose project, nil when there is none.
 	proxy *dockerx.ComposeContainer
+	// StartedAt is when the proxy container last started, the zero time when the engine says none.
+	StartedAt time.Time
 	// accessLog is true when the proxy's environment switches the access log on.
 	accessLog bool
 	// network is the proxy's bridge network when the host holds one that is TierPlan's, nil otherwise.
@@ -54,6 +57,9 @@ func (s *Service) readStandaloneLive(ctx context.Context, info EnvInfo) (standal
 			det, _, err := c.ContainerDetail(ctx, l.proxy.ID)
 			if err != nil {
 				return err
+			}
+			if t, err := time.Parse(time.RFC3339Nano, det.StartedAt); err == nil && t.Year() > 1 {
+				l.StartedAt = t.UTC()
 			}
 			for _, kv := range det.Env {
 				if kv == ingressbundle.EnvAccessLog+"="+accessLogOn {

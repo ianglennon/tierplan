@@ -172,7 +172,7 @@ func (s *Service) ensure(ctx context.Context, envID string, state ingressstore.D
 		return EnsureUnreachable, true
 	}
 	if !info.Swarm {
-		return "", false
+		return s.ensureStandalone(ctx, envID, state, info)
 	}
 	if !info.ManagerConnected {
 		return EnsureUnreachable, true
