@@ -221,6 +221,7 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	res.Problems = append(res.Problems, volumeReservedProblems(loaded.Project, idx)...)
 	if in.Target == TargetStandalone {
 		res.Problems = append(res.Problems, networkModeProblems(loaded.Project, idx, routed)...)
+		res.Problems = append(res.Problems, containerNameProblems(loaded.Project, idx)...)
 	}
 	res.Problems = append(res.Problems, aliasProblems...)
 	res.Problems = res.Problems.Sorted()

@@ -6,6 +6,7 @@ package stacks_test
 import (
 	"context"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -238,5 +239,63 @@ func TestStandaloneRoutedServiceWithNetworkModeIsRefused(t *testing.T) {
 		if p.Code == stacks.CodeIngressNetworkMode {
 			t.Errorf("ingress off still reported %+v", p)
 		}
+	}
+}
+
+// A service of a standalone stack on the shared ingress bridge that sets container_name is refused (T-25-47): the engine
+// resolves a container's own name there, and a name equal to another stack's alias would take that stack's route. Both
+// ways onto the bridge are judged: the routing attachment and an external declaration in the file. A service off the
+// bridge keeps its container_name, and a swarm ignores container_name.
+func TestStandaloneContainerNameOnIngressIsRefused(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27
+    container_name: shop-web
+    labels:
+      tierplan.ingress.host: app.example.com
+      tierplan.ingress.port: "80"
+  spoof:
+    image: nginx:1.27
+    container_name: other-web-b86c19eb
+    networks: [edge]
+  db:
+    image: postgres:16
+    container_name: shop-db
+networks:
+  edge:
+    external: true
+    name: tierplan-ingress
+`
+	keys := func(res stacks.CheckResult) []string {
+		var out []string
+		for _, p := range res.Problems {
+			if p.Code != stacks.CodeIngressContainerName {
+				continue
+			}
+			if p.Severity != stacks.SeverityError || p.Line == 0 {
+				t.Errorf("problem %+v, want a placed error", p)
+			}
+			out = append(out, p.Key)
+		}
+		sort.Strings(out)
+		return out
+	}
+	want := []string{"services.spoof.container_name", "services.web.container_name"}
+	if got := keys(standaloneCheck(compose)); !reflect.DeepEqual(got, want) {
+		t.Errorf("ingress_container_name keys = %v, want %v", got, want)
+	}
+	// Ingress off: the routed service is not attached, but the declared join is still refused.
+	off := stacks.Check(context.Background(), stacks.CheckInput{Name: "shop", Target: stacks.TargetStandalone, Copy: copyOf(compose)})
+	if got, want := keys(off), []string{"services.spoof.container_name"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ingress off: ingress_container_name keys = %v, want %v", got, want)
+	}
+	// A swarm ignores container_name: nothing is refused for it.
+	sw := stacks.Check(context.Background(), stacks.CheckInput{
+		Name: "shop", Target: stacks.TargetSwarm, Copy: copyOf(compose),
+		Ingress: &stacks.IngressAttach{Network: ingress.NetworkName},
+	})
+	if got := keys(sw); len(got) != 0 {
+		t.Errorf("swarm: ingress_container_name keys = %v, want none", got)
 	}
 }

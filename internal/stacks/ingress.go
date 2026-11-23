@@ -440,6 +440,48 @@ func networkModeProblems(project *types.Project, idx *PositionIndex, routed []st
 	return out
 }
 
+// CodeIngressContainerName is a compose file whose service on a standalone host joins the shared ingress bridge and sets
+// container_name. The engine resolves a container's own name on a user-defined bridge, and a routed backend's alias is
+// built from public names (ingress.Alias), so a container named after another stack's alias would answer that name and
+// take its traffic (T-25-47). On the shared bridge a container keeps the name the SDK gives it. A swarm ignores
+// container_name, so only a standalone host refuses.
+const CodeIngressContainerName = "ingress_container_name"
+
+// containerNameProblems reports each service of a standalone stack that is on the shared ingress network, whether the
+// file declares it or the routing attachment put it there, and sets container_name. The error is at the container_name
+// key. It judges the project after the attachment.
+func containerNameProblems(project *types.Project, idx *PositionIndex) Problems {
+	var out Problems
+	for _, name := range sortedKeys(project.Services) {
+		svc := project.Services[name]
+		if svc.ContainerName == "" || !onIngressNetwork(project, svc) {
+			continue
+		}
+		path := "services." + name + ".container_name"
+		node, file := idx.locateAny(path, "services."+name)
+		line, col, endLine, endCol := at(node)
+		out = append(out, Problem{
+			Severity: SeverityError, Code: CodeIngressContainerName, File: file, Key: path,
+			Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+			Message: name + " is on the ingress network and sets container_name. On that network a container keeps the name TierPlan gives it, so it cannot take another stack's route name. Remove container_name.",
+		})
+	}
+	return out
+}
+
+// onIngressNetwork reports whether svc lists the shared ingress network, by its key or by a key whose network is named so.
+func onIngressNetwork(project *types.Project, svc types.ServiceConfig) bool {
+	for key := range svc.Networks {
+		if key == ingress.NetworkName {
+			return true
+		}
+		if n, ok := project.Networks[key]; ok && n.Name == ingress.NetworkName {
+			return true
+		}
+	}
+	return false
+}
+
 // CodeIngressNetworkAlias is a compose file that gives a service aliases on the shared ingress network
 // (W-1): the proxy reaches each routed backend by its <stack>_<service> name on that network, so an alias
 // there could take another stack's backend name and receive its traffic.
