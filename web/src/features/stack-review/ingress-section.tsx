@@ -17,7 +17,8 @@ import { useT } from "@/i18n/use-t";
 
 interface IngressSectionProps {
   ingress: StackReviewIngress | undefined;
-  // The kind of host the stack deploys to. A standalone host joins no ingress network.
+  // The kind of host the stack deploys to. On a standalone host a join or a leave recreates a container, where on a
+  // swarm it replaces tasks.
   target?: string;
 }
 
@@ -50,15 +51,15 @@ function NetworkChange({ change }: { change: "joins" | "leaves" }) {
 }
 
 // IngressSection is the Ingress card of the review's Changes tab (D-21, D-22): the routes a deploy adds, keeps and
-// releases, the certificate each hostname will have and, on a swarm, the services that join or leave the ingress
-// network and so get their tasks replaced. It is read-only and has no loading state of its own (the page already
+// releases, the certificate each hostname will have and the services that join or leave the ingress network and so
+// get their tasks (a swarm) or their container (a standalone host) replaced. It is read-only and has no loading state of its own (the page already
 // says it is checking the stack). A review with no route, certificate or attachment draws nothing. Warnings and
 // violations are not drawn here: they arrive in the review's problems. Every value is text.
 export function IngressSection({ ingress, target }: IngressSectionProps) {
   const t = useT();
   const routes = ingress?.routes ?? [];
   const certificates = ingress?.certificates ?? [];
-  const network = target === "standalone" ? [] : (ingress?.network ?? []);
+  const network = ingress?.network ?? [];
   if (routes.length === 0 && certificates.length === 0 && network.length === 0) return null;
 
   const count = (change: "added" | "kept" | "released") =>
@@ -181,7 +182,11 @@ export function IngressSection({ ingress, target }: IngressSectionProps) {
                     {n.replacesTasks ? (
                       <span className="inline-flex items-center gap-1.5">
                         <RotateCw aria-hidden="true" className="size-3.5" />
-                        {t("stackIngress.review.network.replaces")}
+                        {t(
+                          target === "standalone"
+                            ? "stackIngress.review.network.recreates"
+                            : "stackIngress.review.network.replaces",
+                        )}
                       </span>
                     ) : (
                       t("stackIngress.review.network.noRestart")

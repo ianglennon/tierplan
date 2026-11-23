@@ -96,11 +96,11 @@ describe("IngressSection", () => {
     ]);
   });
 
-  it("draws the server's note, and a dash where there is none", () => {
+  it("draws a route's note when the server sends one, and a dash where there is none", () => {
     render(
       <IngressSection
         ingress={{
-          routes: [route({ note: "Not served on this host yet." }), route({ hostname: "z.test" })],
+          routes: [route({ note: "Waiting for the host." }), route({ hostname: "z.test" })],
           certificates: [],
           network: [],
         }}
@@ -111,7 +111,7 @@ describe("IngressSection", () => {
       .getAllByRole("row")
       .slice(1);
     expect(within(rows[0] as HTMLElement).getAllByRole("cell")[6]?.textContent).toBe(
-      "Not served on this host yet.",
+      "Waiting for the host.",
     );
     expect(within(rows[1] as HTMLElement).getAllByRole("cell")[6]?.textContent).toBe("—");
   });
@@ -179,11 +179,15 @@ describe("IngressSection", () => {
     ).toBeTruthy();
   });
 
-  it("draws no network table for a standalone host, nor when no attachment changes", () => {
+  it("draws the network table for a standalone host and says its container is recreated", () => {
     render(<IngressSection ingress={populated()} target="standalone" />);
-    expect(screen.queryByRole("table", { name: "Network changes" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Network" })).toBeNull();
-    cleanup();
+    const table = screen.getByRole("table", { name: "Network changes" });
+    expect(within(table).getByText("Recreates its container")).toBeTruthy();
+    expect(within(table).queryByText("Replaces its tasks")).toBeNull();
+    expect(within(table).getByText("No restart")).toBeTruthy();
+  });
+
+  it("draws no network table when no attachment changes", () => {
     render(<IngressSection ingress={{ ...populated(), network: [] }} target="swarm" />);
     expect(screen.queryByRole("table", { name: "Network changes" })).toBeNull();
   });
@@ -192,18 +196,6 @@ describe("IngressSection", () => {
     const { container, rerender } = render(<IngressSection ingress={undefined} target="swarm" />);
     expect(container.innerHTML).toBe("");
     rerender(<IngressSection ingress={{ routes: null, certificates: null, network: null }} />);
-    expect(container.innerHTML).toBe("");
-    // Only an attachment, and it is a standalone host: nothing to show.
-    rerender(
-      <IngressSection
-        ingress={{
-          routes: [],
-          certificates: [],
-          network: [{ service: "web", change: "joins", replacesTasks: true }],
-        }}
-        target="standalone"
-      />,
-    );
     expect(container.innerHTML).toBe("");
   });
 

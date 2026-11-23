@@ -645,7 +645,7 @@ describe("the Changes tab", () => {
     expect(screen.queryByRole("heading", { name: "Ingress" })).toBeNull();
   });
 
-  it("leaves the network table out of the card for a standalone stack", async () => {
+  it("draws the network table in the card for a standalone stack, saying its container is recreated", async () => {
     target = "standalone";
     review = () =>
       Response.json(
@@ -660,7 +660,6 @@ describe("the Changes tab", () => {
                 port: 8080,
                 scheme: "http",
                 service: "web",
-                note: "Not served on this host yet.",
               },
             ],
             certificates: [],
@@ -670,7 +669,8 @@ describe("the Changes tab", () => {
       );
     mount();
     expect(await screen.findByRole("table", { name: "Routes" })).toBeTruthy();
-    expect(screen.queryByRole("table", { name: "Network changes" })).toBeNull();
+    expect(screen.getByRole("table", { name: "Network changes" })).toBeTruthy();
+    expect(screen.getByText("Recreates its container")).toBeTruthy();
   });
 
   it("lists every service as Added on a first deploy and says nothing from the stack is running", async () => {

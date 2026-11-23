@@ -21,8 +21,7 @@
           "added": "Added",
           "kept": "Kept",
           "released": "Released"
-        },
-        "noBackend": "Not served on this host yet."
+        }
       },
       "certificates": {
         "heading": "Certificates",
@@ -50,6 +49,7 @@
         "joins": "Joins {{network}}",
         "leaves": "Leaves {{network}}",
         "replaces": "Replaces its tasks",
+        "recreates": "Recreates its container",
         "noRestart": "No restart",
         "footnote": "TierPlan attaches routed services to the ingress network itself. It never appears in your compose file."
       }
