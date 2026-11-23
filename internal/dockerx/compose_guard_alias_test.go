@@ -5,6 +5,7 @@ package dockerx
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -42,6 +43,9 @@ func (r *recordingEngine) ContainerInspect(_ context.Context, _ string, _ client
 
 const uniqueAlias = "shop-web-4f2a9c1d7b3e"
 
+// shopWebLabels are the labels the SDK puts on replica 1 of service web in project shop.
+var shopWebLabels = map[string]string{composeProjectLabel: "shop", composeServiceLabel: "web", composeNumberLabel: "1"}
+
 func TestGuardStripsTheBareServiceAliasOnTheIngressNetwork(t *testing.T) {
 	t.Parallel()
 	eng := &recordingEngine{}
@@ -51,7 +55,7 @@ func TestGuardStripsTheBareServiceAliasOnTheIngressNetwork(t *testing.T) {
 	defaultEP := &network.EndpointSettings{Aliases: []string{"web", "shop-web-1"}}
 	in := client.ContainerCreateOptions{
 		Name:   "shop-web-1",
-		Config: &container.Config{Image: "nginx", Labels: map[string]string{composeServiceLabel: "web"}},
+		Config: &container.Config{Image: "nginx", Labels: shopWebLabels},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
 			"shop_default":      defaultEP,
 			ingress.NetworkName: ingressEP,
@@ -88,7 +92,7 @@ func TestGuardStripsTheContainerNameAliasOfARecreate(t *testing.T) {
 	g := guardClient{APIClient: eng}
 	in := client.ContainerCreateOptions{
 		Name:   "0123456789ab_shop-web-1",
-		Config: &container.Config{Image: "nginx", Labels: map[string]string{composeServiceLabel: "web"}},
+		Config: &container.Config{Image: "nginx", Labels: shopWebLabels},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
 			ingress.NetworkName: {Aliases: []string{"web", "shop-web-1", uniqueAlias}},
 		}},
@@ -124,7 +128,7 @@ func TestGuardRewritesNetworkConnectOnTheIngressNetwork(t *testing.T) {
 	t.Parallel()
 	eng := &recordingEngine{inspected: container.InspectResponse{
 		Name:   "/shop-web-1",
-		Config: &container.Config{Labels: map[string]string{composeServiceLabel: "web"}},
+		Config: &container.Config{Labels: shopWebLabels},
 	}}
 	g := guardClient{APIClient: eng}
 
@@ -169,5 +173,56 @@ func TestIngressAliases(t *testing.T) {
 		if got := ingressAliases(c.in, c.service, c.container); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// On the ingress network a container keeps the SDK's name for its replica (T-25-47): a create or a connect under any
+// other name, such as another stack's alias set by container_name, is refused before the engine sees it. The SDK's own
+// name, and a recreate's temporary one, pass; a create with no ingress endpoint is not judged.
+func TestGuardRefusesAChosenContainerNameOnTheIngressNetwork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	create := func(name string, labels map[string]string, net string) error {
+		eng := &recordingEngine{}
+		g := guardClient{APIClient: eng}
+		_, err := g.ContainerCreate(ctx, client.ContainerCreateOptions{
+			Name:   name,
+			Config: &container.Config{Image: "nginx", Labels: labels},
+			NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+				net: {Aliases: []string{"web", name}},
+			}},
+		})
+		if err != nil && len(eng.created) != 0 {
+			t.Errorf("a refused create %q reached the engine", name)
+		}
+		return err
+	}
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		net    string
+		ok     bool
+	}{
+		{"shop-web-1", shopWebLabels, ingress.NetworkName, true},
+		{"0123456789ab_shop-web-1", shopWebLabels, ingress.NetworkName, true},
+		{"other-web-b86c19eb", shopWebLabels, ingress.NetworkName, false},
+		{"shop-web-2", shopWebLabels, ingress.NetworkName, false},
+		{"shop-web-1", map[string]string{composeServiceLabel: "web"}, ingress.NetworkName, false},
+		{"other-web-b86c19eb", shopWebLabels, "shop_default", true},
+	} {
+		err := create(tc.name, tc.labels, tc.net)
+		if tc.ok && err != nil {
+			t.Errorf("create %q on %s: %v, want it forwarded", tc.name, tc.net, err)
+		}
+		if !tc.ok && !errors.Is(err, ErrIngressContainerName) {
+			t.Errorf("create %q on %s: %v, want ErrIngressContainerName", tc.name, tc.net, err)
+		}
+	}
+
+	eng := &recordingEngine{inspected: container.InspectResponse{Name: "/other-web-b86c19eb", Config: &container.Config{Labels: shopWebLabels}}}
+	g := guardClient{APIClient: eng}
+	_, err := g.NetworkConnect(ctx, ingress.NetworkName, client.NetworkConnectOptions{Container: "c1", EndpointConfig: &network.EndpointSettings{}})
+	if !errors.Is(err, ErrIngressContainerName) || len(eng.connected) != 0 {
+		t.Errorf("connect of a chosen name: err %v, %d connects reached the engine; want ErrIngressContainerName and none", err, len(eng.connected))
 	}
 }

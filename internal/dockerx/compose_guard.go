@@ -403,6 +403,29 @@ func (guardClient) CheckpointList(_ context.Context, _ string, _ client.Checkpoi
 // composeServiceLabel is the label the Compose SDK puts on every container it creates, naming the service.
 const composeServiceLabel = "com.docker.compose.service"
 
+// The labels the Compose SDK puts on every container it creates naming its project and its replica number.
+const (
+	composeProjectLabel = "com.docker.compose.project"
+	composeNumberLabel  = "com.docker.compose.container-number"
+)
+
+// ErrIngressContainerName is a create or connect on the shared ingress network for a container whose name is not the one
+// the SDK gives a replica, <project>-<service>-<number>. The engine resolves a container's own name on that bridge, so a
+// chosen name could equal another stack's alias and take its route (T-25-47). Check refuses container_name there
+// (ingress_container_name); this is the backstop for any path that reaches the engine without that check.
+var ErrIngressContainerName = errors.New("dockerx: on the ingress network a container keeps the name the stack deploy gives it")
+
+// ingressNameAllowed reports whether name is the SDK's own name for the replica the labels describe, allowing the
+// temporary <id12>_ prefix of a recreate.
+func ingressNameAllowed(name string, labels map[string]string) bool {
+	project, service, number := labels[composeProjectLabel], labels[composeServiceLabel], labels[composeNumberLabel]
+	if project == "" || service == "" || number == "" {
+		return false
+	}
+	final := recreateNamePrefix.ReplaceAllString(strings.TrimPrefix(name, "/"), "")
+	return final == project+"-"+service+"-"+number
+}
+
 // ingressAliases is the alias list the guard lets reach the engine on the shared ingress network: the aliases
 // the SDK built, less the bare compose service name and the container's own name, which the SDK adds to every
 // endpoint (create.go getAliases). Every other alias keeps its place; nil when none is left.
@@ -446,10 +469,14 @@ func ingressEndpoint(ep *network.EndpointSettings, service, container string) *n
 func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	if o.NetworkingConfig != nil {
 		if ep := o.NetworkingConfig.EndpointsConfig[ingress.NetworkName]; ep != nil {
-			var service string
+			var labels map[string]string
 			if o.Config != nil {
-				service = o.Config.Labels[composeServiceLabel]
+				labels = o.Config.Labels
 			}
+			if !ingressNameAllowed(o.Name, labels) {
+				return client.ContainerCreateResult{}, fmt.Errorf("%w: %s", ErrIngressContainerName, o.Name)
+			}
+			service := labels[composeServiceLabel]
 			nc := *o.NetworkingConfig
 			nc.EndpointsConfig = maps.Clone(o.NetworkingConfig.EndpointsConfig)
 			nc.EndpointsConfig[ingress.NetworkName] = ingressEndpoint(ep, service, o.Name)
@@ -461,19 +488,24 @@ func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCrea
 
 // NetworkConnect is the same rewrite for an engine older than API 1.44, where the SDK joins the extra networks
 // of a container one by one after the create with the same endpoint settings. The network is named by name,
-// as the SDK passes it. The container's compose service label is read from the engine only when the endpoint
-// has aliases to rewrite.
+// as the SDK passes it. The container is read from the engine for its name and labels: a container not named as
+// the SDK names a replica is refused (T-25-47), and the aliases are rewritten when there are any.
 func (g guardClient) NetworkConnect(ctx context.Context, networkID string, o client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
-	if networkID == ingress.NetworkName && o.EndpointConfig != nil && len(o.EndpointConfig.Aliases) > 0 {
+	if networkID == ingress.NetworkName {
 		res, err := g.ContainerInspect(ctx, o.Container, client.ContainerInspectOptions{})
 		if err != nil {
 			return client.NetworkConnectResult{}, err
 		}
-		var service string
+		var labels map[string]string
 		if res.Container.Config != nil {
-			service = res.Container.Config.Labels[composeServiceLabel]
+			labels = res.Container.Config.Labels
 		}
-		o.EndpointConfig = ingressEndpoint(o.EndpointConfig, service, res.Container.Name)
+		if !ingressNameAllowed(res.Container.Name, labels) {
+			return client.NetworkConnectResult{}, fmt.Errorf("%w: %s", ErrIngressContainerName, strings.TrimPrefix(res.Container.Name, "/"))
+		}
+		if o.EndpointConfig != nil && len(o.EndpointConfig.Aliases) > 0 {
+			o.EndpointConfig = ingressEndpoint(o.EndpointConfig, labels[composeServiceLabel], res.Container.Name)
+		}
 	}
 	return g.APIClient.NetworkConnect(ctx, networkID, o)
 }
