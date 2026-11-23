@@ -453,20 +453,11 @@ func (r *ingressResolver) isIngress(ctx context.Context, ref string) (bool, erro
 		strings.HasPrefix(ref, "container:"), strings.HasPrefix(ref, "service:"):
 		return false, nil
 	}
-	if !r.read {
-		r.read = true
-		res, err := r.g.NetworkInspect(ctx, ingress.NetworkName, client.NetworkInspectOptions{})
-		switch {
-		case err == nil:
-			r.ingress = res.Network.ID
-		case !IsNotFound(err):
-			r.readFail = fmt.Errorf("dockerx: read the ingress network before joining %s: %w", ref, err)
-		}
+	id, err := r.ingressID(ctx)
+	if err != nil {
+		return false, err
 	}
-	if r.readFail != nil {
-		return false, r.readFail
-	}
-	if r.ingress != "" && strings.HasPrefix(r.ingress, strings.ToLower(ref)) {
+	if prefixOf(id, ref) {
 		return true, nil
 	}
 	res, err := r.g.NetworkInspect(ctx, ref, client.NetworkInspectOptions{})
@@ -476,7 +467,49 @@ func (r *ingressResolver) isIngress(ctx context.Context, ref string) (bool, erro
 		}
 		return false, fmt.Errorf("dockerx: read network %s before joining it: %w", ref, err)
 	}
-	return res.Network.Name == ingress.NetworkName, nil
+	// The engine keeps an endpoint under the network's name and looks that name up again at start, so a network whose
+	// name is a prefix of the ingress ID is the ingress network once it is gone, however the reference named it (T-25-47,
+	// third re-audit).
+	return res.Network.Name == ingress.NetworkName || prefixOf(id, res.Network.Name), nil
+}
+
+// ingressID is the ingress network's full ID, read once; empty when the host has none. A failure to read other than
+// not-found is returned.
+func (r *ingressResolver) ingressID(ctx context.Context) (string, error) {
+	if !r.read {
+		r.read = true
+		res, err := r.g.NetworkInspect(ctx, ingress.NetworkName, client.NetworkInspectOptions{})
+		switch {
+		case err == nil:
+			r.ingress = res.Network.ID
+		case !IsNotFound(err):
+			r.readFail = fmt.Errorf("dockerx: read the ingress network: %w", err)
+		}
+	}
+	return r.ingress, r.readFail
+}
+
+// prefixOf reports whether ref, lower-cased, is a non-empty prefix of the network ID id, which the engine would match to
+// that network when no network is named ref.
+func prefixOf(id, ref string) bool {
+	return id != "" && ref != "" && strings.HasPrefix(id, strings.ToLower(ref))
+}
+
+// ErrIngressNetworkName is a network a stack deploy would create under a name that is a prefix of the ingress network's
+// ID: once such a network is gone, the engine resolves its name to the ingress network, so it could carry a container
+// onto the shared bridge past every check (T-25-47).
+var ErrIngressNetworkName = errors.New("dockerx: a stack's network may not be named with the start of the ingress network's ID")
+
+// NetworkCreate refuses a network named with a prefix of the ingress network's ID, and forwards every other create.
+func (g guardClient) NetworkCreate(ctx context.Context, name string, o client.NetworkCreateOptions) (client.NetworkCreateResult, error) {
+	id, err := g.ingressResolver().ingressID(ctx)
+	if err != nil {
+		return client.NetworkCreateResult{}, err
+	}
+	if prefixOf(id, name) {
+		return client.NetworkCreateResult{}, fmt.Errorf("%w: %s", ErrIngressNetworkName, name)
+	}
+	return g.APIClient.NetworkCreate(ctx, name, o)
 }
 
 // ingressNamesAllowed judges what a container would be called on the ingress network: the SDK's name for its replica,

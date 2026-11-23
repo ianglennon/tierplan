@@ -28,7 +28,8 @@ type recordingEngine struct {
 	inspected container.InspectResponse
 	// nets maps what a create or connect may name a network by (a name, an ID or an ID prefix) to the network's name.
 	// The ingress network is known by its name and by ingressID; any other reference is not found.
-	nets map[string]string
+	nets       map[string]string
+	netCreated []string
 }
 
 const ingressID = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
@@ -385,4 +386,57 @@ func (d decoyFirst) NetworkInspect(ctx context.Context, ref string, o client.Net
 		return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{ID: "id-decoy", Name: "decoy"}}}, nil
 	}
 	return d.recordingEngine.NetworkInspect(ctx, ref, o)
+}
+
+// A decoy named with the start of the ingress ID and referenced by its own full ID is still the ingress network: the
+// engine keeps the endpoint under the decoy's name and resolves that name to the ingress network once the decoy is gone
+// (T-25-47, third re-audit). A network may not be created under such a name, and any other name is created.
+func TestGuardTreatsANetworkNamedWithAnIngressIDPrefixAsTheIngressNetwork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	decoyName := ingressID[:9]
+	eng := &recordingEngine{}
+	g := guardClient{APIClient: decoyByID{eng, decoyName}}
+	_, err := g.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:       "other-web-b86c19eb",
+		Config:     &container.Config{Image: "nginx", Labels: shopWebLabels},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(decoyFullID)},
+	})
+	if !errors.Is(err, ErrIngressName) || len(eng.created) != 0 {
+		t.Errorf("create on a decoy by its ID: err %v, %d creates; want ErrIngressName and none", err, len(eng.created))
+	}
+	_, err = g.NetworkConnect(ctx, decoyFullID, client.NetworkConnectOptions{Container: "c1", EndpointConfig: &network.EndpointSettings{}})
+	if !errors.Is(err, ErrIngressName) || len(eng.connected) != 0 {
+		t.Errorf("connect to a decoy by its ID: err %v; want ErrIngressName and no connect", err)
+	}
+
+	if _, err := g.NetworkCreate(ctx, decoyName, client.NetworkCreateOptions{}); !errors.Is(err, ErrIngressNetworkName) {
+		t.Errorf("create a network named %s: %v, want ErrIngressNetworkName", decoyName, err)
+	}
+	if _, err := g.NetworkCreate(ctx, strings.ToUpper(decoyName), client.NetworkCreateOptions{}); !errors.Is(err, ErrIngressNetworkName) {
+		t.Errorf("create a network named %s: %v, want ErrIngressNetworkName", strings.ToUpper(decoyName), err)
+	}
+	if _, err := g.NetworkCreate(ctx, "shop_default", client.NetworkCreateOptions{}); err != nil || len(eng.netCreated) != 1 {
+		t.Errorf("create shop_default: %v, %d creates; want it forwarded", err, len(eng.netCreated))
+	}
+}
+
+const decoyFullID = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+// decoyByID answers the decoy's full ID with the decoy, a network named name, and anything else as the engine behind it.
+type decoyByID struct {
+	*recordingEngine
+	name string
+}
+
+func (d decoyByID) NetworkInspect(ctx context.Context, ref string, o client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	if ref == decoyFullID {
+		return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{ID: decoyFullID, Name: d.name}}}, nil
+	}
+	return d.recordingEngine.NetworkInspect(ctx, ref, o)
+}
+
+func (r *recordingEngine) NetworkCreate(_ context.Context, name string, _ client.NetworkCreateOptions) (client.NetworkCreateResult, error) {
+	r.netCreated = append(r.netCreated, name)
+	return client.NetworkCreateResult{ID: "n-" + name}, nil
 }
