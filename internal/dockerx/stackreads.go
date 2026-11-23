@@ -160,6 +160,22 @@ func (c *Client) RunningContainers(ctx context.Context) ([]ContainerRow, error) 
 	return containerRows(cs.Items), nil
 }
 
+// ContainersOnNetwork names the containers, stopped ones too, that are attached to the network of that name, sorted. An
+// attached container is what keeps an engine from removing the network. It is read-only and works on any engine.
+func (c *Client) ContainersOnNetwork(ctx context.Context, network string) ([]string, error) {
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
+	}
+	names := []string{}
+	for _, row := range containerRows(cs.Items) {
+		if slices.ContainsFunc(row.Networks, func(n ContainerNet) bool { return n.Name == network }) {
+			names = append(names, row.Name)
+		}
+	}
+	return names, nil
+}
+
 // PublishedPort is one host TCP port a container binds, as ContainersPublishing reads it.
 type PublishedPort struct {
 	ID, Name, State string
