@@ -12,6 +12,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 )
 
 // nodeActive is the status of an enrolled ingress node that has not been revoked.
@@ -46,9 +47,13 @@ type Status struct {
 	Redeploy []StackRef
 }
 
-// StatusObjects says which of the ingress objects the swarm holds.
+// StatusObjects says which of the ingress objects the environment holds. A swarm holds a network, a service and a secret;
+// a standalone host holds the proxy's container, a network and the cache volume, so the fields that are not its kind's
+// stay false.
 type StatusObjects struct {
 	Network, Service, Secret bool
+	// Container and Volume are a standalone host's proxy container and certificate cache volume.
+	Container, Volume bool
 }
 
 // StatusNodes counts the proxy nodes.
@@ -58,15 +63,12 @@ type StatusNodes struct {
 	Expected, Enrolled, Ready int
 }
 
-// Status reads the ingress state of an environment. A standalone environment is ErrStandaloneUnavailable. A swarm
-// that cannot be read leaves ObjectsKnown false and is not an error.
+// Status reads the ingress state of an environment. A swarm or a standalone host that cannot be read leaves ObjectsKnown
+// false and is not an error. A standalone host expects one proxy node.
 func (s *Service) Status(ctx context.Context, envID string) (Status, error) {
 	info, err := s.d.Envs.Info(ctx, envID)
 	if err != nil {
 		return Status{}, err
-	}
-	if !info.Swarm {
-		return Status{}, ErrStandaloneUnavailable
 	}
 	state, err := s.d.Store.DeployState(ctx, envID)
 	if err != nil {
@@ -106,7 +108,10 @@ func (s *Service) Status(ctx context.Context, envID string) (Status, error) {
 		}
 	}
 
-	if info.ManagerConnected {
+	switch {
+	case !info.Swarm:
+		s.readStandaloneObjects(ctx, info, state, &st)
+	case info.ManagerConnected:
 		var l live
 		if err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
 			l, err = readLive(ctx, c)
@@ -119,9 +124,7 @@ func (s *Service) Status(ctx context.Context, envID string) (Status, error) {
 			st.Objects.Network = ok && ingress.OwnsNetwork(net.Name, net.Labels)
 			st.Objects.Service = l.service != nil && ingress.OwnsService(l.service.Name, l.service.Labels)
 			st.Objects.Secret = len(staleSecrets(l.secrets, envID, "")) > 0
-			left := !st.Enabled && (st.Objects.Network || st.Objects.Service || st.Objects.Secret)
-			st.EnableFailed = left && state.EnsureError == EnsureEnableFailed
-			st.DisablingIncomplete = left && !st.EnableFailed
+			s.markLeftovers(&st, state.EnsureError, st.Objects.Network || st.Objects.Service || st.Objects.Secret)
 		}
 	}
 
@@ -138,4 +141,30 @@ func (s *Service) Status(ctx context.Context, envID string) (Status, error) {
 		slices.SortFunc(st.Redeploy, func(a, b StackRef) int { return strings.Compare(a.Name, b.Name) })
 	}
 	return st, nil
+}
+
+// readStandaloneObjects fills the objects of a standalone host from the host's own engine, when its node is connected.
+// A host that cannot be read leaves ObjectsKnown false, which is not an error: the status says it does not know.
+func (s *Service) readStandaloneObjects(ctx context.Context, info EnvInfo, state ingressstore.DeployState, st *Status) {
+	if len(info.Nodes) == 0 || !info.Nodes[0].Connected {
+		return
+	}
+	l, err := s.readStandaloneLive(ctx, info)
+	if err != nil {
+		s.log().Warn("could not read the standalone ingress objects for the status", "environment", info.ID, "error", err)
+		return
+	}
+	st.ObjectsKnown = true
+	st.Objects.Container = l.proxy != nil
+	st.Objects.Network = l.network != nil
+	st.Objects.Volume = l.volume
+	s.markLeftovers(st, state.EnsureError, st.Objects.Container || st.Objects.Network || st.Objects.Volume)
+}
+
+// markLeftovers says what an environment with ingress off and an ingress object still held is: the objects a failed enable
+// made, or those a switch-off did not finish removing. A switch-off removes them, and so does an enable that succeeds.
+func (s *Service) markLeftovers(st *Status, ensureClass string, held bool) {
+	left := !st.Enabled && held
+	st.EnableFailed = left && ensureClass == EnsureEnableFailed
+	st.DisablingIncomplete = left && !st.EnableFailed
 }
