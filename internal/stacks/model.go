@@ -215,8 +215,11 @@ func NameValid(target Target, name string) bool {
 	return name != "" && len(name) <= maxStandaloneName && loader.NormalizeProjectName(name) == name
 }
 
-// NameReservedText is the one sentence every create and adopt path gives for a stack name that NameReserved
-// refuses, so none of them words it differently.
+// NameReservedText is the one sentence every path gives for a stack name that NameReserved refuses, so none of them
+// words it differently: create and git create answer 422 stack_name_reserved with it and the name check answers invalid.
+// Adopt never gets that code: the proxy's own project is not listed for adopt, so adopting by the name is
+// unmanaged_stack_not_found, and a project of that name that holds something foreign is listed as not adoptable with
+// this sentence as the reason (409 stack_not_adoptable).
 const NameReservedText = "tierplan-ingress is TierPlan's own name for the ingress proxy on this host. Choose another name."
 
 // NameReserved reports whether name is one a user stack may not take on target: on a standalone host it is the

@@ -126,8 +126,11 @@ name. So two stacks that each have a service `web` never answer for each other, 
 alias. Inside its own stack a service still uses its plain name, on the stack's own network.
 
 **The reserved stack name.** `tierplan-ingress` is TierPlan's own name for the proxy's project on a standalone host, and
-a stack of that name would have the proxy removed as an orphan at its next deploy. Creating, importing from git or adopting
-a stack by that name is refused with `422 stack_name_reserved`. On a swarm the name is free.
+a stack of that name would have the proxy removed as an orphan at its next deploy. Creating or importing from git a stack
+by that name is refused with `422 stack_name_reserved`, and the name check answers `invalid` with the same sentence. The
+proxy's own project is never listed as an unmanaged stack, so adopting by that name answers `404 unmanaged_stack_not_found`;
+if something else shares the project name, it is listed as not adoptable, and adopting it answers `409 stack_not_adoptable`
+with that sentence. On a swarm the name is free.
 
 **The local socket.** TierPlan's own host works with no agent, and the proxy dials TierPlan from inside a container.
 Two things must hold for it to enrol: TierPlan must listen on an address other than loopback (a listener on `127.0.0.1` is
