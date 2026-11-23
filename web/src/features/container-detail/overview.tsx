@@ -307,10 +307,11 @@ function NetworksCard({ envId, detail }: { envId: string; detail: ContainerDetai
             header: t("networks.disconnect.actions"),
             hideHeader: true,
             cell: (n) => {
-              // TierPlan's ingress network is the ensure loop's, for any container on it (D-29): the row says so.
+              // TierPlan's ingress network is the ensure loop's, for any container on it (D-29): the row says so,
+              // and names the way out, which is the route (switch-off is refused while routes are live).
               const gate =
                 connect.allowed && n.ingress
-                  ? { allowed: false, reason: t("ingress.owned.reason") }
+                  ? { allowed: false, reason: t("ingress.owned.attachedReason") }
                   : connect;
               return (
                 <NeedsTooltip reason={gate.reason}>

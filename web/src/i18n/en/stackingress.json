@@ -105,6 +105,7 @@
   "ingress": {
     "owned": {
       "reason": "Managed by TierPlan. Switch ingress off to remove it.",
+      "attachedReason": "TierPlan joined this container to the network for its ingress route. To leave it, remove the route and redeploy.",
       "refused": "This is managed by TierPlan ingress. Switch ingress off to remove it. Nothing was changed.",
       "alertTitle": "Managed by TierPlan ingress",
       "serviceBody": "TierPlan creates and updates this itself. To remove it, switch ingress off. You can still read its logs and inspect it.",

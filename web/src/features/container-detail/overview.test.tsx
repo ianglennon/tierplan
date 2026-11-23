@@ -515,7 +515,9 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
     });
     expect(ingressRow.getAttribute("aria-disabled")).toBe("true");
     expect(
-      within(networks).getByText("Managed by TierPlan. Switch ingress off to remove it."),
+      within(networks).getByText(
+        "TierPlan joined this container to the network for its ingress route. To leave it, remove the route and redeploy.",
+      ),
     ).toBeTruthy();
     fireEvent.click(ingressRow);
     expect(screen.queryByRole("alertdialog")).toBeNull();
