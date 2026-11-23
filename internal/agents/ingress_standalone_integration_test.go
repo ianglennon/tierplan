@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingressrender/traefiktest"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -244,5 +245,27 @@ func TestStandaloneIngressThroughTheRealAgent(t *testing.T) {
 		if strings.Contains(logs, bad) {
 			t.Errorf("the agent's log holds %q: it refused a request of the enable or the disable", bad)
 		}
+	}
+}
+
+// TestStandaloneReservedStackNameThroughTheServer asks the full server for a stack named like the proxy's project on a
+// standalone host (D-10): the answer is 422 stack_name_reserved with the one sentence, and no stack is made.
+func TestStandaloneReservedStackNameThroughTheServer(t *testing.T) {
+	f := startSAFix(t, dockertest.RegistryOptions{})
+	compose := "services:\n  web:\n    image: " + f.registry + "/tp/app:1\n"
+	code, raw := f.srv.Do(http.MethodPost, f.api(), map[string]any{"name": ingress.ProjectName, "compose": compose})
+	var problem struct {
+		Type   string `json:"type"`
+		Detail string `json:"detail"`
+	}
+	if code != http.StatusUnprocessableEntity || json.Unmarshal(raw, &problem) != nil || !strings.HasSuffix(problem.Type, "stack_name_reserved") {
+		t.Fatalf("POST stacks named %s = %d %s, want 422 stack_name_reserved", ingress.ProjectName, code, raw)
+	}
+	if !strings.Contains(string(raw), stacks.NameReservedText) {
+		t.Errorf("the refusal does not carry the one sentence: %s", raw)
+	}
+	code, raw = f.srv.Do(http.MethodGet, f.api(), nil)
+	if code != http.StatusOK || strings.Contains(string(raw), `"`+ingress.ProjectName+`"`) {
+		t.Errorf("GET stacks = %d %s, want a list without %s", code, raw, ingress.ProjectName)
 	}
 }
