@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
@@ -24,6 +25,22 @@ type recordingEngine struct {
 	connected []client.NetworkConnectOptions
 	networks  []string
 	inspected container.InspectResponse
+	// nets maps what a create or connect may name a network by (a name, an ID or an ID prefix) to the network's name.
+	// The ingress network is known by its name and by ingressID; any other reference is not found.
+	nets map[string]string
+}
+
+const ingressID = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+
+func (r *recordingEngine) NetworkInspect(_ context.Context, ref string, _ client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	name, ok := r.nets[ref]
+	if !ok && (ref == ingress.NetworkName || ref == ingressID || ref == ingressID[:12]) {
+		name, ok = ingress.NetworkName, true
+	}
+	if !ok {
+		return client.NetworkInspectResult{}, cerrdefs.ErrNotFound
+	}
+	return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{Name: name}}}, nil
 }
 
 func (r *recordingEngine) ContainerCreate(_ context.Context, o client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
@@ -41,7 +58,8 @@ func (r *recordingEngine) ContainerInspect(_ context.Context, _ string, _ client
 	return client.ContainerInspectResult{Container: r.inspected}, nil
 }
 
-const uniqueAlias = "shop-web-4f2a9c1d7b3e"
+// uniqueAlias is what the deployer puts on the ingress endpoint of shop's web.
+var uniqueAlias = ingress.Alias("shop", "web")
 
 // shopWebLabels are the labels the SDK puts on replica 1 of service web in project shop.
 var shopWebLabels = map[string]string{composeProjectLabel: "shop", composeServiceLabel: "web", composeNumberLabel: "1"}
@@ -214,15 +232,110 @@ func TestGuardRefusesAChosenContainerNameOnTheIngressNetwork(t *testing.T) {
 		if tc.ok && err != nil {
 			t.Errorf("create %q on %s: %v, want it forwarded", tc.name, tc.net, err)
 		}
-		if !tc.ok && !errors.Is(err, ErrIngressContainerName) {
-			t.Errorf("create %q on %s: %v, want ErrIngressContainerName", tc.name, tc.net, err)
+		if !tc.ok && !errors.Is(err, ErrIngressName) {
+			t.Errorf("create %q on %s: %v, want ErrIngressName", tc.name, tc.net, err)
 		}
 	}
 
 	eng := &recordingEngine{inspected: container.InspectResponse{Name: "/other-web-b86c19eb", Config: &container.Config{Labels: shopWebLabels}}}
 	g := guardClient{APIClient: eng}
 	_, err := g.NetworkConnect(ctx, ingress.NetworkName, client.NetworkConnectOptions{Container: "c1", EndpointConfig: &network.EndpointSettings{}})
-	if !errors.Is(err, ErrIngressContainerName) || len(eng.connected) != 0 {
-		t.Errorf("connect of a chosen name: err %v, %d connects reached the engine; want ErrIngressContainerName and none", err, len(eng.connected))
+	if !errors.Is(err, ErrIngressName) || len(eng.connected) != 0 {
+		t.Errorf("connect of a chosen name: err %v, %d connects reached the engine; want ErrIngressName and none", err, len(eng.connected))
 	}
+}
+
+// The guard judges the network the engine resolves, not the string a file used (T-25-47 re-audit): the ingress network
+// named by its ID, an ID prefix or as the network mode is the ingress network, and a container there may not bring a
+// hostname of its own or an alias other than its stack's. A user-defined network that is not the ingress network is free.
+func TestGuardJudgesTheIngressNetworkHoweverItIsNamed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	own := ingress.Alias("shop", "web")
+	type create struct {
+		what     string
+		name     string
+		hostname string
+		key      string
+		mode     string
+		aliases  []string
+		ok       bool
+	}
+	for _, tc := range []create{
+		{what: "the SDK's create with its own alias", name: "shop-web-1", key: ingress.NetworkName, aliases: []string{"web", "shop-web-1", own}, ok: true},
+		{what: "a chosen name on the ingress network by ID", name: "other-web-b86c19eb", key: ingressID, ok: false},
+		{what: "a chosen name on the ingress network by ID prefix", name: "other-web-b86c19eb", key: ingressID[:12], ok: false},
+		{what: "a chosen name with the ingress network as network mode", name: "other-web-b86c19eb", mode: ingressID, ok: false},
+		{what: "the SDK's name with the ingress network as network mode", name: "shop-web-1", mode: ingress.NetworkName, ok: true},
+		{what: "a hostname of its own", name: "shop-web-1", hostname: "other-web-b86c19eb", key: ingress.NetworkName, ok: false},
+		{what: "a hostname with the network as network mode", name: "shop-web-1", hostname: "other-web-b86c19eb", mode: ingress.NetworkName, ok: false},
+		{what: "a foreign alias on the ingress network by ID", name: "shop-web-1", key: ingressID, aliases: []string{"other-web-b86c19eb"}, ok: false},
+		{what: "a chosen name and a hostname off the ingress network", name: "other-web-b86c19eb", hostname: "x", key: "shop_default", aliases: []string{"anything"}, ok: true},
+	} {
+		eng := &recordingEngine{nets: map[string]string{"shop_default": "shop_default"}}
+		g := guardClient{APIClient: eng}
+		o := client.ContainerCreateOptions{
+			Name:   tc.name,
+			Config: &container.Config{Image: "nginx", Hostname: tc.hostname, Labels: shopWebLabels},
+		}
+		if tc.key != "" {
+			o.NetworkingConfig = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{tc.key: {Aliases: tc.aliases}}}
+		}
+		if tc.mode != "" {
+			o.HostConfig = &container.HostConfig{NetworkMode: container.NetworkMode(tc.mode)}
+		}
+		_, err := g.ContainerCreate(ctx, o)
+		switch {
+		case tc.ok && err != nil:
+			t.Errorf("%s: %v, want it forwarded", tc.what, err)
+		case !tc.ok && !errors.Is(err, ErrIngressName):
+			t.Errorf("%s: %v, want ErrIngressName", tc.what, err)
+		case !tc.ok && len(eng.created) != 0:
+			t.Errorf("%s: a refused create reached the engine", tc.what)
+		}
+		if tc.ok && tc.key == ingress.NetworkName && err == nil {
+			if got := eng.created[0].NetworkingConfig.EndpointsConfig[tc.key].Aliases; !reflect.DeepEqual(got, []string{own}) {
+				t.Errorf("%s: aliases %v reached the engine, want only %s", tc.what, got, own)
+			}
+		}
+	}
+
+	// A connect names the network by ID: the container's hostname is its own ID's prefix (the engine's default) and passes;
+	// one of its own is refused.
+	connect := func(hostname string) error {
+		eng := &recordingEngine{inspected: container.InspectResponse{
+			ID: "abcdef0123456789abcdef", Name: "/shop-web-1",
+			Config: &container.Config{Hostname: hostname, Labels: shopWebLabels},
+		}}
+		_, err := guardClient{APIClient: eng}.NetworkConnect(ctx, ingressID, client.NetworkConnectOptions{
+			Container: "c1", EndpointConfig: &network.EndpointSettings{Aliases: []string{"web", "shop-web-1", own}},
+		})
+		return err
+	}
+	if err := connect("abcdef012345"); err != nil {
+		t.Errorf("connect with the engine's default hostname: %v", err)
+	}
+	if err := connect("other-web-b86c19eb"); !errors.Is(err, ErrIngressName) {
+		t.Errorf("connect with a hostname of its own: %v, want ErrIngressName", err)
+	}
+}
+
+// A failure to read a network other than not-found stops the create: the guard fails closed.
+func TestGuardFailsClosedWhenANetworkCannotBeRead(t *testing.T) {
+	t.Parallel()
+	eng := &failingInspect{recordingEngine: &recordingEngine{}}
+	_, err := guardClient{APIClient: eng}.ContainerCreate(context.Background(), client.ContainerCreateOptions{
+		Name:             "shop-web-1",
+		Config:           &container.Config{Image: "nginx", Labels: shopWebLabels},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{"edge": {}}},
+	})
+	if err == nil || len(eng.created) != 0 {
+		t.Fatalf("create with an unreadable network: err %v, %d creates reached the engine; want an error and none", err, len(eng.created))
+	}
+}
+
+type failingInspect struct{ *recordingEngine }
+
+func (failingInspect) NetworkInspect(context.Context, string, client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	return client.NetworkInspectResult{}, errors.New("engine unreachable")
 }

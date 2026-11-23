@@ -10,6 +10,7 @@ import (
 	"io"
 	"maps"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/moby/moby/api/types/network"
@@ -409,11 +410,12 @@ const (
 	composeNumberLabel  = "com.docker.compose.container-number"
 )
 
-// ErrIngressContainerName is a create or connect on the shared ingress network for a container whose name is not the one
-// the SDK gives a replica, <project>-<service>-<number>. The engine resolves a container's own name on that bridge, so a
-// chosen name could equal another stack's alias and take its route (T-25-47). Check refuses container_name there
-// (ingress_container_name); this is the backstop for any path that reaches the engine without that check.
-var ErrIngressContainerName = errors.New("dockerx: on the ingress network a container keeps the name the stack deploy gives it")
+// ErrIngressName is a create or connect that would put a name on the shared ingress network other than the ones a
+// stack deploy gives a replica. The engine resolves a container's own name, its hostname and its aliases on that bridge,
+// and a routed backend's alias is built from public names, so a chosen name could equal another stack's alias and take its
+// route (T-25-47). Check refuses the compose keys that ask for one (ingress_container_name, ingress_hostname,
+// ingress_network_alias); this is the backstop, judged on the network the engine resolves and not on how the file named it.
+var ErrIngressName = errors.New("dockerx: on the ingress network a container keeps the name the stack deploy gives it and has no hostname or alias of its own")
 
 // ingressNameAllowed reports whether name is the SDK's own name for the replica the labels describe, allowing the
 // temporary <id12>_ prefix of a recreate.
@@ -424,6 +426,48 @@ func ingressNameAllowed(name string, labels map[string]string) bool {
 	}
 	final := recreateNamePrefix.ReplaceAllString(strings.TrimPrefix(name, "/"), "")
 	return final == project+"-"+service+"-"+number
+}
+
+// isIngressNetwork reports whether ref, a network as a create's endpoint key, its network mode or a connect names it,
+// is the shared ingress network. A name, a full ID and an ID prefix all reach the same network, so anything but the
+// literal name and the modes that name no network is resolved by the engine. A network the engine does not know is not
+// the ingress network (the create or connect then fails on its own); any other failure to read is returned, so the
+// guard fails closed.
+func (g guardClient) isIngressNetwork(ctx context.Context, ref string) (bool, error) {
+	switch {
+	case ref == ingress.NetworkName:
+		return true, nil
+	case ref == "" || ref == "default" || ref == "bridge" || ref == "host" || ref == "none",
+		strings.HasPrefix(ref, "container:"), strings.HasPrefix(ref, "service:"):
+		return false, nil
+	}
+	res, err := g.NetworkInspect(ctx, ref, client.NetworkInspectOptions{})
+	if err != nil {
+		if IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("dockerx: read network %s before joining it: %w", ref, err)
+	}
+	return res.Network.Name == ingress.NetworkName, nil
+}
+
+// ingressNamesAllowed judges what a container would be called on the ingress network: the SDK's name for its replica,
+// no hostname of its own (ownID is the engine's default hostname for a container that exists, empty for a create), and,
+// after the bare names are dropped, no alias but the stack's own unique one.
+func ingressNamesAllowed(name, hostname, ownID string, labels map[string]string, aliases []string) error {
+	if !ingressNameAllowed(name, labels) {
+		return fmt.Errorf("%w: container name %s", ErrIngressName, strings.TrimPrefix(name, "/"))
+	}
+	if hostname != "" && hostname != ownID {
+		return fmt.Errorf("%w: hostname %s", ErrIngressName, hostname)
+	}
+	own := ingress.Alias(labels[composeProjectLabel], labels[composeServiceLabel])
+	for _, a := range ingressAliases(aliases, labels[composeServiceLabel], name) {
+		if a != own {
+			return fmt.Errorf("%w: alias %s", ErrIngressName, a)
+		}
+	}
+	return nil
 }
 
 // ingressAliases is the alias list the guard lets reach the engine on the shared ingress network: the aliases
@@ -463,45 +507,91 @@ func ingressEndpoint(ep *network.EndpointSettings, service, container string) *n
 // SDK adds the bare compose service name (and the container name) as an alias on every network a container
 // joins, and on the one bridge every stack of a host shares, another stack's container could answer a
 // sibling's name by embedded DNS (D-27, PROH-25-05). A routed service is reached there only by its unique
-// alias, which the deployer puts in the endpoint, so the bare names are dropped. Only the endpoint keyed by
-// ingress.NetworkName is touched; the options and the map the SDK built are copied, not edited, so the agent
-// allowlist sees the rewritten body and the SDK's own view is unchanged.
+// alias, which the deployer puts in the endpoint, so the bare names are dropped. The options and the map the SDK
+// built are copied, not edited, so the agent allowlist sees the rewritten body and the SDK's own view is unchanged.
+//
+// Which endpoint is the ingress network's, and whether the network mode is, is asked of the engine: a file can name the
+// network by its ID. A container that joins it by either way must carry only the names a stack deploy gives (T-25-47).
 func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	var labels map[string]string
+	var hostname string
+	if o.Config != nil {
+		labels, hostname = o.Config.Labels, o.Config.Hostname
+	}
+	var keys []string
 	if o.NetworkingConfig != nil {
-		if ep := o.NetworkingConfig.EndpointsConfig[ingress.NetworkName]; ep != nil {
-			var labels map[string]string
-			if o.Config != nil {
-				labels = o.Config.Labels
+		for _, key := range slices.Sorted(maps.Keys(o.NetworkingConfig.EndpointsConfig)) {
+			on, err := g.isIngressNetwork(ctx, key)
+			if err != nil {
+				return client.ContainerCreateResult{}, err
 			}
-			if !ingressNameAllowed(o.Name, labels) {
-				return client.ContainerCreateResult{}, fmt.Errorf("%w: %s", ErrIngressContainerName, o.Name)
+			if on {
+				keys = append(keys, key)
 			}
-			service := labels[composeServiceLabel]
-			nc := *o.NetworkingConfig
-			nc.EndpointsConfig = maps.Clone(o.NetworkingConfig.EndpointsConfig)
-			nc.EndpointsConfig[ingress.NetworkName] = ingressEndpoint(ep, service, o.Name)
-			o.NetworkingConfig = &nc
 		}
+	}
+	mode := false
+	if o.HostConfig != nil {
+		on, err := g.isIngressNetwork(ctx, string(o.HostConfig.NetworkMode))
+		if err != nil {
+			return client.ContainerCreateResult{}, err
+		}
+		mode = on
+	}
+	if len(keys) == 0 && !mode {
+		return g.APIClient.ContainerCreate(ctx, o)
+	}
+	var aliases []string
+	for _, key := range keys {
+		if ep := o.NetworkingConfig.EndpointsConfig[key]; ep != nil {
+			aliases = append(aliases, ep.Aliases...)
+		}
+	}
+	if err := ingressNamesAllowed(o.Name, hostname, "", labels, aliases); err != nil {
+		return client.ContainerCreateResult{}, err
+	}
+	if len(keys) > 0 {
+		nc := *o.NetworkingConfig
+		nc.EndpointsConfig = maps.Clone(o.NetworkingConfig.EndpointsConfig)
+		for _, key := range keys {
+			if ep := nc.EndpointsConfig[key]; ep != nil {
+				nc.EndpointsConfig[key] = ingressEndpoint(ep, labels[composeServiceLabel], o.Name)
+			}
+		}
+		o.NetworkingConfig = &nc
 	}
 	return g.APIClient.ContainerCreate(ctx, o)
 }
 
 // NetworkConnect is the same rewrite for an engine older than API 1.44, where the SDK joins the extra networks
-// of a container one by one after the create with the same endpoint settings. The network is named by name,
-// as the SDK passes it. The container is read from the engine for its name and labels: a container not named as
-// the SDK names a replica is refused (T-25-47), and the aliases are rewritten when there are any.
+// of a container one by one after the create with the same endpoint settings. The network is resolved by the engine,
+// as on a create. The container is read from the engine for its name, hostname and labels: one not named as the SDK
+// names a replica, with a hostname of its own or a foreign alias is refused (T-25-47).
 func (g guardClient) NetworkConnect(ctx context.Context, networkID string, o client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
-	if networkID == ingress.NetworkName {
+	on, err := g.isIngressNetwork(ctx, networkID)
+	if err != nil {
+		return client.NetworkConnectResult{}, err
+	}
+	if on {
 		res, err := g.ContainerInspect(ctx, o.Container, client.ContainerInspectOptions{})
 		if err != nil {
 			return client.NetworkConnectResult{}, err
 		}
 		var labels map[string]string
+		var hostname string
 		if res.Container.Config != nil {
-			labels = res.Container.Config.Labels
+			labels, hostname = res.Container.Config.Labels, res.Container.Config.Hostname
 		}
-		if !ingressNameAllowed(res.Container.Name, labels) {
-			return client.NetworkConnectResult{}, fmt.Errorf("%w: %s", ErrIngressContainerName, strings.TrimPrefix(res.Container.Name, "/"))
+		ownID := res.Container.ID
+		if len(ownID) > 12 {
+			ownID = ownID[:12]
+		}
+		var aliases []string
+		if o.EndpointConfig != nil {
+			aliases = o.EndpointConfig.Aliases
+		}
+		if err := ingressNamesAllowed(res.Container.Name, hostname, ownID, labels, aliases); err != nil {
+			return client.NetworkConnectResult{}, err
 		}
 		if o.EndpointConfig != nil && len(o.EndpointConfig.Aliases) > 0 {
 			o.EndpointConfig = ingressEndpoint(o.EndpointConfig, labels[composeServiceLabel], res.Container.Name)
