@@ -58,27 +58,48 @@ func TestStandaloneContainerNameCannotTakeARoute(t *testing.T) {
 		t.Fatalf("the check gave %+v, want ingress_container_name at services.web.container_name", checked.Problems)
 	}
 
-	// A deploy that skips the pre-check still ends refused and touches nothing.
-	st, _, err := e.repo.CreateStack(ctx, e.envID, "spoof", stacks.TargetStandalone, "user:test", copy)
-	if err != nil {
-		t.Fatalf("CreateStack: %v", err)
+	// A deploy that skips the pre-check still ends refused and touches nothing, and so does each way round the check the
+	// re-audit found: the network as network mode, the network declared by its ID (which only the guard can see), and a
+	// hostname instead of a container name (the engine answers a hostname on a user bridge since Engine 25).
+	ingressID := strings.TrimSpace(e.sh("docker network inspect " + ingress.NetworkName + " --format '{{.ID}}'"))
+	svc := func(extra string) string {
+		return "services:\n  web:\n    image: " + e.webImage + "\n    command: " + backendCommand("spoofed") + "\n" + extra
 	}
-	rev, err := e.repo.NewRevision(ctx, st.ID, "user:test", stackops.OriginDeploy)
-	if err != nil {
-		t.Fatalf("NewRevision: %v", err)
-	}
-	_, res, _ := e.runDeploy(st, rev, stackops.StandaloneDeployInput{
-		EnvID: e.envID, NodeID: e.nodeID, Stack: st, Copy: copy, Pins: e.repo, Subnets: e.repo, RevisionID: rev.ID, Caller: e.rootCaller(),
-	})
-	if res.OK() || res.Code != stackops.CodeStackInvalid {
-		t.Fatalf("the spoof deploy ended %+v, want %s", res, stackops.CodeStackInvalid)
+	for _, tc := range []struct{ stack, compose string }{
+		{"spoof", spoof},
+		{"spoofmode", svc("    container_name: " + alias + "\n    network_mode: " + ingress.NetworkName + "\n")},
+		{"spoofid", svc("    container_name: "+alias+"\n    networks: [edge]\n") +
+			"networks:\n  edge:\n    external: true\n    name: " + ingressID + "\n"},
+		{"spoofhn", svc("    hostname: "+alias+"\n    networks: [edge]\n") +
+			"networks:\n  edge:\n    external: true\n    name: " + ingress.NetworkName + "\n"},
+	} {
+		copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(tc.compose)}}}
+		st, _, err := e.repo.CreateStack(ctx, e.envID, tc.stack, stacks.TargetStandalone, "user:test", copy)
+		if err != nil {
+			t.Fatalf("CreateStack %s: %v", tc.stack, err)
+		}
+		rev, err := e.repo.NewRevision(ctx, st.ID, "user:test", stackops.OriginDeploy)
+		if err != nil {
+			t.Fatalf("NewRevision: %v", err)
+		}
+		_, res, _ := e.runDeploy(st, rev, stackops.StandaloneDeployInput{
+			EnvID: e.envID, NodeID: e.nodeID, Stack: st, Copy: copy, Pins: e.repo, Subnets: e.repo, RevisionID: rev.ID, Caller: e.rootCaller(),
+		})
+		t.Logf("%s: code %q, failed item %q, wrote %v", tc.stack, res.Code, res.FailedService, res.Wrote)
+		if res.OK() {
+			t.Errorf("the %s deploy succeeded, want it refused", tc.stack)
+		}
+		running := strings.TrimSpace(e.sh("docker ps -q --filter label=com.docker.compose.project=" + tc.stack))
+		if running != "" {
+			t.Errorf("the %s deploy left a running container on the host: %q", tc.stack, running)
+		}
 	}
 	if got := strings.TrimSpace(e.sh("docker ps -a --filter name=^" + alias + "$ --format '{{.Names}}'")); got != "" {
 		t.Errorf("a container named %s exists on the host: %q", alias, got)
 	}
-	for range 4 {
+	for range 8 {
 		if page := e.awaitServed(zooHost); !strings.Contains(page, webBody("zoo")) || strings.Contains(page, "spoofed") {
-			t.Fatalf("%s answered %q after the spoof attempt, want zoo's web", zooHost, strings.TrimSpace(page))
+			t.Fatalf("%s answered %q after the spoof attempts, want zoo's web", zooHost, strings.TrimSpace(page))
 		}
 	}
 }
