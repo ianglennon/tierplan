@@ -428,12 +428,24 @@ func ingressNameAllowed(name string, labels map[string]string) bool {
 	return final == project+"-"+service+"-"+number
 }
 
-// isIngressNetwork reports whether ref, a network as a create's endpoint key, its network mode or a connect names it,
-// is the shared ingress network. A name, a full ID and an ID prefix all reach the same network, so anything but the
-// literal name and the modes that name no network is resolved by the engine. A network the engine does not know is not
-// the ingress network (the create or connect then fails on its own); any other failure to read is returned, so the
-// guard fails closed.
-func (g guardClient) isIngressNetwork(ctx context.Context, ref string) (bool, error) {
+// ingressResolver answers, for the references of one create or connect, which of them is the shared ingress network.
+// It reads the ingress network's ID once.
+type ingressResolver struct {
+	g        guardClient
+	read     bool
+	ingress  string // the ingress network's full ID, empty when the host has none
+	readFail error
+}
+
+func (g guardClient) ingressResolver() *ingressResolver { return &ingressResolver{g: g} }
+
+// isIngress reports whether ref, a network as a create's endpoint key, its network mode or a connect names it, is or may
+// become the shared ingress network. The engine looks a reference up again when the container first starts (a name
+// first, then an ID prefix), so what it names at create time is not enough (T-25-47): a reference that is a prefix of the
+// ingress network's ID is the ingress network whatever else it names now, the literal name is, and anything else is
+// resolved by the engine. A reference the engine does not know, or a failure to read, stops the call: the guard fails
+// closed, and the SDK only names networks it has made or checked.
+func (r *ingressResolver) isIngress(ctx context.Context, ref string) (bool, error) {
 	switch {
 	case ref == ingress.NetworkName:
 		return true, nil
@@ -441,10 +453,26 @@ func (g guardClient) isIngressNetwork(ctx context.Context, ref string) (bool, er
 		strings.HasPrefix(ref, "container:"), strings.HasPrefix(ref, "service:"):
 		return false, nil
 	}
-	res, err := g.NetworkInspect(ctx, ref, client.NetworkInspectOptions{})
+	if !r.read {
+		r.read = true
+		res, err := r.g.NetworkInspect(ctx, ingress.NetworkName, client.NetworkInspectOptions{})
+		switch {
+		case err == nil:
+			r.ingress = res.Network.ID
+		case !IsNotFound(err):
+			r.readFail = fmt.Errorf("dockerx: read the ingress network before joining %s: %w", ref, err)
+		}
+	}
+	if r.readFail != nil {
+		return false, r.readFail
+	}
+	if r.ingress != "" && strings.HasPrefix(r.ingress, strings.ToLower(ref)) {
+		return true, nil
+	}
+	res, err := r.g.NetworkInspect(ctx, ref, client.NetworkInspectOptions{})
 	if err != nil {
 		if IsNotFound(err) {
-			return false, nil
+			return false, fmt.Errorf("dockerx: network %s does not exist, so nothing joins it", ref)
 		}
 		return false, fmt.Errorf("dockerx: read network %s before joining it: %w", ref, err)
 	}
@@ -518,10 +546,11 @@ func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCrea
 	if o.Config != nil {
 		labels, hostname = o.Config.Labels, o.Config.Hostname
 	}
+	r := g.ingressResolver()
 	var keys []string
 	if o.NetworkingConfig != nil {
 		for _, key := range slices.Sorted(maps.Keys(o.NetworkingConfig.EndpointsConfig)) {
-			on, err := g.isIngressNetwork(ctx, key)
+			on, err := r.isIngress(ctx, key)
 			if err != nil {
 				return client.ContainerCreateResult{}, err
 			}
@@ -532,7 +561,7 @@ func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCrea
 	}
 	mode := false
 	if o.HostConfig != nil {
-		on, err := g.isIngressNetwork(ctx, string(o.HostConfig.NetworkMode))
+		on, err := r.isIngress(ctx, string(o.HostConfig.NetworkMode))
 		if err != nil {
 			return client.ContainerCreateResult{}, err
 		}
@@ -568,7 +597,7 @@ func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCrea
 // as on a create. The container is read from the engine for its name, hostname and labels: one not named as the SDK
 // names a replica, with a hostname of its own or a foreign alias is refused (T-25-47).
 func (g guardClient) NetworkConnect(ctx context.Context, networkID string, o client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
-	on, err := g.isIngressNetwork(ctx, networkID)
+	on, err := g.ingressResolver().isIngress(ctx, networkID)
 	if err != nil {
 		return client.NetworkConnectResult{}, err
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -33,14 +34,17 @@ type recordingEngine struct {
 const ingressID = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
 
 func (r *recordingEngine) NetworkInspect(_ context.Context, ref string, _ client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	if ref == ingress.NetworkName || (len(ref) >= 12 && strings.HasPrefix(ingressID, ref)) {
+		return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{ID: ingressID, Name: ingress.NetworkName}}}, nil
+	}
 	name, ok := r.nets[ref]
-	if !ok && (ref == ingress.NetworkName || ref == ingressID || ref == ingressID[:12]) {
-		name, ok = ingress.NetworkName, true
+	if !ok && ref == "shop_default" {
+		name, ok = ref, true
 	}
 	if !ok {
 		return client.NetworkInspectResult{}, cerrdefs.ErrNotFound
 	}
-	return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{Name: name}}}, nil
+	return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{ID: "id-" + name, Name: name}}}, nil
 }
 
 func (r *recordingEngine) ContainerCreate(_ context.Context, o client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
@@ -338,4 +342,47 @@ type failingInspect struct{ *recordingEngine }
 
 func (failingInspect) NetworkInspect(context.Context, string, client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
 	return client.NetworkInspectResult{}, errors.New("engine unreachable")
+}
+
+// The engine looks a network up again when a container starts, by name and then by ID prefix, so a reference that is a
+// prefix of the ingress network's ID is the ingress network even while another network answers to it (T-25-47 second
+// re-audit: a decoy named so is removed between the create and the start). A reference the engine does not know stops
+// the create.
+func TestGuardTreatsAnIngressIDPrefixAsTheIngressNetwork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	decoy := ingressID[:12]
+	eng := &recordingEngine{nets: map[string]string{decoy: "decoy"}}
+	// The fake would answer the decoy name as the ingress network; make the decoy win, as a name does in the engine.
+	g := guardClient{APIClient: decoyFirst{eng, decoy}}
+	_, err := g.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:             "other-web-b86c19eb",
+		Config:           &container.Config{Image: "nginx", Labels: shopWebLabels},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{decoy: {}}},
+	})
+	if !errors.Is(err, ErrIngressName) || len(eng.created) != 0 {
+		t.Errorf("create on a decoy named as an ingress ID prefix: err %v, %d creates; want ErrIngressName and none", err, len(eng.created))
+	}
+	_, err = guardClient{APIClient: eng}.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:             "shop-web-1",
+		Config:           &container.Config{Image: "nginx", Labels: shopWebLabels},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{"nowhere": {}}},
+	})
+	if err == nil || len(eng.created) != 0 {
+		t.Errorf("create on an unknown network: err %v, %d creates; want an error and none", err, len(eng.created))
+	}
+}
+
+// decoyFirst answers a network inspect of the decoy reference with the decoy, as the engine does when a network is named
+// so, and anything else as the engine behind it.
+type decoyFirst struct {
+	*recordingEngine
+	decoy string
+}
+
+func (d decoyFirst) NetworkInspect(ctx context.Context, ref string, o client.NetworkInspectOptions) (client.NetworkInspectResult, error) {
+	if ref == d.decoy {
+		return client.NetworkInspectResult{Network: network.Inspect{Network: network.Network{ID: "id-decoy", Name: "decoy"}}}, nil
+	}
+	return d.recordingEngine.NetworkInspect(ctx, ref, o)
 }
