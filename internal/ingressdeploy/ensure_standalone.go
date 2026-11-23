@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -23,6 +24,10 @@ const JobKindEnsure = "ingress_ensure"
 // URL or pin may not reach TierPlan from the host, see docs/ingress.md. Nothing is written for it while the proxy holds the
 // URL and pin the server has now: recreating it would not change what it can reach. A changed URL or pin is a redeploy.
 const EnsureNotEnrolled = "not_enrolled"
+
+// EnsureNameShadowed is a pass that found the ingress network missing and did not make it again: a container of the host
+// is stored on a hexadecimal network name, which a new network's ID could start with (T-25-47, ingress_name_shadowed).
+const EnsureNameShadowed = "name_shadowed"
 
 // NotEnrolledAfter is how long, on the injected clock, a proxy may run without enrolling before a pass says so (D-28).
 const NotEnrolledAfter = 5 * time.Minute
@@ -82,6 +87,24 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 	}
 	if !plan.Token {
 		s.forgetOutstanding(envID)
+	}
+	// A missing network is made again with a new ID, which a stored hexadecimal name could be the start of: not while
+	// any container is stored on one.
+	if l.network == nil {
+		var refs []dockerx.HexNameRef
+		err := s.d.Engine.OnNode(ctx, info.ID, info.Nodes[0].AgentID, func(c *dockerx.Client) (e error) {
+			refs, e = c.ContainersOnHexNames(ctx)
+			return e
+		})
+		if err != nil {
+			s.log().Warn("the ingress ensure loop could not read a standalone host's containers", "environment", envID, "error", err)
+			return EnsureUnreachable, true
+		}
+		if len(refs) > 0 {
+			s.log().Warn("the ingress ensure loop did not make a standalone host's ingress network again: a container is stored on a hexadecimal network name",
+				"environment", envID, "container", refs[0].Container, "network", refs[0].Network, "count", len(refs))
+			return EnsureNameShadowed, true
+		}
 	}
 	s.log().Info("the ingress ensure loop is putting a standalone proxy right", "environment", envID, "reason", plan.Reason, "token", plan.Token)
 	if err := s.redeployStandalone(ctx, envID, info, state, l, plan); err != nil {

@@ -90,3 +90,54 @@ func (c *Client) ShadowsIngressNetwork(ctx context.Context, name string) (bool, 
 	}
 	return prefixOf(id, strings.TrimSpace(name)), nil
 }
+
+// HexNameRef is a container of a host whose endpoint, or network mode, is stored under a network name made only of
+// hexadecimal digits.
+type HexNameRef struct {
+	// Container is the container's name, Network the stored network name.
+	Container, Network string
+}
+
+// ContainersOnHexNames lists the containers of every state whose endpoints or network mode are stored under a name made
+// only of hexadecimal digits (T-25-47). Such a name can be the start of a network ID that does not exist yet: the engine
+// looks a never-started endpoint's name up again at start, by name and then by ID prefix, so once the network of that
+// name is gone and an ingress network is made whose ID starts with it, a start by the engine itself (a restart policy at
+// boot) would put the container on the ingress network. The ingress refuses to be made while any such container exists.
+func (c *Client) ContainersOnHexNames(ctx context.Context) ([]HexNameRef, error) {
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
+	}
+	var out []HexNameRef
+	for _, it := range cs.Items {
+		name := containerName(it.ID, it.Names)
+		seen := map[string]bool{}
+		add := func(n string) {
+			if isHexName(n) && !seen[n] {
+				seen[n] = true
+				out = append(out, HexNameRef{Container: name, Network: n})
+			}
+		}
+		add(it.HostConfig.NetworkMode)
+		if it.NetworkSettings != nil {
+			for n := range it.NetworkSettings.Networks {
+				add(n)
+			}
+		}
+	}
+	return out, nil
+}
+
+// isHexName reports whether s is a non-empty string of hexadecimal digits, which the engine could match as the start
+// of a network ID.
+func isHexName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
+			return false
+		}
+	}
+	return true
+}

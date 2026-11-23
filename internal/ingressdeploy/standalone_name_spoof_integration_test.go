@@ -5,10 +5,13 @@
 package ingressdeploy_test
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/testsupport"
@@ -143,4 +146,38 @@ func TestStandaloneContainerNameCannotTakeARoute(t *testing.T) {
 			t.Fatalf("%s answered %q after the spoof attempts, want zoo's web", zooHost, strings.TrimSpace(page))
 		}
 	}
+}
+
+// TestStandaloneEnableRefusesAHexNetworkName is the engine side of T-25-47's last residual: a stopped container with a
+// restart policy, joined to a network by a hexadecimal name that is then removed, would be started by the engine at boot
+// onto an ingress network whose ID starts with that name, past every TierPlan check. The ingress network's ID is not known
+// before it is made, so switching ingress on is refused while such a container exists, and allowed once it is
+// disconnected.
+func TestStandaloneEnableRefusesAHexNetworkName(t *testing.T) {
+	e := startHostEnv(t, false)
+	e.startRegistry()
+	e.sh("docker network create 2c8a >/dev/null && docker create --name staged --restart always --network 2c8a " + e.webImage + " >/dev/null && docker network rm 2c8a >/dev/null")
+
+	ctx := testsupport.Context(t)
+	_, err := e.deploy.Enable(ctx, testActor, testOwner, e.envID, ingressdeploy.EnableRequest{})
+	var pe *ingressdeploy.PreflightError
+	if !errors.As(err, &pe) {
+		t.Fatalf("Enable over a hexadecimal network name = %v, want a preflight refusal", err)
+	}
+	found := false
+	for _, f := range pe.Findings {
+		if f.Code == ingressdeploy.CodeNameShadowed && slices.Contains(f.Items, "container staged on network name 2c8a") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("findings = %+v, want ingress_name_shadowed naming the staged container", pe.Findings)
+	}
+	if got := strings.TrimSpace(e.sh("docker network ls -q --filter name=^" + ingress.NetworkName + "$")); got != "" {
+		t.Errorf("a refused enable made the ingress network: %s", got)
+	}
+
+	e.sh("docker rm -f staged >/dev/null")
+	requireJobDone(t, e.enable())
+	e.awaitReady()
 }

@@ -115,6 +115,7 @@ kind `ingress_ensure`.
 | `ingress_no_address_space` | The host's address pools have no free /24 block. |
 | `ingress_subnet_overlaps` | The subnet you gave overlaps an existing network. |
 | `ingress_name_taken` | The host already holds a container, network or volume under a name ingress uses that is not TierPlan's. Remove or rename it. |
+| `ingress_name_shadowed` | A container on the host, in any state, is joined to a network by a name made only of the digits 0-9 and the letters a-f. Docker can read such a name as the start of a network's ID, and the ingress network's ID is only known once it is made, so after a reboot that container could join the ingress network under a name of its own. Disconnect it from that network, or remove it. If the ingress network goes missing later, it is not made again while such a container exists, and the status reports `name_shadowed` in `lastEnsure`. |
 | `ingress_http01_conflict` | TierPlan's own certificate uses HTTP-01 and the host is TierPlan's own host. This includes the local socket environment, and an agent environment whose engine is the one TierPlan itself talks to. Switch TierPlan's own certificate to DNS-01 first (see [https.md](https.md)). A later version lifts this limit. |
 
 **Existing stacks join on their next deploy.** As on a swarm, switching on changes no stack. A stack that holds a route

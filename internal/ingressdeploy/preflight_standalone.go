@@ -52,6 +52,9 @@ func (v *hostView) load(ctx context.Context, s *Service, info EnvInfo) error {
 		if v.project, err = c.ComposeContainers(ctx, ingress.ProjectName); err != nil {
 			return err
 		}
+		if v.hexRefs, err = c.ContainersOnHexNames(ctx); err != nil {
+			return err
+		}
 		vol, _, err := c.VolumeDetail(ctx, ingress.VolumeName)
 		switch {
 		case err == nil:
@@ -132,6 +135,43 @@ func checkStandaloneNames(ctx context.Context, s *Service, in checkInput) ([]Fin
 		Items:    slices.Compact(items),
 		Severity: SeverityError,
 	}}, nil
+}
+
+// CodeNameShadowed is the refusal of a host with a container stored on a network name made only of hexadecimal digits
+// (T-25-47). The engine looks such a name up again when the container first starts, by name and then as the start of a
+// network ID, so once its network is gone and the ingress network's ID starts with it, the engine itself (a restart
+// policy at boot) would start the container on the shared bridge under names of its own, where it could take another
+// stack's route. The ingress network's ID is not known before it is made, so every such name is refused.
+const CodeNameShadowed = "ingress_name_shadowed"
+
+// checkStandaloneShadow refuses a host that holds a container stored on a hexadecimal network name, of any state.
+func checkStandaloneShadow(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
+	if !hostConnected(in.Info) {
+		return nil, nil
+	}
+	if err := in.host.load(ctx, s, in.Info); err != nil {
+		return nil, err
+	}
+	return shadowFindings(in.host.hexRefs), nil
+}
+
+// shadowFindings is the ingress_name_shadowed finding for refs, nil when there are none.
+func shadowFindings(refs []dockerx.HexNameRef) []Finding {
+	if len(refs) == 0 {
+		return nil
+	}
+	items := make([]string, 0, len(refs))
+	for _, r := range refs {
+		items = append(items, "container "+r.Container+" on network name "+r.Network)
+	}
+	slices.Sort(items)
+	return []Finding{{
+		Code: CodeNameShadowed,
+		Message: "These containers are joined to a network by a name made only of the digits 0-9 and the letters a-f. Docker can read such a name as the start of a network's ID, " +
+			"so after a reboot one of them could join the ingress network under a name of its own. Disconnect them from that network, or remove them, then try again:",
+		Items:    slices.Compact(items),
+		Severity: SeverityError,
+	}}
 }
 
 // checkStandaloneSubnet refuses a bridge network that could not be made: a typed subnet that is not an IPv4 block or that
@@ -223,7 +263,7 @@ func checkStandaloneHTTP01(ctx context.Context, s *Service, in checkInput) ([]Fi
 
 // standaloneChecks are the checks of a standalone host, in the order their findings are listed.
 var standaloneChecks = []check{
-	checkPaused, checkHostReachable, checkStandalonePorts, checkStandaloneNames, checkStandaloneSubnet, checkStandaloneHTTP01, checkURL, checkRedeploy,
+	checkPaused, checkHostReachable, checkStandalonePorts, checkStandaloneNames, checkStandaloneShadow, checkStandaloneSubnet, checkStandaloneHTTP01, checkURL, checkRedeploy,
 }
 
 // preflightStandalone runs every check of a standalone host and returns every finding, so a person sees all that is
