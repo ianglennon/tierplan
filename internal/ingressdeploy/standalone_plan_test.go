@@ -13,14 +13,18 @@ import (
 
 // TestStandalonePlanTable: when the proxy's project needs an up and when the up needs a fresh join token (D-26).
 func TestStandalonePlanTable(t *testing.T) {
-	const image = "ghcr.io/example/ingress:1.2.3"
+	const (
+		image   = "ghcr.io/example/ingress:1.2.3"
+		wantURL = "wss://tierplan.example.com:7443/ingress"
+		wantPin = "sha256:aaaa,sha256:bbbb"
+	)
 	current := ingresshub.TokenStatus{Exists: true, ID: "tok-2", Generation: 2}
 	disabled := ingresshub.TokenStatus{Exists: true, ID: "tok-2", Generation: 2, Disabled: true}
 	// good is a host that holds everything as wanted, with the proxy created with the current token.
 	good := func() standaloneLive {
 		return standaloneLive{
 			proxy:   &dockerx.ComposeContainer{State: "running", Labels: map[string]string{stacks.LabelStackImage: image, TokenLabel: "tok-2"}},
-			network: &dockerx.NetworkRow{Name: "tierplan-ingress"}, volume: true,
+			network: &dockerx.NetworkRow{Name: "tierplan-ingress"}, volume: true, url: wantURL, pin: wantPin,
 		}
 	}
 	for _, tc := range []struct {
@@ -54,6 +58,14 @@ func TestStandalonePlanTable(t *testing.T) {
 		{name: "access log switched on, enrolled", accessLog: true, enrolled: true, tok: current, want: standalonePlan{Up: true, Reason: "access_log"}},
 		{name: "access log switched off", mutate: func(l *standaloneLive) { l.accessLog = true }, enrolled: true, tok: current,
 			want: standalonePlan{Up: true, Reason: "access_log"}},
+		{name: "server address changed", mutate: func(l *standaloneLive) { l.url = "wss://old.example.com:7443/ingress" }, tok: current,
+			want: standalonePlan{Up: true, Token: true, Reason: "address"}},
+		{name: "server address changed, enrolled", mutate: func(l *standaloneLive) { l.url = "wss://old.example.com:7443/ingress" }, enrolled: true, tok: current,
+			want: standalonePlan{Up: true, Reason: "address"}},
+		{name: "pin changed, enrolled", mutate: func(l *standaloneLive) { l.pin = "sha256:cccc" }, enrolled: true, tok: current,
+			want: standalonePlan{Up: true, Reason: "address"}},
+		{name: "container created without the address", mutate: func(l *standaloneLive) { l.url, l.pin = "", "" }, enrolled: true, tok: current,
+			want: standalonePlan{Up: true, Reason: "address"}},
 		{name: "not enrolled, superseded token label", mutate: func(l *standaloneLive) { l.proxy.Labels[TokenLabel] = "tok-1" }, tok: current,
 			want: standalonePlan{Up: true, Token: true, Reason: "token"}},
 		{name: "not enrolled, no token label", mutate: func(l *standaloneLive) { delete(l.proxy.Labels, TokenLabel) }, tok: current,
@@ -68,7 +80,7 @@ func TestStandalonePlanTable(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&l)
 			}
-			if got := planStandalone(l, image, tc.accessLog, tc.enrolled, tc.tok); got != tc.want {
+			if got := planStandalone(l, image, wantURL, wantPin, tc.accessLog, tc.enrolled, tc.tok); got != tc.want {
 				t.Errorf("planStandalone = %+v, want %+v", got, tc.want)
 			}
 		})

@@ -24,6 +24,8 @@ type standaloneLive struct {
 	StartedAt time.Time
 	// accessLog is true when the proxy's environment switches the access log on.
 	accessLog bool
+	// url and pin are the server address and certificate pin the proxy was created with, as its environment holds them.
+	url, pin string
 	// network is the proxy's bridge network when the host holds one that is TierPlan's, nil otherwise.
 	network *dockerx.NetworkRow
 	// volume is true when the host holds the cache volume and it is TierPlan's.
@@ -62,8 +64,13 @@ func (s *Service) readStandaloneLive(ctx context.Context, info EnvInfo) (standal
 				l.StartedAt = t.UTC()
 			}
 			for _, kv := range det.Env {
-				if kv == ingressbundle.EnvAccessLog+"="+accessLogOn {
+				switch {
+				case kv == ingressbundle.EnvAccessLog+"="+accessLogOn:
 					l.accessLog = true
+				case strings.HasPrefix(kv, ingressbundle.EnvURL+"="):
+					l.url = strings.TrimPrefix(kv, ingressbundle.EnvURL+"=")
+				case strings.HasPrefix(kv, ingressbundle.EnvPin+"="):
+					l.pin = strings.TrimPrefix(kv, ingressbundle.EnvPin+"=")
 				}
 			}
 		}
@@ -132,17 +139,17 @@ type standalonePlan struct {
 	Up bool
 	// Token is true when the up needs a fresh join token: the proxy has to enrol.
 	Token bool
-	// Reason is a short word for the log: missing_container, missing_network, not_running, image, access_log or token.
+	// Reason is a short word for the log: missing_container, missing_network, not_running, image, access_log, address or token.
 	Reason string
 }
 
 // planStandalone decides what a standalone host needs (D-26). The project is brought up when the proxy container or
-// its network is missing, the container is neither running nor restarting, its image label or its access-log variable
-// is not what is wanted, or the host's proxy has not enrolled and the container's token label is not the current,
+// its network is missing, the container is neither running nor restarting, its image label, its access-log variable, its
+// server address or its pin is not what is wanted (as the swarm's ensure compares them), or the host's proxy has not enrolled and the container's token label is not the current,
 // enabled token. A token is made only when the host has not enrolled and an up will create or start the container:
 // the token is read when the proxy has to enrol, and never again once it has, so a token that rolls over is no reason
 // to touch a running proxy.
-func planStandalone(l standaloneLive, wantImage string, accessLog, enrolled bool, tok ingresshub.TokenStatus) standalonePlan {
+func planStandalone(l standaloneLive, wantImage, wantURL, wantPin string, accessLog, enrolled bool, tok ingresshub.TokenStatus) standalonePlan {
 	reason := ""
 	switch {
 	case l.proxy == nil:
@@ -155,6 +162,8 @@ func planStandalone(l standaloneLive, wantImage string, accessLog, enrolled bool
 		reason = "image"
 	case l.accessLog != accessLog:
 		reason = "access_log"
+	case l.url != wantURL || l.pin != wantPin:
+		reason = "address"
 	case !enrolled && (!tok.Exists || tok.Disabled || strings.TrimSpace(l.proxy.Labels[TokenLabel]) != tok.ID):
 		reason = "token"
 	}

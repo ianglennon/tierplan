@@ -73,7 +73,7 @@ func (s *Service) planFor(ctx context.Context, envID string, l standaloneLive) (
 	if err != nil {
 		return standalonePlan{}, err
 	}
-	return planStandalone(l, IngressImage(s.d.ServerVersion), state.AccessLogs, enrolled, tok), nil
+	return planStandalone(l, IngressImage(s.d.ServerVersion), s.url(), strings.Join(s.pins(), ","), state.AccessLogs, enrolled, tok), nil
 }
 
 // enableStandalone is Enable for a standalone host: the lock, the preflight and a job of the token, the proxy's project

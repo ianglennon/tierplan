@@ -20,8 +20,8 @@ import (
 const JobKindEnsure = "ingress_ensure"
 
 // EnsureNotEnrolled is a pass that found the proxy running for NotEnrolledAfter without an active ingress node row: its
-// URL or pin may not reach TierPlan from the host, see docs/ingress.md. Nothing is written for it; the proxy is not
-// recreated, since that would not change what it can reach.
+// URL or pin may not reach TierPlan from the host, see docs/ingress.md. Nothing is written for it while the proxy holds the
+// URL and pin the server has now: recreating it would not change what it can reach. A changed URL or pin is a redeploy.
 const EnsureNotEnrolled = "not_enrolled"
 
 // NotEnrolledAfter is how long, on the injected clock, a proxy may run without enrolling before a pass says so (D-28).
@@ -100,7 +100,7 @@ func (s *Service) standaloneSurvey(ctx context.Context, info EnvInfo, state ingr
 	if err != nil {
 		return l, standalonePlan{}, err
 	}
-	return l, planStandalone(l, IngressImage(s.d.ServerVersion), state.AccessLogs, enrolled, tok), nil
+	return l, planStandalone(l, IngressImage(s.d.ServerVersion), s.url(), strings.Join(s.pins(), ","), state.AccessLogs, enrolled, tok), nil
 }
 
 // standaloneQuietClass is the class of a pass that has nothing to write: EnsureNotEnrolled when the proxy has run for

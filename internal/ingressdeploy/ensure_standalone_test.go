@@ -4,13 +4,16 @@
 package ingressdeploy_test
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 	"github.com/ianglennon/tierplan/proto/ingresswire"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -183,6 +186,56 @@ func TestStandaloneEnsureEnrolledNeedsNoToken(t *testing.T) {
 	}
 	if got := r.generation(); got != 1 {
 		t.Errorf("token generation after a second pass = %d, want 1", got)
+	}
+}
+
+// TestStandaloneEnsureRedeploysOnAChangedAddress: a server URL or pin that changed since the proxy was created is a
+// redeploy, as it is on a swarm (WR-A1), with no token for a proxy that has enrolled; the host is quiet after it.
+func TestStandaloneEnsureRedeploysOnAChangedAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(u *switchableURL, p *switchableURL)
+		check  func(t *testing.T, env map[string]*string)
+	}{
+		{"url", func(u, _ *switchableURL) { u.set("wss://moved.example:7480/ingress/connect") },
+			func(t *testing.T, env map[string]*string) {
+				if v := env[ingressbundle.EnvURL]; v == nil || *v != "wss://moved.example:7480/ingress/connect" {
+					t.Errorf("the redeploy carries %s = %v, want the new address", ingressbundle.EnvURL, v)
+				}
+			}},
+		{"pin", func(_, p *switchableURL) { p.set("sha256/CCCC") },
+			func(t *testing.T, env map[string]*string) {
+				if v := env[ingressbundle.EnvPin]; v == nil || *v != "sha256/CCCC" {
+					t.Errorf("the redeploy carries %s = %v, want the new pin", ingressbundle.EnvPin, v)
+				}
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := &switchableURL{url: rigIngressURL}
+			p := &switchableURL{url: rigIngressPin}
+			r := enabledStandaloneRig(t, standaloneRigOptions{deps: func(d *ingressdeploy.Deps) {
+				d.URL = u.get
+				d.Pins = func() []string { return strings.Split(p.get(), ",") }
+			}})
+			r.addNodeRow("active")
+			r.round()
+			if got := r.sys.deployCount(); got != 1 {
+				t.Fatalf("deploys with nothing changed = %d, want 1", got)
+			}
+			tc.change(u, p)
+			r.round()
+			if got := r.sys.deployCount(); got != 2 {
+				t.Fatalf("deploys after the change = %d, want 2", got)
+			}
+			tc.check(t, r.sys.deploys[1].Project.Services[ingress.ProxyComposeService].Environment)
+			if got := r.sys.tokens[1]; got != "" {
+				t.Error("an enrolled proxy's redeploy for a new address was given a join token")
+			}
+			r.round()
+			if got := r.sys.deployCount(); got != 2 {
+				t.Errorf("deploys after a second pass = %d, want 2: the host should be quiet", got)
+			}
+		})
 	}
 }
 

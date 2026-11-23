@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -44,7 +45,15 @@ type proxyFixture struct {
 	AccessLog bool
 	// TokenLabel is the ID of the join token the container was created with, "" for none.
 	TokenLabel string
+	// URL and Pin are the server address and pin the container was created with; "" is what the rig's deployer wants.
+	URL, Pin string
 }
+
+// The address and pin the rig's deployer wants of a proxy (newRig's Deps).
+const (
+	rigIngressURL = "wss://tierplan.example:7480/ingress/connect"
+	rigIngressPin = "sha256/AAAA,sha256/BBBB"
+)
 
 // fakeSystem is the standalone deployer under test: it records every deploy and every down, answers the result a
 // test sets, finishes the items of the job as the real one does, and plays the host the SDK would have left.
@@ -127,7 +136,10 @@ func (f *fakeSystem) play(in stackops.SystemDeployInput) {
 		in.Project.Networks[in.Network] = n
 	}
 	state := hostFixture{
-		Proxy:         &proxyFixture{Image: svc.Image, TokenLabel: svc.CustomLabels[ingressdeploy.TokenLabel], AccessLog: hasEnv(env, ingressbundle.EnvAccessLog+"=1")},
+		Proxy: &proxyFixture{
+			Image: svc.Image, TokenLabel: svc.CustomLabels[ingressdeploy.TokenLabel], AccessLog: hasEnv(env, ingressbundle.EnvAccessLog+"=1"),
+			URL: envValue(env, ingressbundle.EnvURL), Pin: envValue(env, ingressbundle.EnvPin),
+		},
 		NetworkSubnet: n.Ipam.Config[0].Subnet, Volume: true,
 	}
 	f.host = state
@@ -167,7 +179,14 @@ func (f *fakeSystem) reconfigure() {
 		if p.TokenLabel != "" {
 			labels[ingressdeploy.TokenLabel] = p.TokenLabel
 		}
-		env := []string{ingressbundle.EnvURL + "=wss://tierplan.example:7480/ingress/connect"}
+		url, pin := p.URL, p.Pin
+		if url == "" {
+			url = rigIngressURL
+		}
+		if pin == "" {
+			pin = rigIngressPin
+		}
+		env := []string{ingressbundle.EnvURL + "=" + url, ingressbundle.EnvPin + "=" + pin}
 		if p.AccessLog {
 			env = append(env, ingressbundle.EnvAccessLog+"=1")
 		}
@@ -259,6 +278,16 @@ func (r *standaloneRig) addNodeRow(status string) {
 		VALUES (?, ?, ?, ?, ?, ?, 1, 0, '', '', 0)`, uuid.NewString(), r.envID, "host-1", "", key[:], status); err != nil {
 		r.t.Fatalf("insert an ingress node: %v", err)
 	}
+}
+
+// envValue is the value of the variable name in env, "" when it is not there.
+func envValue(env []string, name string) string {
+	for _, e := range env {
+		if v, ok := strings.CutPrefix(e, name+"="); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 func hasEnv(env []string, kv string) bool {
