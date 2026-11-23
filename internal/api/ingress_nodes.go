@@ -227,6 +227,7 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			"their own key. On a swarm whose ingress is on, the token is also stored as the proxies' swarm secret, under the environment's operation lock, so the " +
 			"deployer adopts it and does not make another: 409 operation_locked while another operation holds the environment, 409 ingress_paused while a restore's pause stands, " +
 			"409 ingress_no_manager when no manager is connected, 502 ingress_token_not_stored when the swarm refuses the secret; in each case no token is handed out. " +
+			"On a standalone host whose ingress is on, a token is not made while the proxy has not yet enrolled with the one it has: 409 ingress_token_not_enrolled, and no token is handed out. " +
 			"404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or " +
 			"ingress.join_token_rotated with the generation, never the token.",
 		Tags: []string{"ingress"},
