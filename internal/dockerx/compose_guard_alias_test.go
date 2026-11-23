@@ -80,6 +80,27 @@ func TestGuardStripsTheBareServiceAliasOnTheIngressNetwork(t *testing.T) {
 	}
 }
 
+// A create that replaces a container is made under the temporary name <id12>_<name>, while the SDK's alias is the final
+// name: the guard drops that one too (WR-C2).
+func TestGuardStripsTheContainerNameAliasOfARecreate(t *testing.T) {
+	t.Parallel()
+	eng := &recordingEngine{}
+	g := guardClient{APIClient: eng}
+	in := client.ContainerCreateOptions{
+		Name:   "0123456789ab_shop-web-1",
+		Config: &container.Config{Image: "nginx", Labels: map[string]string{composeServiceLabel: "web"}},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			ingress.NetworkName: {Aliases: []string{"web", "shop-web-1", uniqueAlias}},
+		}},
+	}
+	if _, err := g.ContainerCreate(context.Background(), in); err != nil {
+		t.Fatalf("ContainerCreate: %v", err)
+	}
+	if got := eng.created[0].NetworkingConfig.EndpointsConfig[ingress.NetworkName].Aliases; !reflect.DeepEqual(got, []string{uniqueAlias}) {
+		t.Errorf("a recreate's ingress endpoint reached the engine with aliases %v, want only %q", got, uniqueAlias)
+	}
+}
+
 func TestGuardForwardsACreateWithNoIngressEndpointAsGiven(t *testing.T) {
 	t.Parallel()
 	eng := &recordingEngine{}
@@ -137,6 +158,9 @@ func TestIngressAliases(t *testing.T) {
 		want      []string
 	}{
 		{"keeps the rest in order", []string{"web", "x", "shop-web-1", "y"}, "web", "shop-web-1", []string{"x", "y"}},
+		{"a recreate's temporary name drops the final name", []string{"web", "shop-web-1", "u"}, "web", "0123456789ab_shop-web-1", []string{"u"}},
+		{"a temporary name with a slash", []string{"shop-web-1", "u"}, "web", "/0123456789ab_shop-web-1", []string{"u"}},
+		{"a name that only looks like a temporary one keeps nothing else", []string{"abc_shop-web-1", "shop-web-1", "u"}, "web", "abc_shop-web-1", []string{"shop-web-1", "u"}},
 		{"leading slash on the container name", []string{"shop-web-1", "u"}, "web", "/shop-web-1", []string{"u"}},
 		{"nothing left is nil", []string{"web", "shop-web-1"}, "web", "shop-web-1", nil},
 		{"no service label drops only the container name", []string{"web", "shop-web-1"}, "", "shop-web-1", []string{"web"}},

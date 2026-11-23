@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"regexp"
 	"strings"
 
 	"github.com/moby/moby/api/types/network"
@@ -405,17 +406,27 @@ const composeServiceLabel = "com.docker.compose.service"
 // ingressAliases is the alias list the guard lets reach the engine on the shared ingress network: the aliases
 // the SDK built, less the bare compose service name and the container's own name, which the SDK adds to every
 // endpoint (create.go getAliases). Every other alias keeps its place; nil when none is left.
+//
+// The SDK recreates a container under a temporary name, <first 12 characters of the old ID>_<name>, and renames it when the
+// old one is gone, so a create that replaces a container is made under that name while the alias it adds is the final
+// one. The final name is dropped as well (WR-C2).
 func ingressAliases(aliases []string, service, container string) []string {
 	container = strings.TrimPrefix(container, "/")
+	final := recreateNamePrefix.ReplaceAllString(container, "")
 	var kept []string
 	for _, a := range aliases {
-		if (service != "" && a == service) || (container != "" && strings.TrimPrefix(a, "/") == container) {
+		bare := strings.TrimPrefix(a, "/")
+		if (service != "" && a == service) || (container != "" && (bare == container || bare == final)) {
 			continue
 		}
 		kept = append(kept, a)
 	}
 	return kept
 }
+
+// recreateNamePrefix is what the SDK puts before a container's name while it is replaced: the first 12 characters of the
+// old container's ID, which is lowercase hex, and an underscore.
+var recreateNamePrefix = regexp.MustCompile(`^[0-9a-f]{12}_`)
 
 // ingressEndpoint returns a copy of ep with the bare names removed from its aliases. The caller's endpoint is
 // never edited: the SDK keeps using it after the call.
