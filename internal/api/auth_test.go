@@ -344,6 +344,8 @@ type authFixture struct {
 	// routes (phase 24); a test sets both and builds again. Left nil the routes answer 503 ingress_unavailable.
 	ingressDeploy     *ingressdeploy.Service
 	ingressDeployJobs *jobs.Hub
+	// ingressIssuer, when set, makes the join token in place of the deployer: a test plays an answer the deployer gives.
+	ingressIssuer api.IngressTokenIssuer
 }
 
 // fixtureClock is the fixture's fake clock as a stackops.Clock. After is never used: the manager is not Run.
@@ -727,6 +729,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	nodesDeps := api.IngressNodesDeps{Service: f.ingressNodes, Live: f.ingressLive, CurrentBundle: f.ingressCurrentBundle, Log: log}
 	if f.ingressDeploy != nil {
 		nodesDeps.Issuer = f.ingressDeploy
+	}
+	if f.ingressIssuer != nil {
+		nodesDeps.Issuer = f.ingressIssuer
 	}
 	api.RegisterIngressNodes(r, nodesDeps)
 	api.RegisterIngressDeploy(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})

@@ -27,6 +27,7 @@ const (
 	problemIngressNodeAlreadyRevoked = "ingress_node_already_revoked"
 	problemIngressNoManager          = "ingress_no_manager"
 	problemIngressTokenNotStored     = "ingress_token_not_stored" //nolint:gosec // G101: a problem type, not a credential
+	problemIngressTokenNotEnrolled   = ingressdeploy.CodeTokenNotEnrolled
 
 	// The values of IngressNodeBody.Sync.
 	ingressSyncCurrent      = "current"
@@ -203,6 +204,9 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			return httpx.Problem(http.StatusConflict, problemIngressPaused, "Ingress on this environment was paused by a restore. Resume it first.")
 		case errors.Is(err, ingressdeploy.ErrNoManager):
 			return httpx.Problem(http.StatusConflict, problemIngressNoManager, "No manager node's agent is connected, so the new token cannot be stored on the swarm. Nothing was changed.")
+		case errors.Is(err, ingressdeploy.ErrTokenNotEnrolled):
+			return httpx.Problem(http.StatusConflict, problemIngressTokenNotEnrolled,
+				"The proxy on this host has not enrolled yet with the token it was given. Rotating now would stop it from enrolling, so nothing was issued. Rotate after it has enrolled.")
 		case errors.As(err, &notStored):
 			d.Log.Error("ingress node request failed", "step", what, "error", err)
 			return httpx.Problem(http.StatusBadGateway, problemIngressTokenNotStored,

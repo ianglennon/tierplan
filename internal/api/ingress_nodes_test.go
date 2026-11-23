@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/proto/authn"
 	"github.com/ianglennon/tierplan/proto/ingresswire"
@@ -480,5 +482,38 @@ func TestIngressNodesListShape(t *testing.T) {
 	}
 	if listed[2].Sync != "incompatible" {
 		t.Errorf("incompatible node sync = %q", listed[2].Sync)
+	}
+}
+
+// notEnrolledIssuer answers every rotation as a standalone host whose proxy has not enrolled yet would (D-26).
+type notEnrolledIssuer struct{}
+
+func (notEnrolledIssuer) IssueJoinToken(context.Context, audit.Actor, string, string, string, string) (ingresshub.Token, error) {
+	return ingresshub.Token{}, ingressdeploy.ErrTokenNotEnrolled
+}
+
+// A rotation the deployer refuses because the proxy on a standalone host has not enrolled with the token it was given is
+// 409 ingress_token_not_enrolled, with the sentence that says nothing was issued, and no token in the body (D-26).
+func TestIngressJoinTokenRotationNotEnrolled(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.ingressIssuer = notEnrolledIssuer{}
+	f.h = f.build(t)
+
+	rec := f.credCall(t, f.adminA, http.MethodPost, nodesPath(f.envA, "join-token"), "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("rotate before the proxy enrolled: %d %s, want 409", rec.Code, rec.Body)
+	}
+	typ, detail := deployProblem(t, rec.Body.Bytes())
+	if typ != ingressdeploy.CodeTokenNotEnrolled {
+		t.Errorf("problem type = %q, want %s", typ, ingressdeploy.CodeTokenNotEnrolled)
+	}
+	for _, want := range []string{"has not enrolled yet", "nothing was issued", "Rotate after it has enrolled"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail %q does not say %q", detail, want)
+		}
+	}
+	if strings.Contains(rec.Body.String(), "tpit_") || strings.Contains(rec.Body.String(), `"token"`) {
+		t.Errorf("the refusal carries a token: %s", rec.Body)
 	}
 }
