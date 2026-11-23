@@ -239,6 +239,59 @@ func TestStandaloneEnsureRedeploysOnAChangedAddress(t *testing.T) {
 	}
 }
 
+// TestStandaloneEnsureFailingRedeployKeepsOneToken: a redeploy that keeps failing for a proxy that has not enrolled does
+// not make a new join token, nor a rotation audit row, on every pass (WR-A2): the token made for the first try is given
+// again, and the redeploy that finally works is given that one.
+func TestStandaloneEnsureFailingRedeployKeepsOneToken(t *testing.T) {
+	r := enabledStandaloneRig(t, standaloneRigOptions{})
+	h := r.held()
+	h.Proxy, h.NetworkSubnet = nil, ""
+	r.sys.setHost(h)
+	r.sys.mu.Lock()
+	r.sys.result = stackops.DeployResult{Code: stackops.CodeNameClash}
+	r.sys.mu.Unlock()
+	rotated := r.auditCount("ingress.join_token_rotated")
+
+	for i := 0; i < 3; i++ {
+		r.round()
+		if _, class := r.ensureState(); class != ingressdeploy.EnsureWriteFailed {
+			t.Fatalf("pass %d: class = %q, want write_failed", i+1, class)
+		}
+	}
+	if got := r.sys.deployCount(); got != 4 {
+		t.Fatalf("deploys = %d, want 4 (the enable and three failing tries)", got)
+	}
+	if got := r.generation(); got != 2 {
+		t.Errorf("token generation = %d, want 2: one token for the failing tries", got)
+	}
+	if got := r.auditCount("ingress.join_token_rotated") - rotated; got != 1 {
+		t.Errorf("rotation audit rows from the failing tries = %d, want 1", got)
+	}
+	if r.sys.tokens[1] == "" || r.sys.tokens[1] != r.sys.tokens[2] || r.sys.tokens[2] != r.sys.tokens[3] {
+		t.Error("the failing tries were not all given the one outstanding token")
+	}
+
+	r.sys.mu.Lock()
+	r.sys.result = stackops.DeployResult{}
+	r.sys.mu.Unlock()
+	r.round()
+	if got := r.sys.deployCount(); got != 5 {
+		t.Fatalf("deploys after the fault cleared = %d, want 5", got)
+	}
+	if r.sys.tokens[4] != r.sys.tokens[1] || r.generation() != 2 {
+		t.Errorf("the working redeploy was not given the outstanding token (generation %d)", r.generation())
+	}
+
+	// Once it has worked, a later redeploy of a proxy that never enrolled makes a token of its own.
+	h = r.held()
+	h.Proxy = nil
+	r.sys.setHost(h)
+	r.round()
+	if got := r.generation(); got != 3 {
+		t.Errorf("token generation after a later repair = %d, want 3", got)
+	}
+}
+
 // TestStandaloneEnsureClasses: each way a pass can end short of a repair records its own class, and writes nothing.
 func TestStandaloneEnsureClasses(t *testing.T) {
 	missing := func(r *standaloneRig) {

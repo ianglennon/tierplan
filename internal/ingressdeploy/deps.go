@@ -205,6 +205,11 @@ type Service struct {
 	// every pass (WR-07); heldMu guards it.
 	heldMu  sync.Mutex
 	written map[string]updateMemo
+	// outstanding is, by environment, the join token the ensure loop made for a standalone redeploy that has not
+	// succeeded yet, so the next pass gives it again rather than superseding it for as long as the fault stands (WR-A2).
+	// It holds a clear text, in memory only; outstandingMu guards it.
+	outstandingMu sync.Mutex
+	outstanding   map[string]StandaloneToken
 }
 
 // New builds the deployer.

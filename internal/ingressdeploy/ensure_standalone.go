@@ -66,6 +66,7 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 		return EnsureWriteFailed, true
 	}
 	if !state.Enabled {
+		s.forgetOutstanding(envID)
 		return "", false
 	}
 	if state.Paused {
@@ -76,7 +77,11 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 		return EnsureUnreachable, true
 	}
 	if !plan.Up {
+		s.forgetOutstanding(envID)
 		return s.standaloneQuietClass(ctx, envID, l), true
+	}
+	if !plan.Token {
+		s.forgetOutstanding(envID)
 	}
 	s.log().Info("the ingress ensure loop is putting a standalone proxy right", "environment", envID, "reason", plan.Reason, "token", plan.Token)
 	if err := s.redeployStandalone(ctx, envID, info, state, l, plan); err != nil {
@@ -130,11 +135,10 @@ func (s *Service) redeployStandalone(ctx context.Context, envID string, info Env
 	}
 	var tok *StandaloneToken
 	if plan.Token {
-		issued, err := s.d.Tokens.IssueToken(ctx, audit.SystemIngress, envID, "", auditUserAgent)
-		if err != nil {
+		var err error
+		if tok, err = s.ensureToken(ctx, envID); err != nil {
 			return err
 		}
-		tok = &StandaloneToken{ID: issued.ID, Value: issued.Token}
 	}
 	subnet := ""
 	if l.network != nil && len(l.network.Subnets) > 0 {
@@ -181,5 +185,46 @@ func (s *Service) redeployStandalone(ctx context.Context, envID string, info Env
 	if !res.OK() {
 		return errSystemFailed
 	}
+	s.forgetOutstanding(envID)
 	return nil
+}
+
+// ensureToken is the join token a redeploy that must enrol is given. A token the ensure loop made earlier for a redeploy
+// that has not succeeded is given again while it is still the environment's current, enabled token, so a fault that
+// stops the deploy before it creates anything (a pull that fails, a host that is read-only, a name that is taken) does
+// not supersede a token and write a rotation audit row on every pass (WR-A2). Otherwise a token is issued (D-26) and kept
+// until a redeploy succeeds. The caller holds the operation lock.
+func (s *Service) ensureToken(ctx context.Context, envID string) (*StandaloneToken, error) {
+	s.outstandingMu.Lock()
+	held, ok := s.outstanding[envID]
+	s.outstandingMu.Unlock()
+	if ok {
+		cur, err := s.d.Tokens.TokenStatus(ctx, envID)
+		if err != nil {
+			return nil, err
+		}
+		if cur.Exists && !cur.Disabled && cur.ID == held.ID {
+			return &held, nil
+		}
+		s.forgetOutstanding(envID)
+	}
+	issued, err := s.d.Tokens.IssueToken(ctx, audit.SystemIngress, envID, "", auditUserAgent)
+	if err != nil {
+		return nil, err
+	}
+	tok := StandaloneToken{ID: issued.ID, Value: issued.Token}
+	s.outstandingMu.Lock()
+	if s.outstanding == nil {
+		s.outstanding = map[string]StandaloneToken{}
+	}
+	s.outstanding[envID] = tok
+	s.outstandingMu.Unlock()
+	return &tok, nil
+}
+
+// forgetOutstanding drops the token kept for an environment's failed redeploy.
+func (s *Service) forgetOutstanding(envID string) {
+	s.outstandingMu.Lock()
+	delete(s.outstanding, envID)
+	s.outstandingMu.Unlock()
 }
