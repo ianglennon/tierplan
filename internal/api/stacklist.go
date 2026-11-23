@@ -673,6 +673,9 @@ func checkStackName(ctx context.Context, d StacksDeps, in *StackNameCheckInput) 
 	if err != nil {
 		return nil, err
 	}
+	if stacks.NameReserved(target, name) {
+		return answer("invalid", stacks.NameReservedText)
+	}
 	if !stacks.NameValid(target, name) {
 		return answer("invalid", stackNameInvalidMessage(target))
 	}

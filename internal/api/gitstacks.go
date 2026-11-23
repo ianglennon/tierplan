@@ -183,6 +183,9 @@ func createGitStack(ctx context.Context, d StacksDeps, g GitDeps, in *GitStackCr
 	if err != nil {
 		return nil, err
 	}
+	if stacks.NameReserved(target, body.Name) {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameReserved, stacks.NameReservedText)
+	}
 	if !stacks.NameValid(target, body.Name) {
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameInvalid, stackNameInvalidMessage(target))
 	}
@@ -375,9 +378,9 @@ func checkGitStackSource(ctx context.Context, d StacksDeps, g GitDeps, lim *chec
 	if err != nil {
 		return nil, err
 	}
-	// The name only matters to the swarm name rules; a name the target refuses is the create's to refuse.
+	// The name only matters to the swarm name rules; a name the target refuses, or reserves, is the create's to refuse.
 	name := "stack"
-	if stacks.NameValid(target, body.Name) {
+	if stacks.NameValid(target, body.Name) && !stacks.NameReserved(target, body.Name) {
 		name = body.Name
 	}
 	kind := gitx.RefKind(body.RefKind)

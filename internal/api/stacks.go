@@ -38,6 +38,7 @@ const (
 	stackTargetType = "stack"
 
 	problemStackNameInvalid    = "stack_name_invalid"
+	problemStackNameReserved   = "stack_name_reserved"
 	problemStackNameTaken      = "stack_name_taken"
 	problemStackNotFound       = "stack_not_found"
 	problemStackStartInvalid   = "stack_start_invalid"
@@ -806,6 +807,9 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 	target, err := d.stackTargetOf(ctx, env.ID)
 	if err != nil {
 		return nil, err
+	}
+	if stacks.NameReserved(target, name) {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameReserved, stacks.NameReservedText)
 	}
 	if !stacks.NameValid(target, name) {
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameInvalid, stackNameInvalidMessage(target))
