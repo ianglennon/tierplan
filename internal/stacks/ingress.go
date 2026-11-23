@@ -4,6 +4,7 @@
 package stacks
 
 import (
+	"reflect"
 	"slices"
 	"sort"
 
@@ -93,12 +94,12 @@ func ingressProblemAt(p ingress.Problem, idx *PositionIndex, target Target) Prob
 	}
 }
 
-// IngressAttach asks check to attach the routed services of a swarm stack to the shared ingress
-// network (D-19, D-38). It is set only when ingress is enabled for a swarm environment; the routed
-// set is derived inside check from the same parse the policy uses, so no caller can attach a
-// different set.
+// IngressAttach asks check to attach the routed services of a stack to the shared ingress network
+// (D-19, D-38, D-16): the overlay network of a swarm, the bridge of a standalone host. It is set only
+// when ingress is enabled for the environment; the routed set is derived inside check from the same
+// parse the policy uses, so no caller can attach a different set.
 type IngressAttach struct {
-	// Network is the name of the shared overlay network (ingress.NetworkName).
+	// Network is the name of the shared network (ingress.NetworkName).
 	Network string
 }
 
@@ -111,8 +112,11 @@ type InjectedIngress struct {
 	// external one; false when the file already declared it.
 	NetworkAdded bool
 	// Services are the routed services that were given the attachment, sorted. A service that
-	// already listed the network is not here.
+	// already listed the network is not here (but it is in AliasAdded when it was given the alias).
 	Services []string
+	// AliasAdded are the services that already listed the network and were given the standalone
+	// alias on that entry (D-16). Render takes the alias out again and keeps the user's entry. Sorted.
+	AliasAdded []string
 	// DefaultAdded are the services of Services that had no networks of their own, so the
 	// default network was written for them to keep them on it (Pitfall 7). Sorted.
 	DefaultAdded []string
@@ -141,13 +145,17 @@ func RoutedServices(project *types.Project, target Target) []string {
 const defaultNetworkKey = "default"
 
 // attachIngress joins each routed service to the network, in the loaded project, once (D-19,
-// Pattern 2). It is idempotent: a project that already declares the network, by key or by its name
-// (external: true), keeps that declaration, and a service that already lists it is left alone. A
+// Pattern 2, D-16). It is idempotent: a project that already declares the network, by key or by its
+// name (external: true), keeps that declaration, and a service that already lists it is left alone. A
 // service with no networks of its own gets the default network written first, because naming one
-// network would otherwise take it off the default one. The attachment has no alias: the service
-// name must never be a DNS name on the network every stack shares (D-37). It returns what it
-// added, or nil when there was nothing to add.
-func attachIngress(project *types.Project, routed []string, network string) *InjectedIngress {
+// network would otherwise take it off the default one.
+//
+// On a swarm the attachment has no alias: the service name must never be a DNS name on the network
+// every stack shares (D-37). On a standalone host the one alias is the only name a routed service has
+// on the shared bridge (D-15): ingress.Alias(project, service), never the bare service name or the
+// container name (D-27). A service that already lists the network gets the alias set on that entry.
+// It returns what it added, or nil when there was nothing to add.
+func attachIngress(project *types.Project, target Target, routed []string, network string) *InjectedIngress {
 	if len(routed) == 0 || network == "" {
 		return nil
 	}
@@ -167,12 +175,33 @@ func attachIngress(project *types.Project, routed []string, network string) *Inj
 		project.Networks[key] = types.NetworkConfig{Name: network, External: true}
 		inj.NetworkAdded = true
 	}
+	standalone := target == TargetStandalone
 	for _, name := range routed {
 		svc, ok := project.Services[name]
 		if !ok {
 			continue
 		}
-		if _, has := svc.Networks[key]; has {
+		alias := ""
+		if standalone {
+			alias = ingress.Alias(project.Name, name)
+		}
+		if cfg, has := svc.Networks[key]; has {
+			if !standalone || (cfg != nil && slices.Contains(cfg.Aliases, alias)) {
+				continue
+			}
+			nets := make(map[string]*types.ServiceNetworkConfig, len(svc.Networks))
+			for k, v := range svc.Networks {
+				nets[k] = v
+			}
+			entry := types.ServiceNetworkConfig{}
+			if cfg != nil {
+				entry = *cfg
+			}
+			entry.Aliases = append(slices.Clone(entry.Aliases), alias)
+			nets[key] = &entry
+			svc.Networks = nets
+			project.Services[name] = svc
+			inj.AliasAdded = append(inj.AliasAdded, name)
 			continue
 		}
 		nets := make(map[string]*types.ServiceNetworkConfig, len(svc.Networks)+2)
@@ -183,14 +212,19 @@ func attachIngress(project *types.Project, routed []string, network string) *Inj
 			nets[defaultNetworkKey] = nil
 			inj.DefaultAdded = append(inj.DefaultAdded, name)
 		}
-		nets[key] = nil
+		if standalone {
+			nets[key] = &types.ServiceNetworkConfig{Aliases: []string{alias}}
+		} else {
+			nets[key] = nil
+		}
 		svc.Networks = nets
 		project.Services[name] = svc
 		inj.Services = append(inj.Services, name)
 	}
 	sort.Strings(inj.Services)
+	sort.Strings(inj.AliasAdded)
 	sort.Strings(inj.DefaultAdded)
-	if !inj.NetworkAdded && len(inj.Services) == 0 {
+	if !inj.NetworkAdded && len(inj.Services) == 0 && len(inj.AliasAdded) == 0 {
 		return nil
 	}
 	return inj
@@ -228,6 +262,35 @@ func undoIngress(project *types.Project, inj *InjectedIngress) *types.Project {
 		}
 		if len(nets) == 0 {
 			nets = nil
+		}
+		svc.Networks = nets
+		services[name] = svc
+	}
+	for _, name := range inj.AliasAdded {
+		svc, ok := services[name]
+		if !ok {
+			continue
+		}
+		key := inj.injectedKey(project)
+		cfg := svc.Networks[key]
+		if cfg == nil {
+			continue
+		}
+		nets := make(map[string]*types.ServiceNetworkConfig, len(svc.Networks))
+		for k, v := range svc.Networks {
+			nets[k] = v
+		}
+		entry := *cfg
+		entry.Aliases = slices.DeleteFunc(slices.Clone(entry.Aliases), func(a string) bool {
+			return a == ingress.Alias(project.Name, name)
+		})
+		if len(entry.Aliases) == 0 {
+			entry.Aliases = nil
+		}
+		if reflect.DeepEqual(entry, types.ServiceNetworkConfig{}) {
+			nets[key] = nil
+		} else {
+			nets[key] = &entry
 		}
 		svc.Networks = nets
 		services[name] = svc

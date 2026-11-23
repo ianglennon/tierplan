@@ -83,19 +83,6 @@ func TestAttachRoutedServicesOnly(t *testing.T) {
 	if _, ok := plain.Project.Networks[ingress.NetworkName]; ok {
 		t.Error("without Ingress the project declares the ingress network")
 	}
-
-	// A standalone target is never attached, whatever the input says. Its routes sit under labels.
-	const standalone = `services:
-  web:
-    image: nginx:1.27
-    labels:
-      tierplan.ingress.host: app.example.com
-      tierplan.ingress.port: "80"
-`
-	st := deployableWith(t, standalone, stacks.TargetStandalone, true)
-	if st.Ingress != nil || !reflect.DeepEqual(networkKeys(st, "web"), []string{"default"}) {
-		t.Errorf("standalone: Loaded.Ingress = %+v, web networks = %v, want nothing injected", st.Ingress, networkKeys(st, "web"))
-	}
 }
 
 func TestAttachIsIdempotent(t *testing.T) {
@@ -163,7 +150,7 @@ func TestAttachKeepsDefaultNetwork(t *testing.T) {
 	svc.Networks = map[string]*types.ServiceNetworkConfig{}
 	loaded.Project.Services["web"] = svc
 
-	inj := stacks.AttachIngressForTest(loaded.Project, []string{"web"}, ingress.NetworkName)
+	inj := stacks.AttachIngressForTest(loaded.Project, stacks.TargetSwarm, []string{"web"}, ingress.NetworkName)
 	if got := networkKeys(loaded, "web"); !reflect.DeepEqual(got, []string{"default", ingress.NetworkName}) {
 		t.Errorf("web networks = %v, want the default kept next to the ingress network", got)
 	}
