@@ -603,6 +603,7 @@ const rowFixture = (over: Partial<ContainerRow> = {}): ContainerRow => ({
   status: "Up 2 hours",
   health: "none",
   isSelf: false,
+  ingressOwned: false,
   selfKind: "",
   readOnly: false,
   ports: [],

@@ -1253,6 +1253,12 @@ func ownContainerGate(ctx context.Context, d NetworksDeps, p *rbac.Principal, en
 		return ownedAttempt{}, code, problem
 	}
 	var attempt ownedAttempt
+	// The standalone proxy is not asked for a typed name: it is refused, before anything is written
+	// (D-09). Its network membership is the ensure loop's.
+	if isIngressStandalone(own.Labels) {
+		attempt.kind = ownIngress
+		return attempt, problemIngressOwned, ingressOwnedError()
+	}
 	switch {
 	case isSelfContainer(d.SelfContainerID, own.ID):
 		attempt.kind = ownServer

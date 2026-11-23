@@ -42,6 +42,7 @@ export function rowOf(d: ContainerDetail): ContainerRow {
     ports: [],
     isSelf: d.isSelf,
     selfKind: d.selfKind,
+    ingressOwned: d.ingressOwned,
     health: d.health,
     readOnly: d.readOnly,
     project: d.project,

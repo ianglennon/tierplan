@@ -270,6 +270,11 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 	if isIngressTask(own.Labels) {
 		return nil, httpx.Problem(http.StatusConflict, codeOwnContainer, "TierPlan doesn't open shells in its ingress proxy. Switch ingress off to remove it.")
 	}
+	// The standalone proxy has no orchestrator, so every write to it is refused, a shell included: its
+	// writable layer holds the join token file (D-09, D-24).
+	if isIngressStandalone(own.Labels) {
+		return nil, ingressOwnedError()
+	}
 	if !own.Running {
 		return nil, httpx.Problem(http.StatusConflict, problemContainerNotRunning, "The container is not running. Start it to open a shell.")
 	}
