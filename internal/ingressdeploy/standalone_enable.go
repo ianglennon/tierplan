@@ -79,11 +79,12 @@ func (s *Service) planFor(ctx context.Context, envID string, l standaloneLive) (
 // enableStandalone is Enable for a standalone host: the lock, the preflight and a job of the token, the proxy's project
 // and the switch.
 func (s *Service) enableStandalone(ctx context.Context, actor audit.Actor, owner string, info EnvInfo, req EnableRequest) (string, error) {
-	if s.d.System == nil {
-		return "", errors.New("ingress: no deployer of the standalone proxy's project")
-	}
 	pre := func(ctx context.Context, info EnvInfo, req EnableRequest) ([]Finding, error) {
 		f, _, err := s.preflightStandalone(ctx, info, req)
+		if err == nil && !hasErrors(f) && s.d.System == nil {
+			// A wiring fault, found after the preflight so a person is told what is wrong with their host first.
+			return nil, errors.New("ingress: no deployer of the standalone proxy's project")
+		}
 		return f, err
 	}
 	return s.startEnable(ctx, owner, info, req, pre, standaloneSpecs(), func(jctx context.Context, r *jobs.Reporter, release func()) {
