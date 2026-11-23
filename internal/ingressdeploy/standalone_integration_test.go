@@ -6,6 +6,7 @@ package ingressdeploy_test
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,6 +25,82 @@ func TestStandaloneEnableOnAgentHost(t *testing.T) {
 		t.Errorf("the status reads ingress off after a successful enable: %+v", st)
 	}
 	e.requireProxyObjects()
+}
+
+// TestStandaloneEnableOnLocalSocket is SC 1 through the local socket (D-01, D-02): the same host, but the environment is
+// TierPlan's own local socket, whose engine is the dind host's. Enable ends done and the proxy enrols into the standalone slot, which
+// the local environment holds with no swarm node ID, and reads ready.
+func TestStandaloneEnableOnLocalSocket(t *testing.T) {
+	e := startHostEnv(t, true)
+	requireJobDone(t, e.enable())
+	e.awaitReady()
+	e.requireProxyObjects()
+}
+
+// TestTwoWebStacksServedOnStandalone is SC 2 on the data plane of a standalone host (D-15, D-27): zoo and blog each have a routed
+// service called web, and zoo has a routed api too. After ingress is on and both are deployed, each hostname on the host's 443
+// answers with the test CA's certificate from its own stack's web, and from zoo's api, which is on both zoo_default and the ingress
+// network (whose name sorts before zoo_default's), the name web reaches zoo's web and never blog's. No container of either
+// stack carries a name on the ingress network but its own stack-and-service alias.
+func TestTwoWebStacksServedOnStandalone(t *testing.T) {
+	e := startHostEnv(t, false)
+	e.startRegistry()
+	requireJobDone(t, e.enable())
+	e.awaitReady()
+
+	zooHost, blogHost, apiHost := "zoo."+testDomain, "blog."+testDomain, "api.zoo."+testDomain
+	zoo, res, job := e.deployStack("zoo", "services:\n"+e.routedService("web", webBody("zoo"), zooHost)+e.routedService("api", apiBody("zoo"), apiHost))
+	if !res.OK() {
+		requireJobDone(t, job)
+		t.Fatalf("the deploy of zoo ended %+v", res)
+	}
+	blog, res, job := e.deployStack("blog", "services:\n"+e.routedService("web", webBody("blog"), blogHost))
+	if !res.OK() {
+		requireJobDone(t, job)
+		t.Fatalf("the deploy of blog ended %+v", res)
+	}
+	if held := e.claimsOf(zoo); !slices.Equal(held, []string{apiHost, zooHost}) {
+		t.Fatalf("zoo holds %v, want %v", held, []string{apiHost, zooHost})
+	}
+	if held := e.claimsOf(blog); !slices.Equal(held, []string{blogHost}) {
+		t.Fatalf("blog holds %v, want %s", held, blogHost)
+	}
+
+	// Each hostname is served by its own stack's web, over a certificate of the test CA.
+	e.uploadCertificate(zooHost)
+	e.uploadCertificate(blogHost)
+	if page := e.awaitServed(zooHost); !strings.Contains(page, webBody("zoo")) || strings.Contains(page, webBody("blog")) {
+		t.Errorf("%s answered %q, want zoo's web (%s)", zooHost, strings.TrimSpace(page), webBody("zoo"))
+	}
+	if page := e.awaitServed(blogHost); !strings.Contains(page, webBody("blog")) || strings.Contains(page, webBody("zoo")) {
+		t.Errorf("%s answered %q, want blog's web (%s)", blogHost, strings.TrimSpace(page), webBody("blog"))
+	}
+
+	// The api sits on zoo_default and on the ingress network, and its own network sorts after the ingress network's: the order in
+	// which embedded DNS was seen to pick the shared network. The name web is still its own stack's web (T-25-40, PROH-25-05).
+	if nets := e.networksOf("zoo-api-1"); !slices.Equal(nets, []string{"tierplan-ingress", "zoo_default"}) {
+		t.Fatalf("zoo's api is on networks %v, want tierplan-ingress and zoo_default (sorted)", nets)
+	}
+	if got := strings.TrimSpace(e.sh("docker exec zoo-api-1 wget -q -O- http://web/")); got != webBody("zoo") {
+		t.Errorf("from zoo's api the name web answered %q, want %q: the name must reach zoo's own web and never blog's", got, webBody("zoo"))
+	}
+	if got := strings.TrimSpace(e.sh("docker exec blog-web-1 wget -q -O- http://web/")); got != webBody("blog") {
+		t.Errorf("from blog's web the name web answered %q, want %q", got, webBody("blog"))
+	}
+
+	// On the ingress network a routed service has the one alias that names its stack and service, and no other name: neither
+	// the bare service name nor the container's name (PROH-25-05).
+	for _, c := range []struct{ container, stack, service string }{
+		{"zoo-web-1", "zoo", "web"}, {"zoo-api-1", "zoo", "api"}, {"blog-web-1", "blog", "web"},
+	} {
+		if got := e.aliasesOn(c.container, ingress.NetworkName); !slices.Equal(got, []string{ingress.Alias(c.stack, c.service)}) {
+			t.Errorf("%s has the aliases %v on %s, want exactly [%s]", c.container, got, ingress.NetworkName, ingress.Alias(c.stack, c.service))
+		}
+	}
+	// Its own default network still knows it by its service name.
+	if got := e.aliasesOn("zoo-web-1", "zoo_default"); !slices.Contains(got, "web") {
+		t.Errorf("zoo-web-1 has the aliases %v on zoo_default, want web among them", got)
+	}
 }
 
 // requireProxyObjects asserts what a standalone host holds once the proxy's project is up.

@@ -6,12 +6,17 @@ package ingressdeploy_test
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -534,3 +539,204 @@ func (o *hostStackOps) CertStates(context.Context, string, []string) (map[string
 }
 
 var _ stackops.Ingress = (*hostStackOps)(nil)
+
+// rootCaller is an instance admin, who may deploy anything.
+func (e *hostEnv) rootCaller() stackops.Caller {
+	t := e.t
+	t.Helper()
+	ctx := testsupport.Context(t)
+	if _, err := e.st.Write.ExecContext(ctx, `INSERT OR IGNORE INTO users (id, username, password_hash, created_at, updated_at, password_changed_at) VALUES ('root', 'root', 'x', 1, 1, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := e.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rbac.GrantInstanceAdminTx(ctx, tx, e.st.Q, "root"); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return stackops.Caller{Principal: &rbac.Principal{Type: rbac.PrincipalUser, ID: "root", Name: "root"}, Actor: "root"}
+}
+
+// startRegistry runs a registry on the host and pushes the backend image into it, so a stack names it by digest.
+func (e *hostEnv) startRegistry() {
+	t := e.t
+	t.Helper()
+	e.registry = dockertest.StartRegistry(t, e.host, dockertest.RegistryOptions{})
+	digest := dockertest.PushImage(t, e.host, dockertest.ServiceTestImage, e.registry+"/ingress/backend:1", nil)
+	e.webImage = e.registry + "/ingress/backend@" + digest
+}
+
+// backendCommand is the shell line a backend runs: it answers body on port 80, so a reply names the container that gave it.
+func backendCommand(body string) string {
+	return `["sh", "-c", "mkdir -p /www && echo ` + body + ` > /www/index.html && exec httpd -f -p 80 -h /www"]`
+}
+
+// webBody is what the web service of a stack answers, and apiBody what its api service does.
+func webBody(stack string) string { return stack + "-web" }
+func apiBody(stack string) string { return stack + "-api" }
+
+// routedService is a service of a standalone stack file that answers body on port 80 and asks for host.
+func (e *hostEnv) routedService(name, body, host string) string {
+	return "  " + name + ":\n    image: " + e.webImage + "\n    command: " + backendCommand(body) + "\n" +
+		"    labels:\n      tierplan.ingress.host: " + host + "\n      tierplan.ingress.port: \"80\"\n"
+}
+
+// deployStack stores a standalone stack of the environment and deploys compose through stackops.DeployStandalone with a claim
+// write, as the API's deploy does, ingress attachment included. It returns the result and the job, and marks the revision good
+// when the deploy succeeded.
+func (e *hostEnv) deployStack(name, compose string) (*stack, stackops.DeployResult, jobs.Job) {
+	t := e.t
+	t.Helper()
+	ctx := testsupport.Context(t)
+	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}}
+	st, _, err := e.repo.CreateStack(ctx, e.envID, name, stacks.TargetStandalone, "user:test", copy)
+	if err != nil {
+		t.Fatalf("CreateStack %s: %v", name, err)
+	}
+	rev, err := e.repo.NewRevision(ctx, st.ID, "user:test", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatalf("NewRevision: %v", err)
+	}
+	attach, err := e.ops.AttachFor(ctx, e.envID, stacks.TargetStandalone)
+	if err != nil {
+		t.Fatalf("AttachFor: %v", err)
+	}
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: name, Target: stacks.TargetStandalone, Copy: copy, Ingress: attach})
+	if err != nil {
+		t.Fatalf("the stack is not deployable: %v", err)
+	}
+	in := stackops.StandaloneDeployInput{
+		EnvID: e.envID, NodeID: e.nodeID, Stack: st, Copy: copy, Pins: e.repo, Subnets: e.repo, RevisionID: rev.ID, Caller: e.rootCaller(),
+		Ingress: &stackops.ClaimWrite{Decls: stacks.IngressDeclarations(loaded.Project, stacks.TargetStandalone), Actor: audit.Actor{Type: audit.ActorUser, ID: "user:test", Name: "Test User"}},
+	}
+	var res stackops.DeployResult
+	done := make(chan struct{})
+	job, err := e.jobs.Start(jobs.Spec{Kind: "stack_deploy", EnvID: e.envID, Owner: "user:test", Items: stackops.StandaloneItemSpecs()},
+		func(jctx context.Context, rep *jobs.Reporter) {
+			defer close(done)
+			res = e.deps.DeployStandalone(jctx, in, rep)
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := e.waitJob(job.ID)
+	testsupport.Await(t, "the deploy function to return", done)
+	out := &stack{Stack: st, rev: rev}
+	if res.OK() {
+		if err := e.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+			t.Fatalf("SetOutcome: %v", err)
+		}
+	}
+	return out, res, ended
+}
+
+// uploadCertificate stores a leaf for host from the test CA as the live certificate of the hostname, as the upload route does:
+// the proxy serves what the reconciler renders from it.
+func (e *hostEnv) uploadCertificate(host string) {
+	t := e.t
+	t.Helper()
+	ctx := testsupport.Context(t)
+	// More than the day a certificate must have left to be served.
+	chain, key := e.ca.LeafValidFor(t, 5*24*time.Hour, host)
+	world, err := e.istore.World(ctx, e.envID, nil)
+	if err != nil {
+		t.Fatalf("read the ingress world: %v", err)
+	}
+	if _, _, err := e.certs.Upload(ctx, ingresscert.UploadInput{
+		EnvID: e.envID, Hostname: host, Actor: "user:test", ChainPEM: chain, KeyPEM: key, World: world,
+	}, e.ca.Pool(), nil); err != nil {
+		t.Fatalf("upload the certificate of %s: %v", host, err)
+	}
+}
+
+// httpsGet asks the host's port 443 for the page of host, with the test CA as the only root, and returns the status and the body.
+func (e *hostEnv) httpsGet(host string) (int, string, error) {
+	tr := &http.Transport{
+		TLSClientConfig:   &tls.Config{ServerName: host, RootCAs: e.ca.Pool(), MinVersion: tls.VersionTLS12},
+		DisableKeepAlives: true,
+	}
+	defer tr.CloseIdleConnections()
+	hc := &http.Client{Transport: tr, Timeout: testsupport.Deadline}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://"+net.JoinHostPort(e.host.IP, "443")+"/", nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Host = host
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, string(body), err
+}
+
+// awaitServed waits until the host's port 443 answers host over a certificate the test CA issued, and returns the page.
+func (e *hostEnv) awaitServed(host string) string {
+	t := e.t
+	t.Helper()
+	var page string
+	dockertest.Wait(t, serveBound, "https://"+host+" on "+e.host.Hostname+":443 to answer", func() (bool, string) {
+		status, body, err := e.httpsGet(host)
+		if err != nil {
+			return false, err.Error()
+		}
+		page = body
+		return status == http.StatusOK, fmt.Sprintf("status %d: %.80s", status, strings.TrimSpace(body))
+	})
+	return page
+}
+
+// aliasesOn are the aliases the container's endpoint on the network lists, without the container's own short ID, which the
+// engine adds to every endpoint.
+func (e *hostEnv) aliasesOn(container, network string) []string {
+	e.t.Helper()
+	out := strings.TrimSpace(e.sh("docker inspect --format '{{json (index .NetworkSettings.Networks \"" + network + "\").Aliases}}' " + container))
+	var all []string
+	if err := json.Unmarshal([]byte(out), &all); err != nil {
+		e.t.Fatalf("read the aliases of %s on %s from %q: %v", container, network, out, err)
+	}
+	id := strings.TrimSpace(e.sh("docker inspect --format '{{.Id}}' " + container))
+	var aliases []string
+	for _, a := range all {
+		if !strings.HasPrefix(id, a) {
+			aliases = append(aliases, a)
+		}
+	}
+	return aliases
+}
+
+// networksOf are the names of the networks the container is on, sorted.
+func (e *hostEnv) networksOf(container string) []string {
+	e.t.Helper()
+	out := strings.TrimSpace(e.sh("docker inspect --format '{{json .NetworkSettings.Networks}}' " + container))
+	var nets map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &nets); err != nil {
+		e.t.Fatalf("read the networks of %s: %v", container, err)
+	}
+	names := keysOf(nets)
+	slices.Sort(names)
+	return names
+}
+
+// claimsOf are the hostnames the stack holds, sorted.
+func (e *hostEnv) claimsOf(st *stack) []string {
+	e.t.Helper()
+	all, err := e.istore.InstallClaims(testsupport.Context(e.t))
+	if err != nil {
+		e.t.Fatalf("InstallClaims: %v", err)
+	}
+	out := []string{}
+	for _, c := range all {
+		if c.StackID == st.ID {
+			out = append(out, c.Hostname)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
