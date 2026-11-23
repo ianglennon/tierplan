@@ -374,7 +374,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Description: "Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret " +
 			"that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings " +
 			"do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. " +
-			"On a standalone host plan.standalone is true: the proxy is one container of the compose project tierplan-ingress with a bridge network and a cache volume, and the host is read only when its agent is connected. " +
+			"On a standalone host creates.standalone is true: the proxy is one container of the compose project tierplan-ingress with a bridge network and a cache volume, and the host is read only when its agent is connected. " +
 			"A standalone host whose agent is not connected is a finding, ingress_host_unreachable. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressEnableInput) (*IngressEnablePreviewOutput, error) {
@@ -439,7 +439,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 			"while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. " +
 			"A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: " +
 			"their cache volume, which holds the private keys, is wiped when the agent connects. " +
-			"On a standalone host removes.container names the proxy container, and a host whose agent is not connected is the finding ingress_host_unreachable. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressDisablePreviewOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -482,7 +482,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 			"when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. " +
 			"409 " + problemIngressRoutesLive + " while a claim with routes exists, listing each hostname and path with its stack in errors; 409 " + problemIngressPaused + " while a restore's pause stands; " +
 			"On a standalone host the job removes the proxy container, the ingress network and the cache volume through the host's one node; a network another container still uses fails the job, naming it. " +
-			"409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 " + problemOperationLocked + " while another operation holds the environment. Nothing is written when it is refused. " +
+			"409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 " + problemOperationLocked + " while another operation holds the environment. Nothing is written when it is refused. " +
 			"Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressDisableStartOutput, error) {

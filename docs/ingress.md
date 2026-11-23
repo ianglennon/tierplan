@@ -86,7 +86,7 @@ next section applies.
 
 A standalone environment, whether its host runs a TierPlan agent or is TierPlan's own local socket, has one node, so
 there is one proxy. The calls are the same as on a swarm: `enable/preview`, `enable`, `status`, `join-token`,
-`access-logs`, `disable/preview` and `disable`. The preview says `plan.standalone` is true.
+`access-logs`, `disable/preview` and `disable`. The preview says `creates.standalone` is true.
 
 **What switching on creates.** The proxy is not a swarm service but one container of a compose project that TierPlan
 owns on the host, all of it labelled `tierplan.component=ingress`:
