@@ -196,3 +196,47 @@ networks:
 		t.Errorf("ingress_network_alias keys = %v, want %v", keys, want)
 	}
 }
+
+// A routed service of a standalone stack that sets network_mode cannot join the shared bridge (WR-C3): the file is refused
+// with ingress_network_mode at the key, and nothing is attached to that service. A swarm ignores network_mode and keeps
+// joining the service, so it is not refused there.
+func TestStandaloneRoutedServiceWithNetworkModeIsRefused(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27
+    network_mode: host
+    labels:
+      tierplan.ingress.host: app.example.com
+      tierplan.ingress.port: "80"
+  db:
+    image: postgres:16
+    network_mode: host
+`
+	res := standaloneCheck(compose)
+	var got []stacks.Problem
+	for _, p := range res.Problems {
+		if p.Code == stacks.CodeIngressNetworkMode {
+			got = append(got, p)
+		}
+	}
+	if len(got) != 1 || got[0].Severity != stacks.SeverityError || got[0].Key != "services.web.network_mode" || got[0].Line == 0 {
+		t.Fatalf("ingress_network_mode problems = %+v, want one error at services.web.network_mode (db has no route)", got)
+	}
+	if res.Loaded == nil {
+		t.Fatalf("Check gave no project: %+v", res.Problems)
+	}
+	if nets := networkKeys(res.Loaded, "web"); len(nets) != 0 {
+		t.Errorf("web was given networks %v, want none: it is not on a network of its own", nets)
+	}
+	if inj := res.Loaded.Ingress; inj != nil && len(inj.Services) != 0 {
+		t.Errorf("Loaded.Ingress = %+v, want no service attached", inj)
+	}
+	// Ingress off: nothing is judged, as nothing is attached.
+	off := stacks.Check(context.Background(), stacks.CheckInput{Name: "shop", Target: stacks.TargetStandalone, Copy: copyOf(compose)})
+	for _, p := range off.Problems {
+		if p.Code == stacks.CodeIngressNetworkMode {
+			t.Errorf("ingress off still reported %+v", p)
+		}
+	}
+}

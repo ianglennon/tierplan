@@ -182,6 +182,11 @@ func attachIngress(project *types.Project, target Target, routed []string, netwo
 		if !ok {
 			continue
 		}
+		if standalone && svc.NetworkMode != "" {
+			// The engine puts the container on that mode's network: it cannot join the shared bridge (ingress_network_mode
+			// refuses the file), so no attachment is written for it.
+			continue
+		}
 		alias := ""
 		if standalone {
 			alias = ingress.Alias(project.Name, name)
@@ -403,6 +408,34 @@ func volumeReservedProblems(project *types.Project, idx *PositionIndex) Problems
 				Line: line, Col: col, EndLine: endLine, EndCol: endCol, Message: message,
 			})
 		}
+	}
+	return out
+}
+
+// CodeIngressNetworkMode is a compose file whose routed service on a standalone host sets network_mode: the engine puts
+// that container on the mode's network (host, none, another service's or container's), so it cannot join the shared
+// ingress bridge and the proxy could never reach it. A swarm ignores network_mode and joins the service (lint warns of it),
+// so only a standalone host refuses.
+const CodeIngressNetworkMode = "ingress_network_mode"
+
+// networkModeProblems reports each routed service of a standalone stack that sets network_mode, as an error at the
+// network_mode key. It judges the routed set the attachment uses, and only when ingress is on for the environment, which is
+// when the attachment is made.
+func networkModeProblems(project *types.Project, idx *PositionIndex, routed []string) Problems {
+	var out Problems
+	for _, name := range routed {
+		svc, ok := project.Services[name]
+		if !ok || svc.NetworkMode == "" {
+			continue
+		}
+		path := "services." + name + ".network_mode"
+		node, file := idx.locateAny(path, "services."+name)
+		line, col, endLine, endCol := at(node)
+		out = append(out, Problem{
+			Severity: SeverityError, Code: CodeIngressNetworkMode, File: file, Key: path,
+			Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+			Message: name + " has a route but sets network_mode, so its container is not on the ingress network and the proxy cannot reach it. Remove network_mode, or remove the route labels.",
+		})
 	}
 	return out
 }

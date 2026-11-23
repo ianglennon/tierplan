@@ -205,8 +205,10 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	aliasProblems := networkAliasProblems(loaded.Project, idx)
 	// The ingress attachment goes in after lint and stripBuild, so neither the lint problems nor the
 	// position index ever see the injected key, and before anything converts the project (D-19, D-16).
+	var routed []string
 	if in.Ingress != nil {
-		loaded.Ingress = attachIngress(loaded.Project, in.Target, RoutedServices(loaded.Project, in.Target), in.Ingress.Network)
+		routed = RoutedServices(loaded.Project, in.Target)
+		loaded.Ingress = attachIngress(loaded.Project, in.Target, routed, in.Ingress.Network)
 	}
 	res.Loaded = loaded
 	res.Problems = append(append(res.Problems, binds...), lintProblems(found, file)...)
@@ -217,6 +219,9 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	res.Problems = append(res.Problems, componentLabelProblems(loaded.Project, idx)...)
 	res.Problems = append(res.Problems, networkReservedProblems(loaded.Project, idx)...)
 	res.Problems = append(res.Problems, volumeReservedProblems(loaded.Project, idx)...)
+	if in.Target == TargetStandalone {
+		res.Problems = append(res.Problems, networkModeProblems(loaded.Project, idx, routed)...)
+	}
 	res.Problems = append(res.Problems, aliasProblems...)
 	res.Problems = res.Problems.Sorted()
 	return res
