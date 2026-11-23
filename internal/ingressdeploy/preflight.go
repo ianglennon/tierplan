@@ -118,6 +118,8 @@ type checkInput struct {
 	cl *clusterView
 	// redeploy collects the stacks to redeploy, for the preview.
 	redeploy *[]StackRef
+	// host is read once and shared by the checks that look at a standalone host, nil for a swarm.
+	host *hostView
 }
 
 // clusterView is what one manager says of the swarm, read the first time a check asks for it.
@@ -151,6 +153,14 @@ func (v *clusterView) load(ctx context.Context, s *Service, envID string) error 
 		v.err = fmt.Errorf("read the swarm: %w", v.err)
 	}
 	return v.err
+}
+
+// hostView is what the standalone host's one engine says of itself, read the first time a check asks for it.
+type hostView struct {
+	read bool
+	err  error
+	// published are the containers, of every state, that bind host TCP 80 or 443.
+	published []dockerx.PublishedPort
 }
 
 // check is one step of the preflight. It returns what it found, or an error when it could not look.
