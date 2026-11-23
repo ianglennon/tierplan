@@ -524,7 +524,8 @@ func ingressNamesAllowed(name, hostname, ownID string, labels map[string]string,
 	}
 	own := ingress.Alias(labels[composeProjectLabel], labels[composeServiceLabel])
 	for _, a := range ingressAliases(aliases, labels[composeServiceLabel], name) {
-		if a != own {
+		// An engine before API 1.45 lists the container's short ID among its aliases; it is the container's own.
+		if a != own && (ownID == "" || a != ownID) {
 			return fmt.Errorf("%w: alias %s", ErrIngressName, a)
 		}
 	}
@@ -623,6 +624,16 @@ func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCrea
 		o.NetworkingConfig = &nc
 	}
 	return g.APIClient.ContainerCreate(ctx, o)
+}
+
+// ContainerStart refuses to start a container whose endpoint or network mode is stored under the ingress network's name
+// or the start of its ID and that carries a name there a stack deploy does not give (T-25-47): the engine resolves such
+// an endpoint to the ingress network at start. Every other start is forwarded.
+func (g guardClient) ContainerStart(ctx context.Context, id string, o client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	if err := ingressStartRefusal(ctx, g.APIClient, id); err != nil {
+		return client.ContainerStartResult{}, err
+	}
+	return g.APIClient.ContainerStart(ctx, id, o)
 }
 
 // NetworkConnect is the same rewrite for an engine older than API 1.44, where the SDK joins the extra networks

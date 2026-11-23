@@ -440,3 +440,41 @@ func (r *recordingEngine) NetworkCreate(_ context.Context, name string, _ client
 	r.netCreated = append(r.netCreated, name)
 	return client.NetworkCreateResult{ID: "n-" + name}, nil
 }
+
+// A container whose endpoint is stored under the start of the ingress network's ID reaches that network when it starts
+// (T-25-47, fourth re-audit): the start is refused unless it carries only a stack deploy's names, and allowed for a
+// routed replica (an engine before API 1.45 lists its short ID among the aliases) and for a container off the network.
+func TestStartIsRefusedForAForeignNameStoredUnderTheIngressNetwork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const cid = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+	start := func(name, hostname string, labels map[string]string, nets map[string][]string, mode string) error {
+		insp := container.InspectResponse{
+			ID: cid, Name: "/" + name,
+			Config:          &container.Config{Hostname: hostname, Labels: labels},
+			HostConfig:      &container.HostConfig{NetworkMode: container.NetworkMode(mode)},
+			NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}},
+		}
+		for n, a := range nets {
+			insp.NetworkSettings.Networks[n] = &network.EndpointSettings{Aliases: a}
+		}
+		eng := &recordingEngine{inspected: insp}
+		return ingressStartRefusal(ctx, eng, cid)
+	}
+	decoy := ingressID[:1]
+	if err := start("x", "abcdef012345", nil, map[string][]string{decoy: {uniqueAlias}}, "bridge"); !errors.Is(err, ErrIngressName) {
+		t.Errorf("a chosen container on a decoy name: %v, want ErrIngressName", err)
+	}
+	if err := start("x", "abcdef012345", nil, nil, ingressID[:6]); !errors.Is(err, ErrIngressName) {
+		t.Errorf("a chosen container with a decoy network mode: %v, want ErrIngressName", err)
+	}
+	if err := start("shop-web-1", "abcdef012345", shopWebLabels, map[string][]string{ingress.NetworkName: {"other-web-b86c19eb"}}, "bridge"); !errors.Is(err, ErrIngressName) {
+		t.Errorf("a replica with a foreign alias: %v, want ErrIngressName", err)
+	}
+	if err := start("shop-web-1", "abcdef012345", shopWebLabels, map[string][]string{ingress.NetworkName: {uniqueAlias, "abcdef012345"}, "shop_default": {"web"}}, "shop_default"); err != nil {
+		t.Errorf("a routed replica: %v, want it started", err)
+	}
+	if err := start("anything", "custom", nil, map[string][]string{"front": {"x"}}, "front"); err != nil {
+		t.Errorf("a container off the ingress network: %v, want it started", err)
+	}
+}
