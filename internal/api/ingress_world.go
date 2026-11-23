@@ -173,12 +173,10 @@ func (d StacksDeps) ingressOps() stackops.Ingress {
 // ingressClaimTarget is the audit target type of a claim write: the stack that holds the claim.
 const ingressClaimTarget = "stack"
 
-// AttachFor is the attachment of a swarm target of an environment whose ingress is switched on, and nil otherwise
-// (D-13, D-19). A standalone target is never attached (the standalone attach is Phase 25).
-func (o ingressOps) AttachFor(ctx context.Context, envID string, target stacks.Target) (*stacks.IngressAttach, error) {
-	if target != stacks.TargetSwarm {
-		return nil, nil
-	}
+// AttachFor is the attachment of a stack of an environment whose ingress is switched on, whichever its target (a
+// swarm stack's services join the overlay, a standalone stack's the bridge of its host), and nil otherwise (D-13, D-16,
+// D-19). The target decides only what the attachment carries, in the conversion, never whether there is one.
+func (o ingressOps) AttachFor(ctx context.Context, envID string, _ stacks.Target) (*stacks.IngressAttach, error) {
 	set, err := o.d.Ingress.Settings(ctx, envID)
 	if err != nil {
 		return nil, err

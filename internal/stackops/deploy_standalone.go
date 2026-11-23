@@ -102,8 +102,7 @@ type StandaloneDeployInput struct {
 	// its job.
 	Masker stacks.Masker
 	// Ingress, when not nil, is how the deploy stores the stack's hostname claims, and puts them back when it does not
-	// end well, exactly as a swarm deploy does (D-13, D-15, D-16). A standalone stack's routes are skipped with no
-	// backend until Phase 25, but the names are held all the same. Nil writes and reverts nothing (D-17).
+	// end well, exactly as a swarm deploy does (D-13, D-15, D-16). Nil writes and reverts nothing (D-17).
 	Ingress *ClaimWrite
 	// OnDone, when set, is called once with the result before the job's last item is finished.
 	OnDone func(DeployResult)
@@ -154,11 +153,23 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.log().Warn("a standalone host could not be written to before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
-	// ingress: unattached, the standalone attach is Phase 25
-	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy, IngressPolicy: in.IngressPolicy})
+	// The job decides the attachment itself, under the operation lock it holds, so every caller of a standalone deploy (a
+	// deploy, a git deploy, an update of the images, a roll back, a restore, the automatic roll back of a failed update)
+	// attaches a routed service alike, and a switch flipped since the request was judged is read as it is now (D-16).
+	attach, aerr := d.attachFor(ctx, in.EnvID, stacks.TargetStandalone)
+	if aerr != nil {
+		attach = nil
+	}
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy, IngressPolicy: in.IngressPolicy, Ingress: attach})
 	if checked.Loaded == nil || checked.Problems.Errors() > 0 {
 		d.log().Warn("a standalone stack no longer passes its check at deploy time", "environment", in.EnvID, "stack", in.Stack.Name)
 		return fail(ItemCheck, CodeStackInvalid, "")
+	}
+	// A switch that cannot be read refuses a stack with a routed service: it would be deployed off the bridge, or on a
+	// network that is not there. A stack with none does not need the answer and goes on unattached.
+	if aerr != nil && len(stacks.RoutedServices(checked.Loaded.Project, stacks.TargetStandalone)) > 0 {
+		d.log().Warn("whether ingress is on could not be read before a standalone deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", aerr)
+		return failWith(ItemCheck, CodePolicyUnavailable, "", "Whether ingress is on could not be read, so nothing was deployed.")
 	}
 	project := checked.Loaded.Project
 	files, vars := stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy)
