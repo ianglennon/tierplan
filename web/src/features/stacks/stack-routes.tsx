@@ -28,7 +28,7 @@ const SHOWN = 10;
 
 interface StackRoutesProps {
   envId: string;
-  stack: Pick<StackDetail, "id" | "stopped">;
+  stack: Pick<StackDetail, "id" | "stopped" | "target">;
 }
 
 // dotOf maps a route's state to the health colour its dot draws. Status colours are for health only, and every
@@ -98,10 +98,17 @@ export function StackRoutes({ envId, stack }: StackRoutesProps) {
 
   // detailOf is the second line of a route's State cell. A stopped stack says it once, above the table, so its
   // rows keep the dot and the label and do not repeat it.
+  // A standalone host has one proxy and containers, not nodes and tasks, so two lines word it that way.
+  const standalone = stack.target === "standalone";
   function detailOf(route: StackRoute): string {
     const state: StackRouteState = route.state;
     switch (state) {
       case "pending":
+        return t(
+          standalone
+            ? "stackIngress.routes.state.pending.detailStandalone"
+            : "stackIngress.routes.state.pending.detail",
+        );
       case "not_attached":
       case "ingress_off":
         return t(`stackIngress.routes.state.${state}.detail`);
@@ -113,9 +120,12 @@ export function StackRoutes({ envId, stack }: StackRoutesProps) {
       case "backend_not_running":
         if (route.stopped)
           return stack.stopped ? "" : t("stackIngress.routes.state.backend_not_running.stopped");
-        return t("stackIngress.routes.state.backend_not_running.noTask", {
-          service: route.service,
-        });
+        return t(
+          standalone
+            ? "stackIngress.routes.state.backend_not_running.noContainer"
+            : "stackIngress.routes.state.backend_not_running.noTask",
+          { service: route.service },
+        );
       default:
         return "";
     }
