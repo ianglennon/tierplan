@@ -43,6 +43,8 @@ const (
 	CodeEnableNetworkFailed = "enable_network_failed"
 	CodeEnableServiceFailed = "enable_service_failed"
 	CodeEnableSwitchFailed  = "enable_switch_failed"
+	// CodeEnableHostFailed ends the first item of a standalone enable when the host could not be read.
+	CodeEnableHostFailed = "enable_host_failed"
 	// CodeNotRun ends the items after the one that failed.
 	CodeNotRun = "not_run"
 )
@@ -53,6 +55,7 @@ var codeMessages = map[string]string{
 	CodeEnableNetworkFailed: "The ingress network could not be created.",
 	CodeEnableServiceFailed: "The proxy service could not be created or updated.",
 	CodeEnableSwitchFailed:  "Ingress could not be switched on.",
+	CodeEnableHostFailed:    "The host could not be read, so the proxy was not changed.",
 	CodeNotRun:              "Not run because an earlier step failed.",
 }
 
@@ -88,6 +91,9 @@ type Plan struct {
 		New bool
 	}
 	Volume struct{ Name string }
+	// Standalone is true when the plan is a standalone host's: the proxy is one container of a compose project and not a
+	// global service, its network is a bridge and its join token is no swarm secret.
+	Standalone bool
 }
 
 // PreviewResult is what Preview tells a person before they enable.
@@ -176,7 +182,7 @@ func (s *Service) Preview(ctx context.Context, envID string, req EnableRequest) 
 		return PreviewResult{}, err
 	}
 	if !info.Swarm {
-		return PreviewResult{}, ErrStandaloneUnavailable
+		return s.previewStandalone(ctx, info, req)
 	}
 	findings, redeploy, err := s.preflightRun(ctx, info, req)
 	if err != nil {
@@ -236,19 +242,35 @@ func (s *Service) chooseSubnet(ctx context.Context, envID string, fresh bool) (s
 	return block.String(), nil
 }
 
-// Enable switches ingress on for a swarm environment: it takes the environment's operation lock, runs the
-// preflight, and starts a job that makes the join token and its secret, the network and the proxy service,
-// then switches ingress on and audits it. It returns the job's ID. A standalone environment is refused with
-// ErrStandaloneUnavailable, a held lock with a *LockedError and a failed preflight with a *PreflightError;
-// in each case nothing was written. The job changes nothing of any stack (D-14).
+// Enable switches ingress on: it takes the environment's operation lock, runs the preflight, and starts a job. On a
+// swarm the job makes the join token and its secret, the network and the proxy service; on a standalone host it makes the
+// join token when the proxy has to enrol and brings the proxy's compose project up. Either way it then switches ingress
+// on and audits it. It returns the job's ID. A held lock is a *LockedError and a failed preflight a *PreflightError; in
+// each case nothing was written. The job changes nothing of any stack (D-14).
 func (s *Service) Enable(ctx context.Context, actor audit.Actor, owner, envID string, req EnableRequest) (string, error) {
 	info, err := s.d.Envs.Info(ctx, envID)
 	if err != nil {
 		return "", err
 	}
 	if !info.Swarm {
-		return "", ErrStandaloneUnavailable
+		return s.enableStandalone(ctx, actor, owner, info, req)
 	}
+	specs := make([]jobs.ItemSpec, 0, len(enableItems))
+	for _, id := range enableItems {
+		specs = append(specs, jobs.ItemSpec{ID: id, Label: itemLabels[id], Kind: "step"})
+	}
+	return s.startEnable(ctx, owner, info, req, s.preflight, specs, func(jctx context.Context, r *jobs.Reporter, release func()) {
+		s.runEnable(jctx, r, release, actor, info.ID, req)
+	})
+}
+
+// startEnable is the part of an enable the two kinds of environment share: the operation lock, the preflight and the
+// job. The job starts only after the lock names it, so the holder a refused operation is told about is always the whole
+// of it. run is the job's body; it is handed release, which frees the lock and is safe to repeat.
+func (s *Service) startEnable(ctx context.Context, owner string, info EnvInfo, req EnableRequest,
+	pre func(context.Context, EnvInfo, EnableRequest) ([]Finding, error), items []jobs.ItemSpec,
+	run func(ctx context.Context, r *jobs.Reporter, release func())) (string, error) {
+	envID := info.ID
 	release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
 		Kind: stackops.HolderKindIngress, By: owner, Workload: "ingress", Started: s.d.Clock.Now(),
 	})
@@ -261,28 +283,22 @@ func (s *Service) Enable(ctx context.Context, actor audit.Actor, owner, envID st
 			release()
 		}
 	}()
-	findings, err := s.preflight(ctx, info, req)
+	findings, err := pre(ctx, info, req)
 	if err != nil {
 		return "", err
 	}
 	if hasErrors(findings) {
 		return "", &PreflightError{Findings: findings}
 	}
-	specs := make([]jobs.ItemSpec, 0, len(enableItems))
-	for _, id := range enableItems {
-		specs = append(specs, jobs.ItemSpec{ID: id, Label: itemLabels[id], Kind: "step"})
-	}
-	// The job starts only after the lock names it, so the holder a refused operation is told about is
-	// always the whole of it.
 	attached := make(chan struct{})
-	job, err := s.d.Jobs.Start(jobs.Spec{Kind: JobKindEnable, EnvID: envID, Owner: owner, Items: specs},
+	job, err := s.d.Jobs.Start(jobs.Spec{Kind: JobKindEnable, EnvID: envID, Owner: owner, Items: items},
 		func(jctx context.Context, r *jobs.Reporter) {
 			defer release()
 			select {
 			case <-attached:
 			case <-jctx.Done():
 			}
-			s.runEnable(jctx, r, release, actor, envID, req)
+			run(jctx, r, release)
 		})
 	if err != nil {
 		return "", err
@@ -307,12 +323,14 @@ type enableRun struct {
 
 	secretID, secretName string
 	subnet               string
+	// items are the items of the job this run ends, in order.
+	items []string
 }
 
 // runEnable runs the steps, one at a time. The first failure ends its item with a code and the items after
 // it as not run; nothing is retried and nothing is rolled back.
 func (s *Service) runEnable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, envID string, req EnableRequest) {
-	run := &enableRun{s: s, actor: actor, envID: envID, req: req, r: r, release: release, image: IngressImage(s.d.ServerVersion)}
+	run := &enableRun{s: s, actor: actor, envID: envID, req: req, r: r, release: release, image: IngressImage(s.d.ServerVersion), items: enableItems}
 	steps := []struct {
 		item string
 		do   func(context.Context) error
@@ -383,7 +401,7 @@ func (e *enableRun) stop(item, state, code, detail string) {
 
 // skipFrom ends the items from index i on without running them.
 func (e *enableRun) skipFrom(i int, state, code string) {
-	for _, id := range enableItems[i:] {
+	for _, id := range e.items[i:] {
 		e.r.Finish(id, state, code, codeMessages[code], nil)
 	}
 }

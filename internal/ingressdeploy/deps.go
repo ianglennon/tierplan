@@ -92,6 +92,14 @@ type Tokens interface {
 
 var _ Tokens = (*ingresshub.Service)(nil)
 
+// SystemDeployer deploys and removes the standalone host's proxy project: stackops.Deps has these methods.
+type SystemDeployer interface {
+	DeploySystem(ctx context.Context, in stackops.SystemDeployInput, r *jobs.Reporter) stackops.DeployResult
+	DownSystem(ctx context.Context, envID, nodeID string) error
+}
+
+var _ SystemDeployer = stackops.Deps{}
+
 // Kicker closes the live ingress sessions of an environment: *ingresshub.Hub has this method. Disable calls it once ingress
 // is switched off and before the proxy service is removed, so no proxy is still being served.
 type Kicker interface {
@@ -158,6 +166,9 @@ type Deps struct {
 	// Notifier is the ingress store's notifier: the ensure loop takes a pass whenever it reports a change. Nil
 	// leaves the loop to its tick and to Wake.
 	Notifier *ingress.Notifier
+	// System deploys and removes the standalone proxy's compose project. It is required on a standalone environment; the
+	// server gives it a stackops.Deps with the aggregator, the address spaces and the registry resolver.
+	System SystemDeployer
 	// Resolver chooses the registry credential of the proxy image; nil sends none. Give it only a non-nil
 	// *registry.Resolver, since a nil one inside the interface is not nil.
 	Resolver Registry

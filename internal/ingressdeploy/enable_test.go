@@ -184,37 +184,6 @@ func TestEnableTakesTheOperationLock(t *testing.T) {
 	}
 }
 
-// TestEnableStandaloneUnavailable: a standalone environment is refused before anything is written, by both
-// Preview and Enable.
-func TestEnableStandaloneUnavailable(t *testing.T) {
-	r := newRig(t, rigOptions{standalone: true})
-	ctx := testsupport.Context(t)
-	if _, err := r.svc.Enable(ctx, testActor, testOwner, r.envID, ingressdeploy.EnableRequest{}); !errors.Is(err, ingressdeploy.ErrStandaloneUnavailable) {
-		t.Fatalf("Enable = %v, want ErrStandaloneUnavailable", err)
-	}
-	if _, err := r.svc.Preview(ctx, r.envID, ingressdeploy.EnableRequest{}); !errors.Is(err, ingressdeploy.ErrStandaloneUnavailable) {
-		t.Fatalf("Preview = %v, want ErrStandaloneUnavailable", err)
-	}
-	if ingressdeploy.CodeStandaloneUnavailable != "ingress_standalone_unavailable" {
-		t.Errorf("code = %q", ingressdeploy.CodeStandaloneUnavailable)
-	}
-	if got := r.fake.Writes(); len(got) != 0 {
-		t.Errorf("writes = %v, want none", got)
-	}
-	if st, _ := r.tokens.TokenStatus(ctx, r.envID); st.Exists {
-		t.Error("a join token was issued")
-	}
-	if state, _ := r.istore.DeployState(ctx, r.envID); state.Enabled {
-		t.Error("ingress was switched on")
-	}
-	if got := r.auditCount("ingress.enabled"); got != 0 {
-		t.Errorf("ingress.enabled audit rows = %d", got)
-	}
-	if _, held := r.locks.Held(r.envID); held {
-		t.Error("the lock was left held")
-	}
-}
-
 // TestPreviewWritesNothing: Preview names what an enable would make and the stacks to redeploy, and leaves
 // the swarm and the database as they were.
 func TestPreviewWritesNothing(t *testing.T) {
