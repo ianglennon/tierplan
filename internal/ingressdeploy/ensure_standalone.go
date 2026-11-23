@@ -107,8 +107,11 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 	s.log().Info("the ingress ensure loop is putting a standalone proxy right", "environment", envID, "reason", plan.Reason, "token", plan.Token)
 	if err := s.redeployStandalone(ctx, envID, info, state, l, plan); err != nil {
 		s.log().Warn("the ingress ensure loop could not put a standalone proxy right", "environment", envID, "reason", plan.Reason, "error", err)
-		// A failed up may still have made the network; the next pass checks it before anything else in any case.
-		if refs, rerr := s.shadowRefs(ctx, info); rerr == nil && len(refs) > 0 {
+		// A failed up may still have made the network and started the proxy on it: a hit or an unreadable host takes it down.
+		refs, rerr := s.shadowRefs(ctx, info)
+		if rerr != nil {
+			s.downSystem(ctx, envID, info)
+		} else if len(refs) > 0 {
 			return s.downShadowed(ctx, envID, info, refs), true
 		}
 		return EnsureWriteFailed, true
