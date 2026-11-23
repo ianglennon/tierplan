@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/ianglennon/tierplan/internal/httpx"
@@ -17,6 +18,18 @@ const problemIngressOwned = "ingress_owned"
 
 // ingressOwnedMessage is the sentence every ingress_owned refusal carries.
 const ingressOwnedMessage = "This is managed by TierPlan ingress. Switch ingress off to remove it. Nothing was changed."
+
+// ingressNameMessage is the refusal of a start, restart or connect that would put a container on TierPlan's ingress
+// network, by its name or by a network named with the start of its ID, under a name a stack deploy does not give
+// (T-25-47): the proxy reaches each route by name there, so the name could take another stack's route.
+const ingressNameMessage = "This would put the container on TierPlan's ingress network under a name of its own, where it could take another stack's route. Disconnect it from that network first. Nothing was changed."
+
+// errIngressShadow is a network create refused on its engine because the name is the start of the ingress network's ID.
+var errIngressShadow = errors.New("api: the network name is the start of the ingress network's ID")
+
+// ingressShadowMessage is the refusal of a connect to, or a create of, a network whose name is the start of the ingress
+// network's ID: once no network carries that name, the engine resolves it to the ingress network (T-25-47).
+const ingressShadowMessage = "This network's name is the start of the ID of TierPlan's ingress network, so a container joined to it could end up on the ingress network. Use another name. Nothing was changed."
 
 // problemIngressComponentLabel is the type of the 422 a create that sets TierPlan's component label gets (D-41).
 const problemIngressComponentLabel = "ingress_component_label"

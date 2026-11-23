@@ -890,6 +890,22 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 		}
 		return res
 	}
+	// A start reaches the networks a container's endpoints are stored under by name, and a name that is the start of the
+	// ingress network's ID reaches the ingress network once no network carries it: a container with a name there that a
+	// stack deploy does not give is not started (T-25-47). A restart starts it again too.
+	if !op.remove && (op.verb == dockerx.VerbStart || op.verb == dockerx.VerbRestart) {
+		checkCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+		err := d.Aggregator.OnNode(checkCtx, envID, t.NodeID, func(c *dockerx.Client) error {
+			return c.IngressLaunchRefusal(checkCtx, t.ID)
+		})
+		cancel()
+		switch {
+		case errors.Is(err, dockerx.ErrIngressName):
+			return fail(problemIngressOwned, ingressNameMessage)
+		case err != nil:
+			return failCall(err)
+		}
+	}
 	switch {
 	case isSelf(own.ID):
 		res.own = ownServer
