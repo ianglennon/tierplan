@@ -45,10 +45,12 @@ const (
 
 // The sentences of the warnings, worded as the UI contract has them. {service} is the name in the compose file.
 const (
-	messageIngressDisabled   = "Ingress is off for this environment. The routes will serve once it is switched on and the stack is redeployed."
-	messageIngressNoHealth   = " has no health check, so a starting task can get traffic before it is ready."
-	messageIngressDNSRR      = " uses endpoint_mode: dnsrr, so its name resolves to task addresses and not one stable address. The proxy can keep sending traffic to a replaced task until it reconnects."
-	messageIngressNoReplicas = " has no replicas, so its route will show Backend not running."
+	messageIngressDisabled = "Ingress is off for this environment. The routes will serve once it is switched on and the stack is redeployed."
+	messageIngressNoHealth = " has no health check, so a starting task can get traffic before it is ready."
+	// On a standalone host there are no tasks: a recreated container is what starts.
+	messageIngressNoHealthStandalone = " has no health check, so a starting container can get traffic before it is ready."
+	messageIngressDNSRR              = " uses endpoint_mode: dnsrr, so its name resolves to task addresses and not one stable address. The proxy can keep sending traffic to a replaced task until it reconnects."
+	messageIngressNoReplicas         = " has no replicas, so its route will show Backend not running."
 )
 
 // IngressRouteRow is one route of the review: Change is added, kept or released. Path is the prefix as the proxy
@@ -294,7 +296,11 @@ func ingressWarnings(project *types.Project, decls []ingress.Declaration, off bo
 			continue
 		}
 		if svc.HealthCheck == nil || svc.HealthCheck.Disable {
-			out = append(out, warn(CodeIngressNoHealth, name, name+messageIngressNoHealth))
+			msg := messageIngressNoHealth
+			if standalone {
+				msg = messageIngressNoHealthStandalone
+			}
+			out = append(out, warn(CodeIngressNoHealth, name, name+msg))
 		}
 		if !standalone && svc.Deploy != nil && svc.Deploy.EndpointMode == "dnsrr" {
 			out = append(out, warn(CodeIngressDNSRR, name, name+messageIngressDNSRR))

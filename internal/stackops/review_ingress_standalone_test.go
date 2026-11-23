@@ -173,4 +173,27 @@ func TestStandaloneReviewWarnings(t *testing.T) {
 	eq(t, warnings(t, true, false), "ingress_disabled idle", "ingress_no_healthcheck web", "ingress_no_replicas idle")
 	// A stopped stack runs nothing, so each routed service has no replicas.
 	eq(t, warnings(t, false, true), "ingress_no_healthcheck web", "ingress_no_replicas web", "ingress_no_replicas idle", "ingress_no_replicas rr")
+
+	// The health check warning speaks of a container, not a task: a standalone host runs no tasks.
+	r := newStandaloneRig(t)
+	r.deps.Ingress = &fakeIngress{}
+	in := r.standaloneReviewInput(t, "demo", compose, nil)
+	in.Ingress = ingressOn()
+	rv, err := r.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	const want = "web has no health check, so a starting container can get traffic before it is ready."
+	found := false
+	for _, p := range rv.Problems {
+		if p.Code == "ingress_no_healthcheck" {
+			found = true
+			if p.Message != want {
+				t.Errorf("message = %q, want %q", p.Message, want)
+			}
+		}
+	}
+	if !found {
+		t.Error("no ingress_no_healthcheck warning")
+	}
 }
