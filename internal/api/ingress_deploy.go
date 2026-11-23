@@ -26,7 +26,6 @@ import (
 // own deploy to join the ingress network.
 
 const (
-	problemIngressStandalone       = "ingress_standalone_unavailable"
 	problemIngressPreflightRefused = "ingress_preflight_refused"
 	problemIngressJobNotFound      = "ingress_job_not_found"
 	problemIngressRoutesLive       = ingressdeploy.CodeRoutesLive
@@ -345,8 +344,6 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		var refused *ingressdeploy.DisableRefusedError
 		var locked *ingressdeploy.LockedError
 		switch {
-		case errors.Is(err, ingressdeploy.ErrStandaloneUnavailable):
-			return httpx.Problem(http.StatusConflict, problemIngressStandalone, "Ingress is not yet available on a standalone environment.")
 		case errors.As(err, &pre):
 			return ingressPreflightProblem(pre)
 		case errors.As(err, &refused):
@@ -372,7 +369,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Description: "Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret " +
 			"that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings " +
 			"do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. " +
-			"409 " + problemIngressStandalone + " on a standalone environment, which has no ingress yet. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"409 ingress_standalone_unavailable on a standalone environment, which has no ingress yet. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressEnableInput) (*IngressEnablePreviewOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
@@ -405,7 +402,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Description: "Runs the preflight again, then, as a job answered with 202 and its ID at once, makes the join token's swarm secret, the ingress network " +
 			"and the global proxy service and switches ingress on. Existing stacks are not changed: a stack must be redeployed to be attached to the ingress network. " +
 			"Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream; enrolment and readiness of the proxy nodes are read through the ingress status and the node list. " +
-			"409 " + problemIngressStandalone + " on a standalone environment; 409 " + problemIngressPreflightRefused + " when the preflight refuses, with each finding's code and items in errors; " +
+			"409 ingress_standalone_unavailable on a standalone environment; 409 " + problemIngressPreflightRefused + " when the preflight refuses, with each finding's code and items in errors; " +
 			"409 " + problemOperationLocked + " while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin). " +
 			"Audited as ingress.enabled when the job switches it on.",
 		Tags: []string{"ingress"},
@@ -434,7 +431,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 			"while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. " +
 			"A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: " +
 			"their cache volume, which holds the private keys, is wiped when the agent connects. " +
-			"409 " + problemIngressStandalone + " on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressDisablePreviewOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -476,7 +473,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 			"disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped " +
 			"when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. " +
 			"409 " + problemIngressRoutesLive + " while a claim with routes exists, listing each hostname and path with its stack in errors; 409 " + problemIngressPaused + " while a restore's pause stands; " +
-			"409 " + problemIngressStandalone + " on a standalone environment; 409 " + problemOperationLocked + " while another operation holds the environment. Nothing is written when it is refused. " +
+			"409 ingress_standalone_unavailable on a standalone environment; 409 " + problemOperationLocked + " while another operation holds the environment. Nothing is written when it is refused. " +
 			"Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressDisableStartOutput, error) {
@@ -529,7 +526,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Description: "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds; " +
 			"how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; " +
 			"how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. " +
-			"It carries no token and no secret. 409 " + problemIngressStandalone + " on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"It carries no token and no secret. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressStatusOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
@@ -564,7 +561,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Description: "Stores whether the proxies write an access log; it is off by default. Switching it restarts each node's proxy in turn, as the proxy service is rolled with " +
 			"the setting changed. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). " +
 			"The answer says when it applies: rolling, or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. " +
-			"409 " + problemIngressStandalone + " on a standalone environment. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).",
+			"409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressAccessLogsInput) (*IngressAccessLogsOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -588,7 +585,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Summary:     "Resume the ingress of an environment a restore paused",
 		Description: "After a restore from a backup, TierPlan only observes each environment's ingress and writes nothing to its swarm until an Admin resumes it here. " +
 			"Resuming clears the marker and the next pass writes the ingress objects again. Resuming an environment that is not paused answers 200 with resumed false and is not audited. " +
-			"409 " + problemIngressStandalone + " on a standalone environment. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).",
+			"409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressResumeOutput, error) {
 		p := httpx.PrincipalFrom(ctx)

@@ -89,6 +89,7 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Audit:         d.Audit,
 		Resolver:      d.Resolver,
 		AddressSpaces: d.AddressSpaces,
+		System:        ingressSystem(d),
 		LocalSwarm:    d.Envs.LocalSwarmMembership,
 		OwnChallenge:  d.OwnChallenge,
 		ServerVersion: buildinfo.Get().Version,
@@ -97,6 +98,12 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Clock:         d.Clock,
 		Log:           d.Log,
 	})
+}
+
+// ingressSystem is the deployer of a standalone host's proxy project: the stack pipeline's own system deploy, on the server's
+// aggregator. It has no Ingress, so the project is never attached to the ingress network or given a hostname claim.
+func ingressSystem(d ingressDeployDeps) stackops.Deps {
+	return stackops.Deps{Aggregator: d.Aggregator, AddressSpaces: d.AddressSpaces, Resolver: d.Resolver, Log: d.Log}
 }
 
 // ingressEngine reaches a swarm's engines: the writes and the node reads through the aggregator, the cluster read

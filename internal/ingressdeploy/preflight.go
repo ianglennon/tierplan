@@ -21,8 +21,6 @@ import (
 // The codes of the preflight refusals this file owns. Every other check of the list adds its own beside
 // its function.
 const (
-	// CodeStandaloneUnavailable is the refusal of a standalone environment: ingress is for swarms (D-34).
-	CodeStandaloneUnavailable = "ingress_standalone_unavailable"
 	// CodeNoManager is the refusal of an environment no manager agent is connected to (D-07).
 	CodeNoManager = "ingress_no_manager"
 	// CodePortInUse is the refusal of an environment where something already publishes TCP port 80 or 443 (D-07, D-43).
@@ -68,9 +66,6 @@ const (
 	// SeverityWarning tells the person something and lets the operation go on.
 	SeverityWarning = "warning"
 )
-
-// ErrStandaloneUnavailable means ingress is not available on a standalone environment. Nothing was written.
-var ErrStandaloneUnavailable = errors.New("ingress is not yet available on a standalone environment")
 
 // Finding is one thing the preflight found: a refusal, or a warning.
 type Finding struct {

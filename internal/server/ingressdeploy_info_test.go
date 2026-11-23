@@ -5,13 +5,21 @@ package server
 
 import (
 	"database/sql"
+	"log/slog"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
+	"github.com/ianglennon/tierplan/internal/ingresshub"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // envInfoFrom describes an environment to the ingress deployer: a standalone environment as one node whose AgentID is
@@ -110,4 +118,44 @@ func TestEnvInfoFromSwarmUnchanged(t *testing.T) {
 			t.Errorf("envInfoFrom = %+v, want %+v", got, want)
 		}
 	})
+}
+
+// The server gives the deployer the system deployer a standalone host's proxy is brought up with (D-11): the stack
+// pipeline's own deps on the server's aggregator, address spaces and registry resolver, and no ingress, so the project is
+// never attached or claimed.
+func TestNewIngressDeployWiresTheSystemDeployer(t *testing.T) {
+	ctx := testsupport.Context(t)
+	log := slog.New(slog.DiscardHandler)
+	srv, err := Build(ctx, testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": filepath.Join(t.TempDir(), "data")}), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if _, err := srv.store.Write.ExecContext(ctx,
+		`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, env_type)
+		 VALUES ('env-sys', 'agent', 'Edge host', '', 1, 1, 1, 'standalone')`); err != nil {
+		t.Fatal(err)
+	}
+	notifier := ingress.NewNotifier()
+	spaces := envs.NewAddressSpaces(srv.envs, srv.aggregator, srv.clusters, envs.AddressSpaceOptions{Log: log})
+	deps := ingressDeployDeps{
+		Log: log, Store: srv.store, Audit: srv.audit, Aggregator: srv.aggregator, Clusters: srv.clusters, Envs: srv.envs,
+		Ingress:  ingressstore.New(ingressstore.Deps{St: srv.store, Vault: srv.vault, Notifier: notifier}),
+		Notifier: notifier, Tokens: ingresshub.NewService(srv.store, srv.audit, time.Now), Jobs: srv.jobs,
+		Locks: stackops.NewLocks(), Resolver: srv.resolver, AddressSpaces: spaces, Instance: srv.inst,
+	}
+
+	want := stackops.Deps{Aggregator: srv.aggregator, AddressSpaces: spaces, Resolver: srv.resolver, Log: log}
+	if got := ingressSystem(deps); !reflect.DeepEqual(got, want) {
+		t.Errorf("ingressSystem = %+v, want %+v", got, want)
+	}
+
+	// Through the deployer the server builds, a standalone environment is answered by the standalone plan.
+	res, err := newIngressDeploy(deps).Preview(ctx, "env-sys", ingressdeploy.EnableRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Plan.Standalone {
+		t.Errorf("Preview of a standalone environment answered a swarm plan: %+v", res.Plan)
+	}
 }
