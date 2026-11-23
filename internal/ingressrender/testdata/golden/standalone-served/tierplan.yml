@@ -12,11 +12,11 @@ http:
       rule: Host(`old.example.com`)
       entryPoints:
         - websecure
-      service: s-1716ad7ff3f2
+      service: s-5dc8b1e750d6
       priority: 1
       tls: {}
   services:
-    s-1716ad7ff3f2:
+    s-5dc8b1e750d6:
       loadBalancer:
         servers:
-          - url: http://legacy-app-612d4e0a:80
+          - url: http://legacy-app-612d4e0aaa88cc24:80

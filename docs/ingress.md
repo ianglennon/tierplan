@@ -121,7 +121,7 @@ kind `ingress_ensure`.
 is attached to the `tierplan-ingress` network by its next deploy, and the preview and the status list the stacks that
 need one, whether or not they look attached, from what the host holds. Each routed service gets one alias on the shared
 network, made from the stack and the service: lowercase, with a short hash of the pair at the end, for example
-`shop-web-1a2b3c4d`. The bare service name, `web`, is not a name on the shared network. So two stacks that each have a
+`shop-web-1a2b3c4d5e6f7a8b`. The bare service name, `web`, is not a name on the shared network. So two stacks that each have a
 service `web` never answer for each other, and the proxy reaches a service by its alias. Inside its own stack a service
 still uses its plain name, on the stack's own network.
 

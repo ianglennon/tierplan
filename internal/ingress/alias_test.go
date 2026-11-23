@@ -19,20 +19,23 @@ func aliasTable() []aliasCase {
 	a70 := strings.Repeat("a", 70)
 	b70 := strings.Repeat("b", 70)
 	return []aliasCase{
-		{"two stacks, one service name: shop", "shop", "web", "shop-web-8edaa88d"},
-		{"two stacks, one service name: blog", "blog", "web", "blog-web-569b37b7"},
-		{"underscore and plus swap one way", "a_b+c", "a+b_c", "a-b-c-a-b-c-d098a70e"},
-		{"underscore and plus swap the other way", "a+b_c", "a_b+c", "a-b-c-a-b-c-1ff4599e"},
-		{"upper-case project", "Shop", "web", "shop-web-525036b1"},
-		{"upper-case service", "shop", "Web", "shop-web-b1e4d4e0"},
-		{"service key starting with an underscore", "shop", "_web", "shop--web-5f789eea"},
-		{"service key starting with a hyphen", "shop", "-web", "shop--web-9d338114"},
-		{"70-byte project is cut", a70, "web", strings.Repeat("a", 50) + "-web-4e956a31"},
-		{"70-byte service is cut", "shop", a70, "shop-" + strings.Repeat("a", 49) + "-aeb15ec1"},
-		{"two 70-byte names share the room", a70, b70, strings.Repeat("a", 26) + "-" + strings.Repeat("b", 27) + "-2760c419"},
-		{"71-byte project with the same 70-byte prefix", a70 + "x", b70, strings.Repeat("a", 26) + "-" + strings.Repeat("b", 27) + "-c639960b"},
-		{"ordinary hyphenated names", "my-app", "api", "my-app-api-863ae9cd"},
-		{"one-byte names", "x", "y", "x-y-ce3890a8"},
+		{"two stacks, one service name: shop", "shop", "web", "shop-web-8edaa88d78dd11a4"},
+		{"two stacks, one service name: blog", "blog", "web", "blog-web-569b37b7c7f0516f"},
+		{"underscore and plus swap one way", "a_b+c", "a+b_c", "a-b-c-a-b-c-d098a70e2f2b8a39"},
+		{"underscore and plus swap the other way", "a+b_c", "a_b+c", "a-b-c-a-b-c-1ff4599ecdc2f140"},
+		{"upper-case project", "Shop", "web", "shop-web-525036b124c90592"},
+		{"upper-case service", "shop", "Web", "shop-web-b1e4d4e012e44127"},
+		{"service key starting with an underscore", "shop", "_web", "shop--web-5f789eeab5da8b5e"},
+		{"service key starting with a hyphen", "shop", "-web", "shop--web-9d33811445397a72"},
+		{"70-byte project is cut", a70, "web", strings.Repeat("a", 42) + "-web-4e956a31109efe3e"},
+		{"70-byte service is cut", "shop", a70, "shop-" + strings.Repeat("a", 41) + "-aeb15ec13042dff9"},
+		{"two 70-byte names share the room", a70, b70, strings.Repeat("a", 22) + "-" + strings.Repeat("b", 23) + "-2760c4193b3441a1"},
+		{"71-byte project with the same 70-byte prefix", a70 + "x", b70, strings.Repeat("a", 22) + "-" + strings.Repeat("b", 23) + "-c639960b9853109d"},
+		{"ordinary hyphenated names", "my-app", "api", "my-app-api-863ae9cd2f86e699"},
+		{"one-byte names", "x", "y", "x-y-ce3890a816f5237a"},
+		// A pair found by search to share the first 8 hex characters with the next one (T-25-47): with 16 they differ.
+		{"a searched 32-bit collision, attacker", "victim-production-environment-frontend-st30015b038d7", "web-frontend", "victim-production-environment-fro-web-frontend-59acb4c6fe3ce18c"},
+		{"a searched 32-bit collision, victim", "victim-production-environment-frontend-stack", "web-frontend", "victim-production-environment-fro-web-frontend-59acb4c658284bb3"},
 	}
 }
 
