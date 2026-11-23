@@ -296,7 +296,7 @@ func ingressWarnings(project *types.Project, decls []ingress.Declaration, off bo
 		if svc.HealthCheck == nil || svc.HealthCheck.Disable {
 			out = append(out, warn(CodeIngressNoHealth, name, name+messageIngressNoHealth))
 		}
-		if svc.Deploy != nil && svc.Deploy.EndpointMode == "dnsrr" {
+		if !standalone && svc.Deploy != nil && svc.Deploy.EndpointMode == "dnsrr" {
 			out = append(out, warn(CodeIngressDNSRR, name, name+messageIngressDNSRR))
 		}
 		if (standalone && stopped) || (svc.Deploy != nil && svc.Deploy.Replicas != nil && *svc.Deploy.Replicas == 0) || (svc.Scale != nil && *svc.Scale == 0) {
@@ -351,7 +351,7 @@ func (d Deps) fillIngressSwarm(ctx context.Context, in ReviewInput, rv *Review, 
 
 // fillIngressStandalone sets Review.Ingress and adds the ingress warnings of a review of a stack of a standalone host,
 // as fillIngressSwarm does for a swarm: the routes and the certificates, the services that join or leave the shared
-// bridge (each with the container recreate that causes). An update of images
+// bridge (each with the container recreate that causes) and the warnings that apply to one host. An update of images
 // changes no route, so it has no section.
 func (d Deps) fillIngressStandalone(ctx context.Context, in ReviewInput, rv *Review, project *types.Project) {
 	if in.Mode == ReviewModeUpdate || project == nil {
@@ -365,6 +365,7 @@ func (d Deps) fillIngressStandalone(ctx context.Context, in ReviewInput, rv *Rev
 	if !sec.empty() {
 		rv.Ingress = sec
 	}
+	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, ingressWarnings(project, decls, in.IngressOff, stacks.TargetStandalone, in.Stack.Stopped))...)
 }
 
 // joinsIngress reports whether a service of the prepared project lists the shared ingress network, by the name the

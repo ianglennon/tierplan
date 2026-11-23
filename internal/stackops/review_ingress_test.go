@@ -522,8 +522,8 @@ func TestReviewIngressStandaloneAndRollback(t *testing.T) {
 			t.Errorf("network = %+v, want none on a standalone host", rv.Ingress.Network)
 		}
 		for _, p := range rv.Problems {
-			if strings.HasPrefix(p.Code, "ingress_") {
-				t.Errorf("problem %+v, want no swarm warning on a standalone host", p)
+			if p.Code == "ingress_dnsrr" {
+				t.Errorf("problem %+v, want no endpoint_mode warning on a standalone host", p)
 			}
 		}
 	})
