@@ -16028,7 +16028,7 @@ export interface components {
             change: "added" | "kept" | "released";
             /** @description The hostname the route answers on */
             hostname: string;
-            /** @description Left out unless set: a sentence for the row. A route of a standalone host says it is not served on that host yet */
+            /** @description Left out unless set: a sentence for the row */
             note?: string;
             /** @description The path prefix the route matches, / for the whole hostname */
             path: string;

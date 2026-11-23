@@ -111,7 +111,7 @@ type StackReviewIngressRouteBody struct {
 	Service  string `json:"service" doc:"The service of the compose file the route goes to"`
 	Port     int    `json:"port" doc:"The port of the service the proxy connects to"`
 	Scheme   string `json:"scheme" enum:"http,https" doc:"How the proxy speaks to the service"`
-	Note     string `json:"note,omitempty" doc:"Left out unless set: a sentence for the row. A route of a standalone host says it is not served on that host yet"`
+	Note     string `json:"note,omitempty" doc:"Left out unless set: a sentence for the row"`
 }
 
 // StackReviewIngressCertificateBody is the certificate of one hostname the stack will hold.

@@ -23827,7 +23827,7 @@
             "type": "string"
           },
           "note": {
-            "description": "Left out unless set: a sentence for the row. A route of a standalone host says it is not served on that host yet",
+            "description": "Left out unless set: a sentence for the row",
             "type": "string"
           },
           "path": {
