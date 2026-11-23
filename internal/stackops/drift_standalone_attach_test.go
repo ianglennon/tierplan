@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -148,4 +149,73 @@ func TestStandaloneDriftStillSeesARealChange(t *testing.T) {
 			}
 		})
 	}
+}
+
+// historyReviewInput is a review of draft with the deployed revision (compose, as it was deployed), the pins it stored and
+// the stored revisions the route supplies, so the review reads the history.
+func historyReviewInput(t *testing.T, rig *swarmRig, h *stackopstest.Hosted, deployed, draft string, revisions stackops.RevisionStore) stackops.ReviewInput {
+	t.Helper()
+	in := rig.standaloneReviewInput(t, h.Name, draft, &memPins{good: stackops.LivePins(h.Pins)})
+	prev := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(deployed)}}}
+	in.Previous, in.Revisions = &prev, revisions
+	in.Ingress = attachedBy()
+	in.Deployed = &stackops.DeployedRevision{Seq: 1, By: "bob", At: time.Unix(1_700_000_000, 0)}
+	return in
+}
+
+// TestStandaloneHistoryRowsIgnoreTheAttachment (D-16): the review keeps the attachment a listed change of its own diff, and
+// leaves it out of what it compares with history: the outside changes a deploy would revert, and the stored revisions the
+// engine's unrecorded settings are read from.
+func TestStandaloneHistoryRowsIgnoreTheAttachment(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a deploy before ingress reverts only what was changed outside", func(t *testing.T) {
+		t.Parallel()
+		h := hostStack(t, "demo", attachDriftCompose, nil)
+		env := h.Docs["web"].Config.Env
+		env[slices.Index(env, "MODE=prod")] = "MODE=dev"
+		rig := hostRig(t, h)
+		rig.deps.Ingress = &fakeIngress{attach: attachedBy()}
+
+		rv, err := rig.deps.Review(testsupport.Context(t), historyReviewInput(t, rig, h, attachDriftCompose, attachDriftCompose, nil))
+		if err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		if got := changesOf(rv); !slices.Equal(got, []string{"changed web"}) {
+			t.Fatalf("services = %v, want web changed", got)
+		}
+		if next := string(rv.Services[0].Next); !strings.Contains(next, ingress.NetworkName) {
+			t.Errorf("the review's own row = %s, want the join of %s listed", next, ingress.NetworkName)
+		}
+		rows := revertRows(rv)
+		if len(rows) != 1 || !strings.Contains(rows[0], "MODE") || strings.Contains(rows[0], ingress.NetworkName) || rv.RevertsDriftUnavailable {
+			t.Errorf("reverts = %q, want the outside change of MODE alone", rows)
+		}
+	})
+
+	t.Run("the engine's unrecorded settings are read from a revision prepared without the attachment", func(t *testing.T) {
+		t.Parallel()
+		routed := strings.Replace(hostedCompose, "    image: nginx:1.27-alpine\n",
+			"    image: nginx:1.27-alpine\n    labels:\n      tierplan.ingress.host: app.apps.example.com\n      tierplan.ingress.port: \"80\"\n", 1)
+		h := stackopstest.HostAttached(t, "demo", "stack-demo", routed, nil)
+		rig := hostRig(t, h)
+		rig.deps.Ingress = &fakeIngress{attach: attachedBy()}
+		stored := revisionList{{Seq: 1, Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(routed)}}}, Pins: h.Pins}}
+
+		rv, err := rig.deps.Review(testsupport.Context(t), historyReviewInput(t, rig, h, routed, cacheAfter(routed), stored))
+		if err != nil {
+			t.Fatalf("review: %v", err)
+		}
+
+		var web stacks.ServiceChange
+		for _, c := range rv.Services {
+			if c.Short == "web" {
+				web = c
+			}
+		}
+		if cur := string(web.Current); !strings.Contains(cur, `"depends_on":{"db"`) || strings.Contains(cur, "cache") {
+			t.Errorf("the running side of web = %s, want the depends_on the revision recorded: the container was made attached, the revision was prepared without it", cur)
+		}
+	})
 }

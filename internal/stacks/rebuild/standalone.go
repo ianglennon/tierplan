@@ -18,6 +18,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -242,7 +243,9 @@ func networksOf(c container.InspectResponse) []string {
 	}
 	if c.NetworkSettings != nil {
 		for name := range c.NetworkSettings.Networks {
-			if name != "bridge" && name != "host" && name != "none" && !slices.Contains(out, name) {
+			// The shared ingress bridge is TierPlan's attachment, added at deploy time and never part of the user's
+			// file: the network is not declared and the service does not list it (D-16, D-20).
+			if name != "bridge" && name != "host" && name != "none" && name != ingress.NetworkName && !slices.Contains(out, name) {
 				out = append(out, name)
 			}
 		}
@@ -275,6 +278,8 @@ func namedVolumesOf(c container.InspectResponse) []string {
 func (b *standaloneBuild) service(g standaloneGroup, known map[string]bool, rc stacks.RunningContext) types.ServiceConfig {
 	first := g.containers[0]
 	run := stacks.RunningService(first.Inspect, stacks.ImageDefaults{}, nil, rc)
+	// The attachment, with the alias it carries, is TierPlan's and goes before the service is written (D-16, D-20).
+	run = stacks.StripIngressStandalone(run, b.in.Project, nil)
 	scale := len(g.containers)
 	run.Scale = &scale
 	svc := stacks.NormalizeComposeService(run, stacks.ImageDefaultsOf(first.Image), rc)
