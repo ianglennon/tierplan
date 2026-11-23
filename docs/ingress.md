@@ -133,6 +133,12 @@ keeps the name TierPlan gives it, `<stack>-<service>-<number>`, and has no alias
 the network by its ID instead of its name is held to the same rule when it is deployed, and the deploy fails. A service
 off that network keeps its `container_name` and `hostname`.
 
+Docker also finds a network by the start of its ID. So a network whose name is the start of the ingress network's ID
+counts as the ingress network. A stack deploy may not create a network under such a name. Creating one, or connecting a
+container to one, through the Networks page answers `409 ingress_owned`. Starting or restarting a container that would
+end up on the ingress network under a name of its own, rather than the one TierPlan gives it, is refused with
+`ingress_owned` too.
+
 **The reserved stack name.** `tierplan-ingress` is TierPlan's own name for the proxy's project on a standalone host, and
 a stack of that name would have the proxy removed as an orphan at its next deploy. Creating or importing from git a stack
 by that name is refused with `422 stack_name_reserved`, and the name check answers `invalid` with the same sentence. The
