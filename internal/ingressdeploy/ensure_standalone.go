@@ -25,9 +25,9 @@ const JobKindEnsure = "ingress_ensure"
 // URL and pin the server has now: recreating it would not change what it can reach. A changed URL or pin is a redeploy.
 const EnsureNotEnrolled = "not_enrolled"
 
-// EnsureNameShadowed is a pass that made a missing ingress network again and found a container stored on a network name
-// that is the start of its new ID (T-25-47, ingress_name_shadowed): the project was taken down, and the next pass makes
-// the network again with another ID.
+// EnsureNameShadowed is a pass that found a container stored on a network name that is the start of the ingress network's
+// ID (T-25-47, ingress_name_shadowed): the project was taken down and is not brought up while the host holds such a
+// network. Once the network is gone, the next pass makes it again with another ID.
 const EnsureNameShadowed = "name_shadowed"
 
 // NotEnrolledAfter is how long, on the injected clock, a proxy may run without enrolling before a pass says so (D-28).
@@ -53,7 +53,12 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 		s.log().Warn("the ingress ensure loop could not read a standalone host", "environment", envID, "error", err)
 		return EnsureUnreachable, true
 	}
-	if !plan.Up {
+	shadow, err := s.standaloneShadow(ctx, info, l)
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not read a standalone host's containers", "environment", envID, "error", err)
+		return EnsureUnreachable, true
+	}
+	if !plan.Up && len(shadow) == 0 {
 		return s.standaloneQuietClass(ctx, envID, l), true
 	}
 	release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
@@ -82,6 +87,16 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 		s.log().Warn("the ingress ensure loop could not read a standalone host under the lock", "environment", envID, "error", err)
 		return EnsureUnreachable, true
 	}
+	// Every pass checks the network the host holds and every write is checked once done (T-25-47): a container stored on
+	// a name that is the start of the ingress network's ID would join it at the next boot, so the proxy is never left up
+	// on such a network, nor on one whose containers could not be read.
+	if shadow, err = s.standaloneShadow(ctx, info, l); err != nil {
+		s.log().Warn("the ingress ensure loop could not read a standalone host's containers under the lock", "environment", envID, "error", err)
+		return EnsureUnreachable, true
+	}
+	if len(shadow) > 0 {
+		return s.downShadowed(ctx, envID, info, shadow), true
+	}
 	if !plan.Up {
 		s.forgetOutstanding(envID)
 		return s.standaloneQuietClass(ctx, envID, l), true
@@ -92,30 +107,61 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 	s.log().Info("the ingress ensure loop is putting a standalone proxy right", "environment", envID, "reason", plan.Reason, "token", plan.Token)
 	if err := s.redeployStandalone(ctx, envID, info, state, l, plan); err != nil {
 		s.log().Warn("the ingress ensure loop could not put a standalone proxy right", "environment", envID, "reason", plan.Reason, "error", err)
+		// A failed up may still have made the network; the next pass checks it before anything else in any case.
+		if refs, rerr := s.shadowRefs(ctx, info); rerr == nil && len(refs) > 0 {
+			return s.downShadowed(ctx, envID, info, refs), true
+		}
 		return EnsureWriteFailed, true
 	}
-	// A network made again has a new ID: a container stored on a name that is its start would join it at the next boot
-	// (T-25-47). The project is taken down, so the next pass makes the network with yet another ID.
-	if l.network == nil {
-		var refs []dockerx.ShadowRef
-		err := s.d.Engine.OnNode(ctx, info.ID, info.Nodes[0].AgentID, func(c *dockerx.Client) (e error) {
-			refs, e = c.ContainersShadowingIngress(ctx)
-			return e
-		})
-		if err != nil {
-			s.log().Warn("the ingress ensure loop could not read a standalone host's containers", "environment", envID, "error", err)
-			return EnsureUnreachable, true
-		}
-		if len(refs) > 0 {
-			s.log().Warn("the ingress ensure loop took a standalone proxy down: a container is stored on a network name that is the start of the new ingress network's ID",
-				"environment", envID, "containers", shadowDetail(refs))
-			if err := s.d.System.DownSystem(ctx, envID, info.Nodes[0].AgentID); err != nil {
-				s.log().Warn("the ingress ensure loop could not take a standalone proxy down", "environment", envID, "error", err)
-			}
-			return EnsureNameShadowed, true
-		}
+	// The up may have made the network again, with a new ID, even when the survey saw one.
+	refs, err := s.shadowRefs(ctx, info)
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not read a standalone host's containers after an up, and took the proxy down", "environment", envID, "error", err)
+		s.downSystem(ctx, envID, info)
+		return EnsureUnreachable, true
+	}
+	if len(refs) > 0 {
+		return s.downShadowed(ctx, envID, info, refs), true
 	}
 	return EnsureOK, true
+}
+
+// standaloneShadow lists the containers stored on a name that is the start of the ingress network's ID, when the survey
+// found the network; without one there is no ID to shadow.
+func (s *Service) standaloneShadow(ctx context.Context, info EnvInfo, l standaloneLive) ([]dockerx.ShadowRef, error) {
+	if l.network == nil {
+		return nil, nil
+	}
+	return s.shadowRefs(ctx, info)
+}
+
+// shadowRefs reads the host's containers stored on a name that is the start of the ingress network's ID.
+func (s *Service) shadowRefs(ctx context.Context, info EnvInfo) ([]dockerx.ShadowRef, error) {
+	var refs []dockerx.ShadowRef
+	err := s.d.Engine.OnNode(ctx, info.ID, info.Nodes[0].AgentID, func(c *dockerx.Client) (e error) {
+		refs, e = c.ContainersShadowingIngress(ctx)
+		return e
+	})
+	return refs, err
+}
+
+// downShadowed takes the system project down because of refs and says so. Compose leaves a network another container
+// still uses; the next pass finds it again and keeps the proxy down until it is gone.
+func (s *Service) downShadowed(ctx context.Context, envID string, info EnvInfo, refs []dockerx.ShadowRef) string {
+	s.log().Warn("the ingress ensure loop keeps a standalone proxy down: a container is stored on a network name that is the start of the ingress network's ID",
+		"environment", envID, "containers", shadowDetail(refs))
+	s.downSystem(ctx, envID, info)
+	return EnsureNameShadowed
+}
+
+// downSystem runs the system project's down and logs a failure; the next pass reads the host again.
+func (s *Service) downSystem(ctx context.Context, envID string, info EnvInfo) {
+	if s.d.System == nil {
+		return
+	}
+	if err := s.d.System.DownSystem(ctx, envID, info.Nodes[0].AgentID); err != nil {
+		s.log().Warn("the ingress ensure loop could not take a standalone proxy down", "environment", envID, "error", err)
+	}
 }
 
 // standaloneSurvey reads the host and decides what it needs from what it holds and what the server knows.

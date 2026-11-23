@@ -67,6 +67,8 @@ type fakeSystem struct {
 	downs   []string
 	// gate, when set, holds the first deploy until the test lets it go.
 	gate *gate
+	// downKeepsNetwork makes a down leave the network, as Compose does while another container uses it.
+	downKeepsNetwork bool
 
 	rig  *rig
 	base dockertest.FakeConfig
@@ -151,7 +153,10 @@ func (f *fakeSystem) DownSystem(_ context.Context, envID, nodeID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.downs = append(f.downs, envID+"/"+nodeID)
-	f.host.Proxy, f.host.NetworkSubnet = nil, ""
+	f.host.Proxy = nil
+	if !f.downKeepsNetwork {
+		f.host.NetworkSubnet = ""
+	}
 	f.reconfigure()
 	return nil
 }

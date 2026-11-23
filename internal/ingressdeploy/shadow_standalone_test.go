@@ -70,3 +70,45 @@ func TestStandaloneEnsureTakesDownANetworkMadeOverAShadowingName(t *testing.T) {
 		t.Errorf("ensure class = %q, want %q", class, ingressdeploy.EnsureNameShadowed)
 	}
 }
+
+// TestStandaloneEnsureKeepsTheProxyDownOnAShadowedNetwork: a pass that finds the ingress network in place and a container
+// stored on the start of its ID brings nothing up, whether the proxy is missing or running, and takes the project down.
+// Compose leaves a network another container still uses, so each pass checks again rather than trusting the last down.
+// Once a down removes the network, the next pass makes it again and checks the new one after the up.
+func TestStandaloneEnsureKeepsTheProxyDownOnAShadowedNetwork(t *testing.T) {
+	for _, missing := range []bool{true, false} {
+		r := enabledStandaloneRig(t, standaloneRigOptions{})
+		r.withBase(shadowStaged)
+		r.sys.downKeepsNetwork = true
+		if missing {
+			h := r.held()
+			h.Proxy = nil
+			r.sys.setHost(h)
+		}
+		before := r.sys.deployCount()
+		r.round()
+		r.round()
+		if got := r.sys.deployCount(); got != before {
+			t.Errorf("missing=%v: deploys = %d, want %d: nothing is brought up on a shadowed network", missing, got, before)
+		}
+		if got := len(r.sys.downs); got != 2 {
+			t.Errorf("missing=%v: downs = %d, want 2, one a pass", missing, got)
+		}
+		if _, class := r.ensureState(); class != ingressdeploy.EnsureNameShadowed {
+			t.Errorf("missing=%v: ensure class = %q, want %q", missing, class, ingressdeploy.EnsureNameShadowed)
+		}
+
+		r.sys.mu.Lock()
+		r.sys.downKeepsNetwork = false
+		r.sys.mu.Unlock()
+		r.round()
+		r.round()
+		// The first pass finds the kept network and removes it; the second makes it again and finds the name after the up.
+		if got := r.sys.deployCount(); got != before+1 {
+			t.Errorf("missing=%v: deploys = %d, want %d: the network is made again once it is gone", missing, got, before+1)
+		}
+		if got := len(r.sys.downs); got != 4 {
+			t.Errorf("missing=%v: downs = %d, want 4: the up is checked once done", missing, got)
+		}
+	}
+}
