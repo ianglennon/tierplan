@@ -146,7 +146,7 @@ func routedStacksFix(t *testing.T, withNetwork bool) *deployFix {
 	}, func(f *deployFix, d *ingressdeploy.Deps) {
 		repo := stackops.Repo{Store: f.st, Vault: f.v}
 		read := func(ctx context.Context, _ string, fn func(*dockerx.Client) error) error { return fn(f.cli) }
-		d.Stacks = api.NewIngressStacks(repo, f.ingressStore, read)
+		d.Stacks = api.NewIngressStacks(repo, f.ingressStore, read, nil)
 	})
 	f.register(t, f.adminA, f.envA, stacksTestSuffix)
 	ctx := testsupport.Context(t)
@@ -193,7 +193,7 @@ func TestIngressStacksToRedeploy(t *testing.T) {
 		ctx := testsupport.Context(t)
 		f := routedStacksFix(t, false)
 		refs, err := api.NewIngressStacks(stackops.Repo{Store: f.st, Vault: f.v}, f.ingressStore,
-			func(ctx context.Context, _ string, fn func(*dockerx.Client) error) error { return fn(f.cli) }).WithRoutes(ctx, f.envA)
+			func(ctx context.Context, _ string, fn func(*dockerx.Client) error) error { return fn(f.cli) }, nil).WithRoutes(ctx, f.envA)
 		if err != nil {
 			t.Fatalf("WithRoutes: %v", err)
 		}
@@ -237,7 +237,7 @@ func TestIngressStacksToRedeploy(t *testing.T) {
 		ctx := testsupport.Context(t)
 		f := routedStacksFix(t, true)
 		refs, err := api.NewIngressStacks(stackops.Repo{Store: f.st, Vault: f.v}, f.ingressStore,
-			func(ctx context.Context, _ string, fn func(*dockerx.Client) error) error { return fn(f.cli) }).WithRoutes(ctx, f.envA)
+			func(ctx context.Context, _ string, fn func(*dockerx.Client) error) error { return fn(f.cli) }, nil).WithRoutes(ctx, f.envA)
 		if err != nil {
 			t.Fatalf("WithRoutes: %v", err)
 		}
