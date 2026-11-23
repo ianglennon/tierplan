@@ -121,9 +121,15 @@ kind `ingress_ensure`.
 is attached to the `tierplan-ingress` network by its next deploy, and the preview and the status list the stacks that
 need one, whether or not they look attached, from what the host holds. Each routed service gets one alias on the shared
 network, made from the stack and the service: lowercase, with a short hash of the pair at the end, for example
-`shop-web-1a2b3c4d`. The bare service name, `web`, is not a name on the shared network, and neither is the container
-name. So two stacks that each have a service `web` never answer for each other, and the proxy reaches a service by its
-alias. Inside its own stack a service still uses its plain name, on the stack's own network.
+`shop-web-1a2b3c4d`. The bare service name, `web`, is not a name on the shared network. So two stacks that each have a
+service `web` never answer for each other, and the proxy reaches a service by its alias. Inside its own stack a service
+still uses its plain name, on the stack's own network.
+
+The engine also answers a container's own name on that network, and the alias is made from names anyone can see. So a
+service that is on `tierplan-ingress`, because it has a route or because the file declares the network as external, may
+not set `container_name`: the file is refused with `ingress_container_name` at that key. On the shared network a
+container keeps the name TierPlan gives it, `<stack>-<service>-<number>`. A service off that network keeps its
+`container_name`.
 
 **The reserved stack name.** `tierplan-ingress` is TierPlan's own name for the proxy's project on a standalone host, and
 a stack of that name would have the proxy removed as an orphan at its next deploy. Creating or importing from git a stack
