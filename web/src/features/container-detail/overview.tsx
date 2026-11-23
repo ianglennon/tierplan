@@ -306,35 +306,42 @@ function NetworksCard({ envId, detail }: { envId: string; detail: ContainerDetai
           {
             header: t("networks.disconnect.actions"),
             hideHeader: true,
-            cell: (n) => (
-              <NeedsTooltip reason={connect.reason}>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="max-md:h-11"
-                  aria-label={t("networks.disconnect.label", {
-                    container: detail.name,
-                    network: n.name,
-                  })}
-                  onClick={
-                    connect.allowed
-                      ? () =>
-                          setDisconnecting({
-                            networkId: n.networkId,
-                            networkName: n.name,
-                            containerId: detail.id,
-                            containerName: detail.name,
-                            nodeId: detail.nodeId,
-                            selfKind: detail.selfKind,
-                          })
-                      : undefined
-                  }
-                >
-                  {t("networks.disconnect.action")}
-                </Button>
-              </NeedsTooltip>
-            ),
+            cell: (n) => {
+              // TierPlan's ingress network is the ensure loop's, for any container on it (D-29): the row says so.
+              const gate =
+                connect.allowed && n.ingress
+                  ? { allowed: false, reason: t("ingress.owned.reason") }
+                  : connect;
+              return (
+                <NeedsTooltip reason={gate.reason}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="max-md:h-11"
+                    aria-label={t("networks.disconnect.label", {
+                      container: detail.name,
+                      network: n.name,
+                    })}
+                    onClick={
+                      gate.allowed
+                        ? () =>
+                            setDisconnecting({
+                              networkId: n.networkId,
+                              networkName: n.name,
+                              containerId: detail.id,
+                              containerName: detail.name,
+                              nodeId: detail.nodeId,
+                              selfKind: detail.selfKind,
+                            })
+                        : undefined
+                    }
+                  >
+                    {t("networks.disconnect.action")}
+                  </Button>
+                </NeedsTooltip>
+              );
+            },
           },
         ]}
       />

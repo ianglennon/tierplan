@@ -179,6 +179,8 @@ function useChoices(props: FormProps): { choices: Choice[]; loading: boolean; bl
     const rows = (networks.data?.items ?? [])
       .filter(
         (n) =>
+          // TierPlan's ingress network is the ensure loop's: every write to it is refused (D-29).
+          !n.ingress &&
           !on.has(n.id) &&
           // The host and none networks take no endpoint.
           n.driver !== "host" &&
@@ -259,7 +261,7 @@ function ConnectForm(props: FormProps) {
       case "container_not_found":
         return t("networks.connect.errors.containerGone", names);
       case "ingress_owned":
-        return t("containers.readOnlyIngress");
+        return t("ingress.owned.refused");
       case "host_read_only":
         return t("networks.errors.hostReadOnly");
       case "node_unavailable":
