@@ -94,28 +94,47 @@ func TestStandaloneContainerNameCannotTakeARoute(t *testing.T) {
 			t.Errorf("the %s deploy left a running container on the host: %q", tc.stack, running)
 		}
 	}
-	// The engine looks a network up again when a container starts: by name, then by ID prefix. A first revision makes a
-	// decoy network named with the start of the ingress network's ID; the second renames it away and puts a container
-	// named after zoo's alias on that name, behind a service it waits for, so the decoy is gone by the time the container
-	// starts and the name now reaches the ingress network. The guard takes any prefix of the ingress ID as the ingress
-	// network, so the second revision is refused (T-25-47, second re-audit).
+	// The engine keeps an endpoint under the network's name and looks that name up again when the container first starts:
+	// by name, then by ID prefix. So a network named with the start of the ingress network's ID becomes the ingress
+	// network once it is gone (T-25-47, second and third re-audits). A stack may not create such a network, and a
+	// container that joins one already there, by its name or by its own full ID, is held to the ingress rules.
 	prefix := ingressID[:12]
-	racer, res, job := e.deployStack("racer", "services:\n  holder:\n    image: "+e.webImage+"\n    command: [\"sleep\", \"3600\"]\n"+
-		"    networks: [shadow]\nnetworks:\n  shadow:\n    name: "+prefix+"\n")
-	if !res.OK() {
-		requireJobDone(t, job)
-		t.Fatalf("the first revision of racer ended %+v", res)
+	holder := "  holder:\n    image: " + e.webImage + "\n    command: [\"sleep\", \"3600\"]\n    networks: [shadow]\n"
+	gate := "  gate:\n    image: " + e.webImage + "\n    command: [\"sleep\", \"8\"]\n    restart: \"no\"\n"
+	impostor := func(network string) string {
+		return "  web:\n    image: " + e.webImage + "\n    command: " + backendCommand("spoofed") + "\n    container_name: " + alias +
+			"\n    networks: [edge]\n    depends_on:\n      gate:\n        condition: service_completed_successfully\n" +
+			"networks:\n  shadow:\n    name: racer-other\n  edge:\n    external: true\n    name: " + network + "\n"
 	}
-	rev2 := "services:\n  holder:\n    image: " + e.webImage + "\n    command: [\"sleep\", \"3600\"]\n    networks: [shadow]\n" +
-		"  gate:\n    image: " + e.webImage + "\n    command: [\"sleep\", \"8\"]\n    restart: \"no\"\n" +
-		"  web:\n    image: " + e.webImage + "\n    command: " + backendCommand("spoofed") + "\n    container_name: " + alias + "\n    networks: [edge]\n" +
-		"    depends_on:\n      gate:\n        condition: service_completed_successfully\n" +
-		"networks:\n  shadow:\n    name: racer-other\n  edge:\n    external: true\n    name: " + prefix + "\n"
-	_, res, _ = e.redeploy(racer, rev2)
-	t.Logf("racer second revision: code %q, wrote %v", res.Code, res.Wrote)
-	if res.OK() {
-		t.Errorf("the second revision of racer succeeded, want it refused")
+	mustRefuse := func(stack, compose string) {
+		t.Helper()
+		copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}}
+		st, _, err := e.repo.CreateStack(ctx, e.envID, stack, stacks.TargetStandalone, "user:test", copy)
+		if err != nil {
+			t.Fatalf("CreateStack %s: %v", stack, err)
+		}
+		rev, err := e.repo.NewRevision(ctx, st.ID, "user:test", stackops.OriginDeploy)
+		if err != nil {
+			t.Fatalf("NewRevision: %v", err)
+		}
+		_, res, _ := e.runDeploy(st, rev, stackops.StandaloneDeployInput{
+			EnvID: e.envID, NodeID: e.nodeID, Stack: st, Copy: copy, Pins: e.repo, Subnets: e.repo, RevisionID: rev.ID, Caller: e.rootCaller(),
+		})
+		t.Logf("%s: code %q, wrote %v", stack, res.Code, res.Wrote)
+		if res.OK() {
+			t.Errorf("the %s deploy succeeded, want it refused", stack)
+		}
 	}
+	// A stack that would create the decoy is refused.
+	mustRefuse("racer", "services:\n"+holder+"networks:\n  shadow:\n    name: "+prefix+"\n")
+	if got := strings.TrimSpace(e.sh("docker network ls -q --filter name=^" + prefix + "$")); got != "" {
+		t.Errorf("a network named %s was created: %s", prefix, got)
+	}
+	// A decoy made on the host by other means, joined by its name or by its own full ID, behind a gate.
+	decoy := strings.TrimSpace(e.sh("docker network create " + prefix))
+	t.Cleanup(func() { _, _ = e.host.Sh(testsupport.Context(t), "docker network rm "+prefix) })
+	mustRefuse("racername", "services:\n"+holder+gate+impostor(prefix))
+	mustRefuse("racerid", "services:\n"+holder+gate+impostor(decoy))
 	if got := strings.TrimSpace(e.sh("docker ps -a --filter name=^" + alias + "$ --format '{{.Names}}'")); got != "" {
 		t.Errorf("a container named %s exists on the host: %q", alias, got)
 	}
