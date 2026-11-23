@@ -438,6 +438,9 @@ type standaloneTail struct {
 	Cleanup func(created []string)
 	// AfterUp is called with the up's outcome as soon as it has returned, whether it worked or not.
 	AfterUp func(err error)
+	// Mask, when set, hides the project's secret values in what is logged of the up's error. The job's text is masked by
+	// its progress already.
+	Mask func(string) string
 }
 
 // standaloneTail runs the end of a standalone deploy: the rows of what will be created, the pre-pull of the
@@ -517,7 +520,11 @@ func (d Deps) standaloneTail(ctx context.Context, j *standaloneJob, t standalone
 	// revision records is what the host holds, however the up ended.
 	t.AfterUp(err)
 	if err != nil {
-		d.log().Warn("the Compose SDK's up failed", "environment", t.EnvID, "stack", t.Name, "error", err)
+		var logged any = err
+		if t.Mask != nil {
+			logged = t.Mask(err.Error())
+		}
+		d.log().Warn("the Compose SDK's up failed", "environment", t.EnvID, "stack", t.Name, "error", logged)
 		kind, name := events.firstFailure()
 		item := ItemServices
 		switch kind {

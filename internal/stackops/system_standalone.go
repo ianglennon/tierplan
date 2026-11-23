@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 
 	"github.com/compose-spec/compose-go/v2/types"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/netspace"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -171,6 +173,62 @@ func pinSystem(p *types.Project, pins map[string]string) error {
 	return nil
 }
 
+// defaultSystemPrefix is the size of the block the proxy's network is given when nothing asks for another.
+const defaultSystemPrefix = 24
+
+// systemSubnet decides the subnet the project's network is created with, and holds the allocation lock for as long as
+// the caller keeps release: the network the host holds already keeps the subnet it has (the SDK would recreate it
+// otherwise); a new one takes the requested block, else the lowest free block of the host's pools (D-29). code is a
+// refusal of the check, err a failure to read the host, and sub empty when the network is left as the project has it.
+func (d Deps) systemSubnet(ctx context.Context, in SystemDeployInput, host systemHost) (sub string, release func(), code, msg string, err error) {
+	release = func() {}
+	key := in.Network
+	n, ok := in.Project.Networks[key]
+	if !ok {
+		return "", release, CodeStackInvalid, "", nil
+	}
+	for _, row := range host.Named {
+		if ingress.OwnsNetwork(row.Name, row.Labels) && len(row.Subnets) > 0 {
+			return row.Subnets[0], release, "", "", nil
+		}
+	}
+	if len(host.Named) > 0 {
+		return "", release, "", "", nil // the host holds the network and says no subnet: leave it
+	}
+	if d.AddressSpaces == nil {
+		if in.Subnet != "" {
+			return in.Subnet, release, "", "", nil
+		}
+		return "", release, CodeNoFreeSubnet, CodeMessage(CodeNoFreeSubnet), nil
+	}
+	unlock := d.AddressSpaces.LockAllocation(in.EnvID)
+	release = sync.OnceFunc(unlock)
+	if in.Subnet != "" {
+		return in.Subnet, release, "", "", nil
+	}
+	prefix := in.Prefix
+	if prefix <= 0 {
+		prefix = defaultSystemPrefix
+	}
+	inputs, ierr := d.AddressSpaces.AllocationInputs(ctx, in.EnvID, true)
+	if ierr == nil && len(inputs.Pools) == 0 {
+		return "", release, CodeNoFreeSubnet, NoFreeSubnetMessage(n.Name, prefix, "the host's address pools"), nil
+	}
+	if ierr != nil {
+		release()
+		return "", func() {}, "", "", ierr
+	}
+	block, _, lerr := netspace.LowestFree(inputs.Pools, inputs.Occupied, inputs.Avoid, prefix)
+	if errors.Is(lerr, netspace.ErrNoFreeBlock) {
+		return "", release, CodeNoFreeSubnet, NoFreeSubnetMessage(n.Name, prefix, envs.PoolList(inputs.Pools)), nil
+	}
+	if lerr != nil {
+		release()
+		return "", func() {}, "", "", lerr
+	}
+	return block.String(), release, "", "", nil
+}
+
 // DeploySystem brings the system project up on a standalone host with the Compose SDK, through the tail the
 // stack deploy uses: the live read, the pins, the pre-pull, the SDK's up through WriteOnNode, the rows of the job and
 // the cleanup when the up fails (D-29). Its head is its own: no text check, no objects from files, no host-access
@@ -212,6 +270,24 @@ func (d Deps) DeploySystem(ctx context.Context, in SystemDeployInput, r *jobs.Re
 	}
 	live := host.standaloneLive
 	res.Total = len(project.Services)
+	// The subnet of the network is decided under the allocation lock, which is held until the SDK's up has returned.
+	unlock := sync.OnceFunc(func() {})
+	defer func() { unlock() }()
+	if in.Network != "" {
+		sub, release, code, msg, serr := d.systemSubnet(ctx, in, host)
+		unlock = release
+		switch {
+		case serr != nil:
+			d.log().Warn("could not plan the subnet of the proxy's network", "environment", in.EnvID, "error", serr)
+			return failErr(ItemCheck, codeOf(ctx, serr), "", serr)
+		case code != "":
+			return failWith(ItemCheck, code, in.Network, msg)
+		case sub != "":
+			n := project.Networks[in.Network]
+			n.Ipam.Config = []*types.IPAMPool{{Subnet: sub}}
+			project.Networks[in.Network] = n
+		}
+	}
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
 	// 2. Look up the image: what a container runs and was deployed from is kept, a new or changed text is looked up.
@@ -264,7 +340,8 @@ func (d Deps) DeploySystem(ctx context.Context, in SystemDeployInput, r *jobs.Re
 		Cleanup: func(created []string) {
 			d.cleanupStandalone(ctx, in.EnvID, in.NodeID, own, live.Containers, created, &res, j.prog)
 		},
-		AfterUp: func(error) {},
+		AfterUp: func(error) { unlock() },
+		Mask:    systemMasker(project).Mask,
 	})
 }
 
