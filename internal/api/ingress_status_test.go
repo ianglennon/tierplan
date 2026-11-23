@@ -108,11 +108,11 @@ func TestIngressStatusRoute(t *testing.T) {
 
 	sa := newDeployFix(t, true)
 	rec = sa.credCall(t, sa.adminA, http.MethodGet, "/api/env/"+sa.envA+"/ingress/status", "")
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("standalone status: %d %s, want 409", rec.Code, rec.Body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("standalone status: %d %s, want 200", rec.Code, rec.Body)
 	}
-	if typ, _ := deployProblem(t, rec.Body.Bytes()); !strings.HasSuffix(typ, "ingress_standalone_unavailable") {
-		t.Errorf("standalone problem type = %q, want ingress_standalone_unavailable", typ)
+	if sst := decodeBody[statusResp](t, rec); sst.Enabled || sst.ObjectsKnown {
+		t.Errorf("standalone status = %+v, want ingress off and the objects unknown: the fixture's node is not connected", sst)
 	}
 }
 
@@ -303,8 +303,8 @@ func TestAccessLogsRoute(t *testing.T) {
 	}
 
 	sa := newDeployFix(t, true)
-	if rec := sa.credCall(t, sa.adminA, http.MethodPut, "/api/env/"+sa.envA+"/ingress/access-logs", `{"enabled":true}`); rec.Code != http.StatusConflict {
-		t.Errorf("standalone switch = %d, want 409", rec.Code)
+	if rec := sa.credCall(t, sa.adminA, http.MethodPut, "/api/env/"+sa.envA+"/ingress/access-logs", `{"enabled":true}`); rec.Code != http.StatusOK {
+		t.Errorf("standalone switch = %d, want 200", rec.Code)
 	}
 }
 

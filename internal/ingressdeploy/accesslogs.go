@@ -14,6 +14,8 @@ import (
 const (
 	// AppliesRolling: the ensure loop rolls the proxy service, which restarts each node's proxy in turn.
 	AppliesRolling = "rolling"
+	// AppliesRecreate: the ensure loop recreates the standalone proxy's container with the variable added or taken away.
+	AppliesRecreate = "recreate"
 	// AppliesWhenEnabled: the value is stored and applies when ingress is switched on.
 	AppliesWhenEnabled = "when_enabled"
 	// AppliesWhenResumed: the value is stored and applies when an Admin resumes the environment a restore paused.
@@ -29,17 +31,15 @@ type AccessLogsResult struct {
 }
 
 // SetAccessLogs stores whether the proxy writes an access log (off by default) and asks the ensure loop for a pass, which
-// rolls the proxy service with the variable added or taken away (D-30, D-31). A change is audited as
+// rolls the proxy service of a swarm, or recreates the proxy's container on a standalone host, with the variable added or
+// taken away (D-30, D-31, D-14). A change is audited as
 // ingress.access_logs_changed in the transaction that stores it; asking for the value already stored changes nothing,
 // records nothing and wakes nobody. The audit row carries the state only. On an environment whose ingress is off the
-// value is stored and nothing is written to the swarm.
+// value is stored and nothing is written to the environment.
 func (s *Service) SetAccessLogs(ctx context.Context, actor audit.Actor, envID string, on bool) (AccessLogsResult, error) {
 	info, err := s.d.Envs.Info(ctx, envID)
 	if err != nil {
 		return AccessLogsResult{}, err
-	}
-	if !info.Swarm {
-		return AccessLogsResult{}, ErrStandaloneUnavailable
 	}
 	state := "off"
 	if on {
@@ -63,6 +63,9 @@ func (s *Service) SetAccessLogs(ctx context.Context, actor audit.Actor, envID st
 		return AccessLogsResult{}, err
 	}
 	res := AccessLogsResult{AccessLogs: cur.AccessLogs, Applies: AppliesRolling}
+	if !info.Swarm {
+		res.Applies = AppliesRecreate
+	}
 	switch {
 	case !cur.Enabled:
 		res.Applies = AppliesWhenEnabled
@@ -76,13 +79,6 @@ func (s *Service) SetAccessLogs(ctx context.Context, actor audit.Actor, envID st
 // the change, and the ensure loop is woken, so its next pass writes again. It reports whether the environment was
 // paused; resuming one that is not changes nothing and records nothing. Nothing resumes on its own.
 func (s *Service) Resume(ctx context.Context, actor audit.Actor, envID string) (bool, error) {
-	info, err := s.d.Envs.Info(ctx, envID)
-	if err != nil {
-		return false, err
-	}
-	if !info.Swarm {
-		return false, ErrStandaloneUnavailable
-	}
 	hook := func(ctx context.Context, tx *sql.Tx) error {
 		return s.d.Audit.RecordTx(ctx, tx, audit.Entry{
 			Actor: actor, Action: audit.ActionIngressDeployResumed, TargetType: "environment", TargetID: envID,
