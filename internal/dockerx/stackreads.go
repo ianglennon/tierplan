@@ -219,6 +219,9 @@ func (c *Client) ContainersPublishing(ctx context.Context, tcpPorts ...uint32) (
 			continue
 		}
 		res, err := c.cur().ContainerInspect(ctx, it.ID, client.ContainerInspectOptions{})
+		if IsNotFound(err) {
+			continue // removed since the list (a --rm container that just exited): it holds no port
+		}
 		if err != nil {
 			return nil, fmt.Errorf("inspect container %s on %s: %w", row.Name, c.t.Describe(), err)
 		}

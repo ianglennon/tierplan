@@ -80,10 +80,10 @@ func TestContainersPublishingFindsStoppedAndCreated(t *testing.T) {
 	}
 }
 
-// failingInspect is an engine that lists one exited container and answers its inspect with a 500.
+// failingInspect is an engine that lists one exited container and answers its inspect with the status given.
 type failingInspect struct{ srv *httptest.Server }
 
-func newFailingInspect(t *testing.T) *failingInspect {
+func newFailingInspect(t *testing.T, status int) *failingInspect {
 	t.Helper()
 	version := regexp.MustCompile(`^/v[0-9.]+`)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +95,7 @@ func newFailingInspect(t *testing.T) *failingInspect {
 		case "/containers/json":
 			_, _ = w.Write([]byte(`[{"Id":"e1","Names":["/old"],"State":"exited","Image":"nginx","Labels":{},"Ports":[]}]`))
 		default:
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"message":"inspect broke"}`))
 		}
 	}))
@@ -111,8 +111,16 @@ func (f *failingInspect) DialContext(ctx context.Context, _, _ string) (net.Conn
 func (f *failingInspect) Describe() string { return "tcp://" + f.srv.Listener.Addr().String() }
 
 func TestContainersPublishingFailsWhenAnInspectFails(t *testing.T) {
-	got, err := newClient(t, newFailingInspect(t)).ContainersPublishing(context.Background(), 80, 443)
+	got, err := newClient(t, newFailingInspect(t, http.StatusInternalServerError)).ContainersPublishing(context.Background(), 80, 443)
 	if err == nil {
 		t.Fatalf("ContainersPublishing = %+v, want an error: a container that cannot be read must not be skipped", got)
+	}
+}
+
+// A container removed between the list and its inspect holds no port: it is left out, not a refusal (IN-C1).
+func TestContainersPublishingSkipsAContainerRemovedSinceTheList(t *testing.T) {
+	got, err := newClient(t, newFailingInspect(t, http.StatusNotFound)).ContainersPublishing(context.Background(), 80, 443)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("ContainersPublishing = %+v, %v, want nothing and no error", got, err)
 	}
 }
