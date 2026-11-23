@@ -96,8 +96,8 @@ func TestStandaloneCreateBodyMatchesVector(t *testing.T) {
 			t.Errorf("%s = %#v, want %#v", field, g, w)
 		}
 	}
-	cmp("Image", got.Config.Image, want.Config.Image)
-	cmp("User", got.Config.User, want.Config.User)
+	cmp("Image", got.Config.Image, want.Image)
+	cmp("User", got.Config.User, want.User)
 	cmp("HostConfig.PortBindings", got.HostConfig.PortBindings, want.HostConfig.PortBindings)
 	cmp("HostConfig.RestartPolicy", got.HostConfig.RestartPolicy, want.HostConfig.RestartPolicy)
 	cmp("HostConfig.Mounts", got.HostConfig.Mounts, want.HostConfig.Mounts)
@@ -113,7 +113,7 @@ func TestStandaloneCreateBodyMatchesVector(t *testing.T) {
 
 	// The TierPlan labels and the compose project and service labels are the vector's; the container may carry
 	// more (the SDK's config hash, the token label), never fewer.
-	for k, v := range want.Config.Labels {
+	for k, v := range want.Labels {
 		if gv, ok := got.Config.Labels[k]; !ok || gv != v {
 			t.Errorf("label %s = %q (present %v), want %q", k, gv, ok, v)
 		}
@@ -124,7 +124,7 @@ func TestStandaloneCreateBodyMatchesVector(t *testing.T) {
 
 	// The environment is compared by name, and by value for the three the vector holds.
 	gotEnv := envMap(got.Config.Env)
-	wantEnv := envMap(want.Config.Env)
+	wantEnv := envMap(want.Env)
 	for k, v := range wantEnv {
 		if gv, ok := gotEnv[k]; !ok || gv != v {
 			t.Errorf("env %s = %q (present %v), want %q", k, gv, ok, v)
