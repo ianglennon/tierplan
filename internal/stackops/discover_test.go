@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
@@ -336,4 +337,68 @@ func TestDiscoverUnusualNames(t *testing.T) {
 			t.Fatalf("Discover = %+v, want TierPlan's own stack, not adoptable", got)
 		}
 	})
+}
+
+// The standalone ingress proxy's compose project is TierPlan's own: it is never listed, never offered for adopt
+// (D-09), and a stack of that name cannot be adopted (D-10).
+
+func proxyContainer(id string) dockerx.ContainerRow {
+	return foreignContainer(id, ingress.ProjectName, ingress.ProxyComposeService, "running",
+		map[string]string{ingress.LabelComponent: ingress.ComponentIngress})
+}
+
+func TestDiscoverHidesTheIngressSystemProject(t *testing.T) {
+	t.Parallel()
+	h := stackops.Held{Containers: []dockerx.ContainerRow{
+		proxyContainer("p1"),
+		foreignContainer("c1", "shop", "web", "running", nil),
+	}}
+
+	got := stackops.Discover(h, nil, stacks.TargetStandalone, stackops.SelfMarks{})
+
+	if len(got) != 1 || got[0].Name != "shop" {
+		t.Fatalf("Discover = %+v, want shop alone: the proxy's system project is never listed", got)
+	}
+}
+
+func TestDiscoverMarksAForeignReservedProject(t *testing.T) {
+	t.Parallel()
+	for name, containers := range map[string][]dockerx.ContainerRow{
+		"a project of that name without the label": {
+			foreignContainer("f1", ingress.ProjectName, "web", "running", nil),
+		},
+		"the proxy's service name without the label": {
+			foreignContainer("f1", ingress.ProjectName, ingress.ProxyComposeService, "running", nil),
+		},
+		"the label on another service of the project": {
+			foreignContainer("f1", ingress.ProjectName, "web", "running", map[string]string{ingress.LabelComponent: ingress.ComponentIngress}),
+		},
+		"the proxy beside an unlabelled container": {
+			proxyContainer("p1"),
+			foreignContainer("f1", ingress.ProjectName, "web", "running", nil),
+		},
+	} {
+		got := stackops.Discover(stackops.Held{Containers: containers}, nil, stacks.TargetStandalone, stackops.SelfMarks{})
+
+		if len(got) != 1 || got[0].Name != ingress.ProjectName {
+			t.Errorf("%s: Discover = %+v, want the project listed so a person sees the clash", name, got)
+			continue
+		}
+		if got[0].NameReason != stacks.NameReservedText {
+			t.Errorf("%s: reason = %q, want the reserved-name sentence", name, got[0].NameReason)
+		}
+	}
+}
+
+func TestAdoptNameReserved(t *testing.T) {
+	t.Parallel()
+	if got := stackops.NameNotAdoptableReason(stacks.TargetStandalone, ingress.ProjectName); got != stacks.NameReservedText {
+		t.Errorf("reason for the reserved name = %q, want %q", got, stacks.NameReservedText)
+	}
+	if got := stackops.NameNotAdoptableReason(stacks.TargetStandalone, "shop"); got != "" {
+		t.Errorf("reason for shop = %q, want empty", got)
+	}
+	if got := stackops.NameNotAdoptableReason(stacks.TargetSwarm, ingress.ProjectName); got != "" {
+		t.Errorf("reason for the same name on a swarm = %q, want empty: the name is reserved on standalone hosts only", got)
+	}
 }
