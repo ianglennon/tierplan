@@ -135,8 +135,8 @@ func checkStandaloneNames(ctx context.Context, s *Service, in checkInput) ([]Fin
 	}}, nil
 }
 
-// CodeNameShadowed is a standalone enable, or an ensure pass that made the ingress network again, that found a container
-// stored on a network name that is the start of the new ingress network's ID (T-25-47). The engine looks such a name up
+// CodeNameShadowed is a standalone enable, or an ensure pass on a host that holds the ingress network, that found a
+// container stored on a network name that is the start of the ingress network's ID (T-25-47). The engine looks such a name up
 // again when the container first starts, so once no network carries it a start by the engine itself (a restart policy at
 // boot) would put the container on the shared bridge under names of its own, where it could take another stack's route.
 // The ID is only known once the network is made, so this is checked then, before ingress counts as on.

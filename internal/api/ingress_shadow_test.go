@@ -69,3 +69,35 @@ func TestStartOfAContainerStoredUnderTheIngressIDPrefixIsRefused(t *testing.T) {
 		t.Errorf("writes = %v, want the restart of web", w)
 	}
 }
+
+// TestSwarmIngressTaskContainersRestart: on a swarm the ingress network is a non-attachable overlay whose task containers
+// are the orchestrator's, so the standalone name rules do not hold them (D-46, U-07). A routed task container restarts as
+// any container does, and the proxy's task restarts with its name typed; a network named with the overlay ID's start is
+// created as before.
+func TestSwarmIngressTaskContainersRestart(t *testing.T) {
+	t.Parallel()
+	cfg := ingressTaskEngine()
+	cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "ovl0ovl0", Name: ingress.NetworkName, Driver: "overlay", Scope: "swarm", Subnets: []string{"10.50.0.0/24"}})
+	cfg.Containers[0].Networks = map[string]dockertest.FakeEndpoint{ingress.NetworkName: {NetworkID: "ovl0ovl0"}}
+	cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+		ID: "routed-1", Names: []string{"/shop_web.1.xyz"}, State: "running", Status: "Up 1 hour",
+		Networks: map[string]dockertest.FakeEndpoint{ingress.NetworkName: {NetworkID: "ovl0ovl0", Aliases: []string{ingress.Alias("shop", "web")}}},
+	})
+	f, e := dashEnv(t, cfg)
+
+	for label, body := range map[string]string{
+		"routed task":    actionJSON("restart", [2]string{e.ID, "routed-1"}),
+		"the proxy task": withConfirm(actionJSON("restart", [2]string{e.ID, "ing-task-1"}), "tierplan-ingress.abc.def"),
+	} {
+		rec := f.act(t, e, body)
+		if rec.code != http.StatusOK {
+			t.Fatalf("%s: restart = %d %s", label, rec.code, rec.body)
+		}
+		if res := decode[actionBody](t, rec).Results; len(res) != 1 || res[0].Result != "done" {
+			t.Errorf("%s: restart results = %+v, want done", label, res)
+		}
+	}
+	if rec := f.createNet(t, e, `{"name":"ovl","driver":"bridge"}`); rec.code != http.StatusCreated {
+		t.Errorf("create ovl = %d %s (%s), want 201", rec.code, rec.body, rec.ptyp)
+	}
+}

@@ -480,8 +480,11 @@ func (r *ingressResolver) ingressID(ctx context.Context) (string, error) {
 		r.read = true
 		res, err := r.g.NetworkInspect(ctx, ingress.NetworkName, client.NetworkInspectOptions{})
 		switch {
-		case err == nil:
+		case err == nil && res.Network.Scope != "swarm":
 			r.ingress = res.Network.ID
+		case err == nil:
+			// A swarm's ingress overlay is not attachable and its task containers are the orchestrator's: no ID prefix
+			// reaches it, so the standalone bridge's rules have no ID to hold (T-25-47 is a standalone threat).
 		case !IsNotFound(err):
 			r.readFail = fmt.Errorf("dockerx: read the ingress network: %w", err)
 		}
