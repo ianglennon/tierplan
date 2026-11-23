@@ -1520,13 +1520,8 @@
         "RestartPolicy": {
           "Name": "unless-stopped"
         },
-        "Mounts": [
-          {
-            "Type": "volume",
-            "Source": "tierplan-ingress-cache",
-            "Target": "/var/lib/tierplan-ingress",
-            "VolumeOptions": {}
-          }
+        "Binds": [
+          "tierplan-ingress-cache:/var/lib/tierplan-ingress:rw"
         ],
         "LogConfig": {
           "Type": "json-file",
