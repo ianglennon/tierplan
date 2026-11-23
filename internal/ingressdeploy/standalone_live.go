@@ -108,6 +108,24 @@ func (s *Service) enrolled(ctx context.Context, envID string, l standaloneLive) 
 	return false, nil
 }
 
+// hasActiveNode says an ingress proxy node of the environment is enrolled and active, whatever the host holds. A deployer
+// with no Nodes has seen none enrol.
+func (s *Service) hasActiveNode(ctx context.Context, envID string) (bool, error) {
+	if s.d.Nodes == nil {
+		return false, nil
+	}
+	rows, err := s.d.Nodes.ListNodes(ctx, envID)
+	if err != nil {
+		return false, err
+	}
+	for _, n := range rows {
+		if n.Status == "active" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // standalonePlan is what the host needs: an up of the project, and in it a fresh join token.
 type standalonePlan struct {
 	// Up is true when the project has to be brought up.

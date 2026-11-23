@@ -110,15 +110,13 @@ func (s *Service) standaloneQuietClass(ctx context.Context, envID string, l stan
 	if !l.running() || l.StartedAt.IsZero() || s.d.Clock.Now().Sub(l.StartedAt) < NotEnrolledAfter || s.d.Nodes == nil {
 		return EnsureOK
 	}
-	rows, err := s.d.Nodes.ListNodes(ctx, envID)
+	active, err := s.hasActiveNode(ctx, envID)
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not list the proxy nodes of a standalone host", "environment", envID, "error", err)
 		return EnsureOK
 	}
-	for _, n := range rows {
-		if n.Status == "active" {
-			return EnsureOK
-		}
+	if active {
+		return EnsureOK
 	}
 	return EnsureNotEnrolled
 }
