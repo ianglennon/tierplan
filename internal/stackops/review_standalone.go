@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/moby/moby/api/types/image"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
@@ -125,7 +127,7 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 	if err != nil {
 		return err
 	}
-	cmp, err := d.compareOnNode(ctx, in, node, project, live.Containers, diff)
+	cmp, err := d.compareOnNodeWith(ctx, in, node, project, live.Containers, diff, standaloneCompare{IgnoreIngressInHistory: true, Injected: res.Loaded.Ingress})
 	if err != nil {
 		return err
 	}
@@ -391,7 +393,7 @@ func (d Deps) preparedRevisions(ctx context.Context, in ReviewInput) ([]map[stri
 	var services []map[string]types.ServiceConfig
 	var copies []stacks.WorkingCopy
 	for _, rev := range revs {
-		// ingress: unattached, the standalone attach is Phase 25
+		// ingress: unattached, the revisions are compared without TierPlan's attachment (D-20)
 		checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: rev.Copy})
 		if checked.Loaded == nil {
 			continue
@@ -421,6 +423,11 @@ func (d Deps) preparedRevisions(ctx context.Context, in ReviewInput) ([]map[stri
 // stored revisions are prepared again only when a hash differs, because that is the only case that needs
 // them (recordedFor), and the secrets of those revisions are hidden in what is shown.
 func (d Deps) compareOnNode(ctx context.Context, in ReviewInput, node string, project *types.Project, containers []dockerx.ComposeContainer, diff standaloneDiff) (standaloneComparison, error) {
+	return d.compareOnNodeWith(ctx, in, node, project, containers, diff, standaloneCompare{})
+}
+
+// compareOnNodeWith is compareOnNode with the options of compareStandaloneWith.
+func (d Deps) compareOnNodeWith(ctx context.Context, in ReviewInput, node string, project *types.Project, containers []dockerx.ComposeContainer, diff standaloneDiff, opt standaloneCompare) (standaloneComparison, error) {
 	m := reviewMasker(in)
 	var stored []map[string]types.ServiceConfig
 	if len(diff.Changed) > 0 {
@@ -440,7 +447,7 @@ func (d Deps) compareOnNode(ctx context.Context, in ReviewInput, node string, pr
 	var out standaloneComparison
 	err := d.Aggregator.OnNode(ctx, in.EnvID, node, func(c *dockerx.Client) error {
 		var e error
-		out, e = compareStandalone(ctx, c, project, containers, stored, m)
+		out, e = compareStandaloneWith(ctx, c, project, containers, stored, m, opt)
 		return e
 	})
 	return out, err
@@ -501,6 +508,39 @@ func (h *hostReader) read(ctx context.Context, c dockerx.ComposeContainer) (cont
 // source of what the container was made from: the review does not invent a difference it cannot know. The
 // services a recreate carries with it come last. It reads only.
 func compareStandalone(ctx context.Context, host *dockerx.Client, project *types.Project, containers []dockerx.ComposeContainer, stored []map[string]types.ServiceConfig, m stacks.Masker) (standaloneComparison, error) {
+	return compareStandaloneWith(ctx, host, project, containers, stored, m, standaloneCompare{})
+}
+
+// standaloneCompare says which comparisons of compareStandaloneWith do not see TierPlan's attachment to the host's
+// ingress bridge (D-16, D-20). The zero value sees it, as a deploy must: a service whose container is on another set of
+// networks than the prepared one is recreated.
+type standaloneCompare struct {
+	// IgnoreIngress takes the attachment out of both sides of every comparison: the desired service and the one
+	// rebuilt from a container (stacks.StandaloneIngressStripper), the rows and the raw rows alike, and a container
+	// whose config hash is the desired service's with or without the attachment is not a changed one. Drift is
+	// judged this way: switching ingress on or off is not something the person did to the stack.
+	IgnoreIngress bool
+	// IgnoreIngressInHistory leaves the attachment out only of what is compared with history: the raw rows the
+	// reverts section sets against the deployed revision's drift, and the stored revisions, which were prepared
+	// without it and are found by their hash with the desired service's attachment put on. The rows the review shows
+	// keep it, so a join or a leave is still a listed change there.
+	IgnoreIngressInHistory bool
+	// Injected is what the load of the project injected (Loaded.Ingress), nil with ingress off or when the project is
+	// not loaded attached.
+	Injected *stacks.InjectedIngress
+}
+
+// compareStandaloneWith is compareStandalone with the options of standaloneCompare.
+func compareStandaloneWith(ctx context.Context, host *dockerx.Client, project *types.Project, containers []dockerx.ComposeContainer, stored []map[string]types.ServiceConfig, m stacks.Masker, opt standaloneCompare) (standaloneComparison, error) {
+	same := func(svc types.ServiceConfig) types.ServiceConfig { return svc }
+	strip, viewRow, viewRaw := same, same, same
+	if opt.IgnoreIngress || opt.IgnoreIngressInHistory {
+		strip = stacks.StandaloneIngressStripper(project, opt.Injected)
+		viewRaw = strip
+	}
+	if opt.IgnoreIngress {
+		viewRow = strip
+	}
 	byService := containersByService(containers)
 	ids := containerIDs(byService)
 	peers := map[string]string{}
@@ -535,11 +575,20 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 		if err != nil {
 			return out, fmt.Errorf("hash service %s: %w", name, err)
 		}
-		type pair struct{ des, run types.ServiceConfig }
+		bareHash := hash
+		if opt.IgnoreIngress {
+			// A container made before ingress was switched on carries the hash of the service without the attachment.
+			if bareHash, err = dockerx.ServiceHash(stacks.ResolveServiceRefs(strip(svc), ids)); err != nil {
+				return out, fmt.Errorf("hash service %s: %w", name, err)
+			}
+		}
+		// des and run are what the review shows; rawDes and rawRun what the reverts section compares (the same unless
+		// only the history leaves the attachment out).
+		type pair struct{ des, run, rawDes, rawRun types.ServiceConfig }
 		var first, differing *pair
 		hashDiffers, forced := false, false
 		for _, c := range have {
-			differs := c.ConfigHash != hash
+			differs := c.ConfigHash != hash && c.ConfigHash != bareHash
 			hashDiffers = hashDiffers || differs
 			insp, img, ok, err := reader.read(ctx, c)
 			if err != nil {
@@ -555,7 +604,11 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 			}
 			rec := &resolved
 			if differs {
-				if found := recordedFor(stored, c.ConfigHash, ids); found != nil {
+				var attach func(string, types.ServiceConfig) types.ServiceConfig
+				if opt.IgnoreIngress || opt.IgnoreIngressInHistory {
+					attach = func(n string, s types.ServiceConfig) types.ServiceConfig { return withDesiredAttachment(project, n, s) }
+				}
+				if found := recordedFor(stored, c.ConfigHash, ids, attach); found != nil {
 					rec = found
 				}
 			}
@@ -563,9 +616,13 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 			scale := len(have)
 			run.Scale = &scale
 			imgDef := stacks.ImageDefaultsOf(img)
-			des := stacks.NormalizeComposeService(resolved, imgDef, rc)
-			runN := stacks.AlignDaemonDefaults(des, stacks.NormalizeComposeService(run, imgDef, rc))
-			p := &pair{des: des, run: runN}
+			view := func(v func(types.ServiceConfig) types.ServiceConfig) (types.ServiceConfig, types.ServiceConfig) {
+				d := stacks.NormalizeComposeService(v(resolved), imgDef, rc)
+				return d, stacks.AlignDaemonDefaults(d, stacks.NormalizeComposeService(v(run), imgDef, rc))
+			}
+			des, runN := view(viewRow)
+			rawDes, rawRun := view(viewRaw)
+			p := &pair{des: des, run: runN, rawDes: rawDes, rawRun: rawRun}
 			if !differs && !sameEngine(des, runN) {
 				forced = true
 			}
@@ -580,10 +637,10 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 		switch {
 		case differing != nil:
 			row = stacks.ChangedComposeService(name, differing.run, differing.des, m)
-			raw = stacks.ChangedComposeService(name, differing.run, differing.des, stacks.Masker{})
+			raw = stacks.ChangedComposeService(name, differing.rawRun, differing.rawDes, stacks.Masker{})
 		case hashDiffers && first != nil:
 			row = stacks.ChangedComposeService(name, first.run, first.des, m)
-			raw = stacks.ChangedComposeService(name, first.run, first.des, stacks.Masker{})
+			raw = stacks.ChangedComposeService(name, first.rawRun, first.rawDes, stacks.Masker{})
 		case hashDiffers:
 			row = stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeChanged}
 			raw = row
@@ -602,16 +659,58 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 // recordedFor is the prepared service of a stored revision whose config hash, with the references to other
 // services resolved to the host's containers, is the label of a container: the service that container was
 // created from. Nil when no stored revision made it.
-func recordedFor(stored []map[string]types.ServiceConfig, label string, ids map[string][]string) *types.ServiceConfig {
+func recordedFor(stored []map[string]types.ServiceConfig, label string, ids map[string][]string, attach func(name string, svc types.ServiceConfig) types.ServiceConfig) *types.ServiceConfig {
+	hashed := func(svc types.ServiceConfig) bool {
+		h, err := dockerx.ServiceHash(stacks.ResolveServiceRefs(svc, ids))
+		return err == nil && h == label
+	}
 	for _, services := range stored {
 		for _, name := range sortedKeys(services) {
 			svc := stacks.ResolveServiceRefs(services[name], ids)
-			if h, err := dockerx.ServiceHash(svc); err == nil && h == label {
+			if hashed(services[name]) {
+				return &svc
+			}
+			// The revision was prepared without the attachment; a container made with it carries the hash of the
+			// service as it was sent, so the revision's service is tried with the desired one's attachment too.
+			if attach != nil && hashed(attach(name, services[name])) {
 				return &svc
 			}
 		}
 	}
 	return nil
+}
+
+// withDesiredAttachment is svc, a service of a stored revision, with the networks the prepared project gives the
+// service of the same name that are TierPlan's attachment: its entry on the shared ingress network, and the default
+// network when the attachment had to write it. A service the project does not have, or has unattached, comes back
+// as it was.
+func withDesiredAttachment(project *types.Project, name string, svc types.ServiceConfig) types.ServiceConfig {
+	desired, ok := project.Services[name]
+	if !ok {
+		return svc
+	}
+	keys := map[string]bool{ingress.NetworkName: true}
+	for key, n := range project.Networks {
+		if bool(n.External) && n.Name == ingress.NetworkName {
+			keys[key] = true
+		}
+	}
+	nets := make(map[string]*types.ServiceNetworkConfig, len(svc.Networks)+1)
+	maps.Copy(nets, svc.Networks)
+	attached := false
+	for key, cfg := range desired.Networks {
+		if keys[key] {
+			nets[key], attached = cfg, true
+		}
+	}
+	if !attached {
+		return svc
+	}
+	if _, has := desired.Networks["default"]; has && len(svc.Networks) == 0 {
+		nets["default"] = nil
+	}
+	svc.Networks = nets
+	return svc
 }
 
 // sameEngine compares two normalised services in what the engine records about a container, leaving out

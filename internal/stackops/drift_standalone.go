@@ -23,6 +23,11 @@ import (
 // from the container's inspect document). Current is what runs now and Next what the revision deployed, as in the
 // swarm check.
 //
+// TierPlan's attachment to the host's ingress bridge is not the person's: the desired service and the one rebuilt from a
+// container are both compared without it, and a container whose config hash is the service's with or without it
+// matches, so a stack deployed before ingress was switched on, or while it was, reads in sync once it is switched the
+// other way (D-16, D-20).
+//
 // Three things are added to what the review compares. A container's image is checked against the revision's pin,
 // because the field comparison leaves the image out. A service whose containers differ from the prepared service in
 // nothing the person wrote (an adopted stack's containers carry no label of TierPlan's, so their config hash never
@@ -86,7 +91,7 @@ func (d Deps) driftStandalone(ctx context.Context, in DriftInput) (DriftResult, 
 		// compare; a container with another stack's ID, or in a project the stack owns nothing of, is not (SplitProject).
 		mine, unlabelled, _ := SplitProject(own, all, func(c dockerx.ComposeContainer) map[string]string { return c.Labels })
 		owned = append(mine, unlabelled...)
-		cmp, e = compareStandalone(ctx, c, project, owned, nil, masker)
+		cmp, e = compareStandaloneWith(ctx, c, project, owned, nil, masker, standaloneCompare{IgnoreIngress: true, Injected: prep.Loaded.Ingress})
 		return e
 	})
 	if err != nil {
