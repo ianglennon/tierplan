@@ -51,6 +51,7 @@ const (
 
 // codeMessages are the sentences of the codes. They are built here and never from an engine's answer.
 var codeMessages = map[string]string{
+	CodeNameShadowed:        "A container is joined to a network by a name that is the start of the new ingress network's ID, so after a reboot it could join the ingress network under a name of its own. Disconnect it from that network or remove it, then switch ingress on again; or switch ingress off and on again, which makes the network with a new ID.",
 	CodeEnableTokenFailed:   "The join token could not be made or stored as a swarm secret.",
 	CodeEnableNetworkFailed: "The ingress network could not be created.",
 	CodeEnableServiceFailed: "The proxy service could not be created or updated.",

@@ -25,8 +25,9 @@ const JobKindEnsure = "ingress_ensure"
 // URL and pin the server has now: recreating it would not change what it can reach. A changed URL or pin is a redeploy.
 const EnsureNotEnrolled = "not_enrolled"
 
-// EnsureNameShadowed is a pass that found the ingress network missing and did not make it again: a container of the host
-// is stored on a hexadecimal network name, which a new network's ID could start with (T-25-47, ingress_name_shadowed).
+// EnsureNameShadowed is a pass that made a missing ingress network again and found a container stored on a network name
+// that is the start of its new ID (T-25-47, ingress_name_shadowed): the project was taken down, and the next pass makes
+// the network again with another ID.
 const EnsureNameShadowed = "name_shadowed"
 
 // NotEnrolledAfter is how long, on the injected clock, a proxy may run without enrolling before a pass says so (D-28).
@@ -88,12 +89,17 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 	if !plan.Token {
 		s.forgetOutstanding(envID)
 	}
-	// A missing network is made again with a new ID, which a stored hexadecimal name could be the start of: not while
-	// any container is stored on one.
+	s.log().Info("the ingress ensure loop is putting a standalone proxy right", "environment", envID, "reason", plan.Reason, "token", plan.Token)
+	if err := s.redeployStandalone(ctx, envID, info, state, l, plan); err != nil {
+		s.log().Warn("the ingress ensure loop could not put a standalone proxy right", "environment", envID, "reason", plan.Reason, "error", err)
+		return EnsureWriteFailed, true
+	}
+	// A network made again has a new ID: a container stored on a name that is its start would join it at the next boot
+	// (T-25-47). The project is taken down, so the next pass makes the network with yet another ID.
 	if l.network == nil {
-		var refs []dockerx.HexNameRef
+		var refs []dockerx.ShadowRef
 		err := s.d.Engine.OnNode(ctx, info.ID, info.Nodes[0].AgentID, func(c *dockerx.Client) (e error) {
-			refs, e = c.ContainersOnHexNames(ctx)
+			refs, e = c.ContainersShadowingIngress(ctx)
 			return e
 		})
 		if err != nil {
@@ -101,15 +107,13 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 			return EnsureUnreachable, true
 		}
 		if len(refs) > 0 {
-			s.log().Warn("the ingress ensure loop did not make a standalone host's ingress network again: a container is stored on a hexadecimal network name",
-				"environment", envID, "container", refs[0].Container, "network", refs[0].Network, "count", len(refs))
+			s.log().Warn("the ingress ensure loop took a standalone proxy down: a container is stored on a network name that is the start of the new ingress network's ID",
+				"environment", envID, "containers", shadowDetail(refs))
+			if err := s.d.System.DownSystem(ctx, envID, info.Nodes[0].AgentID); err != nil {
+				s.log().Warn("the ingress ensure loop could not take a standalone proxy down", "environment", envID, "error", err)
+			}
 			return EnsureNameShadowed, true
 		}
-	}
-	s.log().Info("the ingress ensure loop is putting a standalone proxy right", "environment", envID, "reason", plan.Reason, "token", plan.Token)
-	if err := s.redeployStandalone(ctx, envID, info, state, l, plan); err != nil {
-		s.log().Warn("the ingress ensure loop could not put a standalone proxy right", "environment", envID, "reason", plan.Reason, "error", err)
-		return EnsureWriteFailed, true
 	}
 	return EnsureOK, true
 }

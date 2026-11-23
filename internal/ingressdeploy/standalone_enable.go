@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -120,7 +121,7 @@ func (s *Service) runStandaloneEnable(ctx context.Context, r *jobs.Reporter, rel
 	}{
 		{[]string{ItemToken}, run.tokenStep},
 		{system, run.systemStep},
-		{[]string{ItemSwitch}, run.enableSwitch},
+		{[]string{ItemSwitch}, run.standaloneSwitch},
 	}
 	for i, st := range steps {
 		if ctx.Err() != nil {
@@ -225,4 +226,22 @@ func (e *standaloneEnable) systemStep(ctx context.Context) error {
 		e.subnet = n.Ipam.Config[0].Subnet
 	}
 	return nil
+}
+
+// standaloneSwitch turns ingress on once the ingress network is made and its ID known, unless a container of the host is
+// stored on a network name that is the start of that ID (T-25-47): then ingress stays off and the containers are named.
+// A connect made after the network exists is refused by its own check, so nothing can slip in after this read.
+func (e *standaloneEnable) standaloneSwitch(ctx context.Context) error {
+	var refs []dockerx.ShadowRef
+	err := e.s.d.Engine.OnNode(ctx, e.envID, e.node, func(c *dockerx.Client) (err error) {
+		refs, err = c.ContainersShadowingIngress(ctx)
+		return err
+	})
+	if err != nil {
+		return fail(CodeEnableHostFailed, err)
+	}
+	if len(refs) > 0 {
+		return fail(CodeNameShadowed, errors.New("a container is stored on a network name that is the start of the ingress network's ID"), shadowDetail(refs))
+	}
+	return e.enableSwitch(ctx)
 }

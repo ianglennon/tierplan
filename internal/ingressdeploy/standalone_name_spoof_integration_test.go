@@ -5,13 +5,12 @@
 package ingressdeploy_test
 
 import (
-	"errors"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
+	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/testsupport"
@@ -148,33 +147,35 @@ func TestStandaloneContainerNameCannotTakeARoute(t *testing.T) {
 	}
 }
 
-// TestStandaloneEnableRefusesAHexNetworkName is the engine side of T-25-47's last residual: a stopped container with a
-// restart policy, joined to a network by a hexadecimal name that is then removed, would be started by the engine at boot
-// onto an ingress network whose ID starts with that name, past every TierPlan check. The ingress network's ID is not known
-// before it is made, so switching ingress on is refused while such a container exists, and allowed once it is
-// disconnected.
-func TestStandaloneEnableRefusesAHexNetworkName(t *testing.T) {
+// TestStandaloneEnableOnEngineRefusesAShadowingName is the engine side of T-25-47's last residual: a stopped
+// container with a restart policy, stored on a network name that is the start of the ingress network's ID once no network
+// carries it, would be started by the engine at boot onto the ingress network past every TierPlan check. The ID is not
+// known before the network is made, so the container is joined to all sixteen one-digit hexadecimal names, which are then
+// removed: whatever ID the network gets, one of them is its start. The enable makes the network, finds it, and leaves
+// ingress off naming the container; once the container is gone, switching on again carries on and succeeds.
+func TestStandaloneEnableOnEngineRefusesAShadowingName(t *testing.T) {
 	e := startHostEnv(t, false)
 	e.startRegistry()
-	e.sh("docker network create 2c8a >/dev/null && docker create --name staged --restart always --network 2c8a " + e.webImage + " >/dev/null && docker network rm 2c8a >/dev/null")
-
-	ctx := testsupport.Context(t)
-	_, err := e.deploy.Enable(ctx, testActor, testOwner, e.envID, ingressdeploy.EnableRequest{})
-	var pe *ingressdeploy.PreflightError
-	if !errors.As(err, &pe) {
-		t.Fatalf("Enable over a hexadecimal network name = %v, want a preflight refusal", err)
+	digits := "0123456789abcdef"
+	var stage strings.Builder
+	stage.WriteString("docker create --name staged --restart always " + e.webImage + " >/dev/null")
+	for _, d := range digits {
+		stage.WriteString(" && docker network create " + string(d) + " >/dev/null && docker network connect " + string(d) + " staged")
 	}
-	found := false
-	for _, f := range pe.Findings {
-		if f.Code == ingressdeploy.CodeNameShadowed && slices.Contains(f.Items, "container staged on network name 2c8a") {
-			found = true
+	for _, d := range digits {
+		stage.WriteString(" && docker network rm " + string(d) + " >/dev/null")
+	}
+	e.sh(stage.String())
+
+	job := e.enable()
+	var it jobs.Item
+	for _, i := range job.Items {
+		if i.ID == ingressdeploy.ItemSwitch {
+			it = i
 		}
 	}
-	if !found {
-		t.Fatalf("findings = %+v, want ingress_name_shadowed naming the staged container", pe.Findings)
-	}
-	if got := strings.TrimSpace(e.sh("docker network ls -q --filter name=^" + ingress.NetworkName + "$")); got != "" {
-		t.Errorf("a refused enable made the ingress network: %s", got)
+	if it.State != jobs.ItemFailed || it.Code != ingressdeploy.CodeNameShadowed || !strings.Contains(it.Detail, "staged on network name ") {
+		t.Fatalf("switch item = %+v, want failed ingress_name_shadowed naming staged", it)
 	}
 
 	e.sh("docker rm -f staged >/dev/null")

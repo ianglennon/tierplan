@@ -162,8 +162,6 @@ type hostView struct {
 	project []dockerx.ComposeContainer
 	// volume is the volume the proxy's cache would use, nil when the host has none by that name.
 	volume *dockerx.VolumeDetail
-	// hexRefs are the containers stored on a network name made only of hexadecimal digits (T-25-47).
-	hexRefs []dockerx.HexNameRef
 }
 
 // check is one step of the preflight. It returns what it found, or an error when it could not look.
