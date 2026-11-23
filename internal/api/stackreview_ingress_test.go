@@ -160,3 +160,34 @@ func TestStackReviewIngressOffWarns(t *testing.T) {
 		t.Errorf("problems = %+v, want ingress_disabled while ingress is off", rv.Problems)
 	}
 }
+
+// A standalone host whose ingress is off warns the same way as a swarm (D-17, WR-B1): the stack claims a hostname the
+// host will not serve, and the review says so.
+func TestStackReviewIngressOffWarnsOnAStandaloneHost(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, nil)
+	seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "review-off-standalone")
+	if st.Target != "standalone" {
+		t.Fatalf("stack target = %q, want standalone", st.Target)
+	}
+	saveCompose(t, admin, st.ID, ingressStandaloneCompose("a.apps.example.com"), "[]")
+
+	rv, code, raw := admin.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %.300s", code, raw)
+	}
+	var found bool
+	for _, p := range rv.Problems {
+		if p.Code == "ingress_disabled" {
+			found = true
+			if p.Severity != "warning" {
+				t.Errorf("problem = %+v, want a warning", p)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("problems = %+v, want ingress_disabled while ingress is off on a standalone host", rv.Problems)
+	}
+}

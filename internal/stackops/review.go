@@ -125,7 +125,7 @@ type ReviewInput struct {
 	DraftVersion int64
 	Mode         string
 	Services     []string
-	// IngressOff says the environment's ingress is switched off, so the routes of a swarm stack are claimed but not
+	// IngressOff says the environment's ingress is switched off, so the routes of a stack are claimed but not
 	// served until it is on and the stack is redeployed (D-13): the review warns of it. False when ingress is on and
 	// when it could not be read.
 	IngressOff bool
@@ -162,7 +162,7 @@ type ReviewInput struct {
 	// they restore (plan 18-13).
 	IngressPolicy *stacks.IngressPolicy
 	// Ingress is how a service that declares a route joins the shared ingress network, set by the review route from
-	// Deps.Ingress.AttachFor: non-nil only for a swarm environment whose ingress is on. The review shows the
+	// Deps.Ingress.AttachFor: non-nil only for an environment, swarm or standalone host, whose ingress is on. The review shows the
 	// attachment as the deploy will send it (D-21), so a routed service that lacks the network is a changed
 	// service and one that lost its last route shows the network leaving. A roll back or a restore reads it from
 	// Deps instead (PrepareRollbackWith).
