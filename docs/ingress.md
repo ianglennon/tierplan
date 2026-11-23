@@ -1,21 +1,20 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- SPDX-FileCopyrightText: 2026 The TierPlan Authors -->
 
-# Ingress on a swarm
+# Ingress
 
-Ingress lets a stack's compose file ask for a public hostname, and TierPlan runs a Traefik proxy on every node of the
-swarm that serves that hostname over HTTPS. This page covers the part you operate in this version: switching ingress
-on and off for a swarm environment, what that creates and what stops it, how existing stacks join, and what the
-proxy's access log records. Every step on this page is an API call in this version. The page in the web interface
+Ingress lets a stack's compose file ask for a public hostname, and TierPlan runs a Traefik proxy that serves that
+hostname over HTTPS: one on every node of a swarm, and one on a standalone host (a host with an agent, or TierPlan's own
+local socket). This page covers the part you operate in this version: switching ingress on and off for an environment,
+what that creates and what stops it, how existing stacks join, and what the proxy's access log records. The sections up
+to [On a standalone host](#on-a-standalone-host) describe a swarm; that section says what differs on a standalone host. Every step on this page is an API call in this version. The page in the web interface
 comes in a later version, and until then you use the calls below with a token that has the `ingress.manage` permission
 on the environment (an Admin has it; see [permissions.md](permissions.md)).
-
-Ingress is for swarm environments. A standalone host answers `ingress_standalone_unavailable` (409) and is not
-supported yet.
 
 - [What switching on creates](#what-switching-on-creates)
 - [Switching on](#switching-on)
 - [What refuses the switch](#what-refuses-the-switch)
+- [On a standalone host](#on-a-standalone-host)
 - [TierPlan's own certificate and HTTP-01](#tierplans-own-certificate-and-http-01)
 - [Existing stacks need a redeploy](#existing-stacks-need-a-redeploy)
 - [The status](#the-status)
@@ -68,7 +67,6 @@ appears.
 
 | Code | What is in the way |
 | --- | --- |
-| `ingress_standalone_unavailable` | The environment is a standalone host. |
 | `ingress_no_manager` | No manager node's agent is connected, so TierPlan cannot write to the swarm. |
 | `ingress_port_in_use` | A swarm service, in a stack or not, publishes TCP port 80 or 443 (in ingress mode or host mode), or a container on a node does. The finding lists each one. A UDP 443 publisher (HTTP/3) does not block. |
 | `ingress_no_address_space` | The swarm's address pools have no free /22 block. |
@@ -83,6 +81,74 @@ appears.
 Two findings are warnings and never refuse. `ingress_nodes_not_checked` lists the nodes whose ports could not be read
 (a node that is down does not block the switch). `ingress_http01_unknown` says TierPlan could not tell whether the
 next section applies.
+
+## On a standalone host
+
+A standalone environment, whether its host runs a TierPlan agent or is TierPlan's own local socket, has one node, so
+there is one proxy. The calls are the same as on a swarm: `enable/preview`, `enable`, `status`, `join-token`,
+`access-logs`, `disable/preview` and `disable`. The preview says `plan.standalone` is true.
+
+**What switching on creates.** The proxy is not a swarm service but one container of a compose project that TierPlan
+owns on the host, all of it labelled `tierplan.component=ingress`:
+
+| What | Name | Notes |
+| --- | --- | --- |
+| Compose project | `tierplan-ingress` | One service, the proxy container, with a restart policy so it comes back after a reboot. It publishes ports 80 and 443 of the host. |
+| Bridge network | `tierplan-ingress` | A bridge on a free /24 block of the host's address pools (or the subnet you give). Routed services of every stack join it. |
+| Cache volume | `tierplan-ingress-cache` | Where the proxy keeps the certificates and keys it was sent. |
+| Join token | a file in the container | The token is written into the stopped container as a root-owned file with mode 0444, which the proxy, running as user 1000, can read. The container's root filesystem is not read-only, because Compose does not copy a secret into a read-only container. The token is not an environment variable, a bind mount or a swarm secret, and it is not kept anywhere TierPlan or you can read it back. |
+
+The job ends when the container is up. The proxy then enrols on its own, and `GET .../ingress/status` shows it: the
+objects `container` and `volume` say what the host holds (`service` and `secret` stay false on a standalone host), and
+`nodes.expected` is 1. If the proxy has run for five minutes without enrolling, the status reports the class
+`not_enrolled` in `lastEnsure`. That nearly always means the proxy cannot reach TierPlan's address; see
+[the local socket](#the-local-socket) below. Nothing is recreated for it, because that would not change what the proxy can
+reach. The job that brings the project up on a later pass, because the image changed or the container went missing, has the
+kind `ingress_ensure`.
+
+**Refusals.** The preview shows the same findings as on a swarm. These apply to a standalone host:
+
+| Code | What is in the way |
+| --- | --- |
+| `ingress_host_unreachable` | The host's agent is not connected, so nothing can be created or removed on it. Reconnect it first. A standalone host has one node, so this refuses the switch and is not a warning. |
+| `ingress_port_in_use` | Any container on the host publishes TCP port 80 or 443, a stopped one included, because a stopped container with a restart policy takes the port back at the next reboot. A UDP 443 publisher does not block. TierPlan's own container is caught here like any other. |
+| `ingress_no_address_space` | The host's address pools have no free /24 block. |
+| `ingress_subnet_overlaps` | The subnet you gave overlaps an existing network. |
+| `ingress_name_taken` | The host already holds a container, network or volume under a name ingress uses that is not TierPlan's. Remove or rename it. |
+| `ingress_http01_conflict` | TierPlan's own certificate uses HTTP-01 and the host is TierPlan's own host. This includes the local socket environment, and an agent environment whose engine is the one TierPlan itself talks to. Switch TierPlan's own certificate to DNS-01 first (see [https.md](https.md)). A later version lifts this limit. |
+
+**Existing stacks join on their next deploy.** As on a swarm, switching on changes no stack. A stack that holds a route
+is attached to the `tierplan-ingress` network by its next deploy, and the preview and the status list the stacks that
+need one, whether or not they look attached, from what the host holds. Each routed service gets one alias on the shared
+network, made from the stack and the service: lowercase, with a short hash of the pair at the end, for example
+`shop-web-1a2b3c4d`. The bare service name, `web`, is not a name on the shared network, and neither is the container
+name. So two stacks that each have a service `web` never answer for each other, and the proxy reaches a service by its
+alias. Inside its own stack a service still uses its plain name, on the stack's own network.
+
+**The reserved stack name.** `tierplan-ingress` is TierPlan's own name for the proxy's project on a standalone host, and
+a stack of that name would have the proxy removed as an orphan at its next deploy. Creating, importing from git or adopting
+a stack by that name is refused with `422 stack_name_reserved`. On a swarm the name is free.
+
+**The local socket.** TierPlan's own host works with no agent, and the proxy dials TierPlan from inside a container.
+Two things must hold for it to enrol: TierPlan must listen on an address other than loopback (a listener on `127.0.0.1` is
+not reachable from a container by any address), and the host part of the agent URL, which is the address the proxy dials,
+must resolve inside a container to an address that reaches TierPlan. A hostname that the host itself resolves to a loopback
+address, such as a `127.0.1.1` entry in `/etc/hosts`, resolves to the container's own loopback and is refused. Use the
+host's LAN address or the bridge gateway in the agent URL, or a name that resolves to one. TierPlan adds no `extra_hosts`
+mapping by default. The status stays at no enrolled node, and then reports `not_enrolled`, when this is wrong.
+
+**The join token.** The proxy enrols once with the token it was given and then uses its own key. While ingress is on, a
+rotation of the join token is refused with `409 ingress_token_not_enrolled` before the proxy has enrolled, and no token is
+made, because the new token could not reach the container that already holds the old one. Once the proxy has enrolled, a
+rotation makes the next token and changes nothing on the host. TierPlan makes a fresh token itself only when it creates or
+starts the proxy container and no node is enrolled.
+
+**Switching off.** The calls and the refusals for routes that are live and for a paused environment are the same as on a
+swarm. A standalone host that is not connected refuses the switch-off with `ingress_host_unreachable` and nothing is
+changed, because nothing can be removed from it, and a switch that said "off" would leave the proxy running. Removing the
+environment itself is not affected. Otherwise the job stops serving routes, removes the proxy container, the network and
+the cache volume, which holds the private keys, disables the join token and removes the proxy node. A network that another
+container still uses is not removed: the job fails and names that container, and you switch off again once it is gone.
 
 ## TierPlan's own certificate and HTTP-01
 
@@ -148,7 +214,7 @@ The proxy writes no access log until you switch it on. It is off by default.
     PUT /api/env/{envId}/ingress/access-logs     {"enabled": true}
 
 The answer says when it applies: `rolling` (the proxy service is updated, one node at a time, so each proxy restarts in
-turn), `when_enabled` (stored now, applies when ingress is switched on) or `when_resumed` (stored now, applies when an
+turn), `recreate` (a standalone host: the next pass recreates the proxy container with the setting changed), `when_enabled` (stored now, applies when ingress is switched on) or `when_resumed` (stored now, applies when an
 Admin resumes a paused environment).
 
 What it records. The log is JSON, one line per request, written to the proxy's standard output. Each line carries the
