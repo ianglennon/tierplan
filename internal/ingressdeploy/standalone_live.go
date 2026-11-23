@@ -57,20 +57,25 @@ func (s *Service) readStandaloneLive(ctx context.Context, info EnvInfo) (standal
 		}
 		if l.proxy != nil {
 			det, _, err := c.ContainerDetail(ctx, l.proxy.ID)
-			if err != nil {
+			switch {
+			case dockerx.IsNotFound(err):
+				// Removed since the list (a concurrent stack operation, or a person): there is no proxy to read.
+				l.proxy = nil
+			case err != nil:
 				return err
-			}
-			if t, err := time.Parse(time.RFC3339Nano, det.StartedAt); err == nil && t.Year() > 1 {
-				l.StartedAt = t.UTC()
-			}
-			for _, kv := range det.Env {
-				switch {
-				case kv == ingressbundle.EnvAccessLog+"="+accessLogOn:
-					l.accessLog = true
-				case strings.HasPrefix(kv, ingressbundle.EnvURL+"="):
-					l.url = strings.TrimPrefix(kv, ingressbundle.EnvURL+"=")
-				case strings.HasPrefix(kv, ingressbundle.EnvPin+"="):
-					l.pin = strings.TrimPrefix(kv, ingressbundle.EnvPin+"=")
+			default:
+				if t, err := time.Parse(time.RFC3339Nano, det.StartedAt); err == nil && t.Year() > 1 {
+					l.StartedAt = t.UTC()
+				}
+				for _, kv := range det.Env {
+					switch {
+					case kv == ingressbundle.EnvAccessLog+"="+accessLogOn:
+						l.accessLog = true
+					case strings.HasPrefix(kv, ingressbundle.EnvURL+"="):
+						l.url = strings.TrimPrefix(kv, ingressbundle.EnvURL+"=")
+					case strings.HasPrefix(kv, ingressbundle.EnvPin+"="):
+						l.pin = strings.TrimPrefix(kv, ingressbundle.EnvPin+"=")
+					}
 				}
 			}
 		}

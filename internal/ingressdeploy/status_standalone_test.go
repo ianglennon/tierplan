@@ -4,11 +4,20 @@
 package ingressdeploy_test
 
 import (
+	"context"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/proto/ingresswire"
@@ -135,5 +144,57 @@ func TestStandaloneStatusLeftovers(t *testing.T) {
 				t.Errorf("enableFailed = %v, disablingIncomplete = %v; want %v and %v", got.EnableFailed, got.DisablingIncomplete, c.wantFailed, c.wantDI)
 			}
 		})
+	}
+}
+
+// vanishingEngine is the rig's fake engine behind a proxy that answers the proxy container's inspect with a 404, as an
+// engine does for a container removed between the list and the inspect.
+type vanishingEngine struct{ srv *httptest.Server }
+
+func newVanishingEngine(t *testing.T, fake *dockertest.Fake, container string) *vanishingEngine {
+	t.Helper()
+	rp := &httputil.ReverseProxy{
+		Rewrite:   func(r *httputil.ProxyRequest) { r.SetURL(&url.URL{Scheme: "http", Host: "engine"}) },
+		Transport: &http.Transport{DialContext: fake.DialContext},
+	}
+	gone := regexp.MustCompile(`^/v[0-9.]+/containers/` + regexp.QuoteMeta(container) + `/json$`)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if gone.MatchString(r.URL.Path) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"No such container: ` + container + `"}`))
+			return
+		}
+		rp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return &vanishingEngine{srv: srv}
+}
+
+func (v *vanishingEngine) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", v.srv.Listener.Addr().String())
+}
+
+func (v *vanishingEngine) Describe() string { return "tcp://" + v.srv.Listener.Addr().String() }
+
+// TestStandaloneStatusProxyRemovedSinceTheList: a proxy container that is gone by the time it is inspected is a host with no
+// proxy, not a host that could not be read (IN-A3).
+func TestStandaloneStatusProxyRemovedSinceTheList(t *testing.T) {
+	ctx := testsupport.Context(t)
+	r := enabledStandaloneRig(t, standaloneRigOptions{})
+	cli, err := dockerx.New(newVanishingEngine(t, r.fake, "proxy-1"))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	r.eng.cli = cli
+
+	got, err := r.svc.Status(ctx, r.envID)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !got.ObjectsKnown || got.Objects.Container {
+		t.Errorf("status = %+v, want the host read and no proxy container", got)
 	}
 }
