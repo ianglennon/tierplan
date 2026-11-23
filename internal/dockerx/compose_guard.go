@@ -454,7 +454,7 @@ func (g guardClient) ContainerCreate(ctx context.Context, o client.ContainerCrea
 // has aliases to rewrite.
 func (g guardClient) NetworkConnect(ctx context.Context, networkID string, o client.NetworkConnectOptions) (client.NetworkConnectResult, error) {
 	if networkID == ingress.NetworkName && o.EndpointConfig != nil && len(o.EndpointConfig.Aliases) > 0 {
-		res, err := g.APIClient.ContainerInspect(ctx, o.Container, client.ContainerInspectOptions{})
+		res, err := g.ContainerInspect(ctx, o.Container, client.ContainerInspectOptions{})
 		if err != nil {
 			return client.NetworkConnectResult{}, err
 		}

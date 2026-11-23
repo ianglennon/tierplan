@@ -297,7 +297,7 @@ func standaloneRows() []standaloneRow {
 					t.Fatalf("%s holds no source to scan", rel)
 				}
 				for _, f := range files {
-					src, err := os.ReadFile(f)
+					src, err := os.ReadFile(f) //nolint:gosec // G304: f is a path under the repository's own source directories, built above
 					if err != nil {
 						t.Fatal(err)
 					}

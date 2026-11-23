@@ -155,7 +155,7 @@ func planStandalone(l standaloneLive, wantImage string, accessLog, enrolled bool
 		reason = "image"
 	case l.accessLog != accessLog:
 		reason = "access_log"
-	case !enrolled && !(tok.Exists && !tok.Disabled && strings.TrimSpace(l.proxy.Labels[TokenLabel]) == tok.ID):
+	case !enrolled && (!tok.Exists || tok.Disabled || strings.TrimSpace(l.proxy.Labels[TokenLabel]) != tok.ID):
 		reason = "token"
 	}
 	if reason == "" {
