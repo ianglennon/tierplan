@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -278,6 +279,62 @@ func TestStandaloneDisableRefusalNamesBothBlockers(t *testing.T) {
 	}
 	if want := []string{ingressdeploy.CodeHostUnreachable, ingressdeploy.CodeRoutesLive}; !slices.Equal(codes, want) {
 		t.Errorf("finding codes = %v, want %v", codes, want)
+	}
+}
+
+// foreignProjectContainer is a container somebody started into the proxy's compose project: no component label, and a service
+// that is not the proxy.
+func foreignProjectContainer() dockertest.FakeContainer {
+	return dockertest.FakeContainer{
+		ID: "foreign-1", Names: []string{"/tierplan-ingress-sidecar-1"}, Image: "alpine", State: "running",
+		Labels: map[string]string{stacks.LabelComposeProject: ingress.ProjectName, stacks.LabelComposeService: "sidecar"},
+	}
+}
+
+// TestStandaloneDisableRefusedForAForeignContainerOfTheProject: the project's down removes every container of the project, so
+// a container in it that is not the proxy refuses the preview and the switch-off with ingress_foreign_container, naming it,
+// and the project is not taken down (WR-A3).
+func TestStandaloneDisableRefusedForAForeignContainerOfTheProject(t *testing.T) {
+	r := newStandaloneDisableRig(t, nil)
+	r.sys.mu.Lock()
+	r.sys.base.Containers = append(r.sys.base.Containers, foreignProjectContainer())
+	r.sys.reconfigure()
+	r.sys.mu.Unlock()
+	got := r.wantStandaloneRefused(ingressdeploy.CodeForeignContainer)
+	if !slices.Equal(got.Items, []string{"tierplan-ingress-sidecar-1"}) || !strings.Contains(got.Message, "Nothing was changed.") {
+		t.Errorf("finding = %+v, want the foreign container named", got)
+	}
+}
+
+// TestStandaloneDisableProxyStepRefusesAContainerThatCameSinceTheCheck: a foreign container that joins the project after the
+// check is refused by the proxy step before the down, which fails naming it; the project is not taken down.
+func TestStandaloneDisableProxyStepRefusesAContainerThatCameSinceTheCheck(t *testing.T) {
+	r := newStandaloneDisableRig(t, nil)
+	r.kicker.probe = func() string {
+		r.sys.mu.Lock()
+		defer r.sys.mu.Unlock()
+		r.sys.base.Containers = append(r.sys.base.Containers, foreignProjectContainer())
+		r.sys.reconfigure()
+		return ""
+	}
+	job := r.disable()
+	var proxy *jobs.Item
+	for i := range job.Items {
+		if job.Items[i].ID == ingressdeploy.ItemProxy {
+			proxy = &job.Items[i]
+		}
+	}
+	if job.State == jobs.JobDone || proxy == nil || proxy.State != jobs.ItemFailed || proxy.Code != ingressdeploy.CodeDisableProxyFailed {
+		t.Fatalf("job state %q, proxy item %+v; want the proxy item failed with %s", job.State, proxy, ingressdeploy.CodeDisableProxyFailed)
+	}
+	if !strings.Contains(proxy.Detail, "tierplan-ingress-sidecar-1") {
+		t.Errorf("proxy item detail = %q, want the foreign container named", proxy.Detail)
+	}
+	if got := r.sys.downs; len(got) != 0 {
+		t.Errorf("the project was taken down with a foreign container in it: %v", got)
+	}
+	if c, _, _ := r.hostHolds(); !c {
+		t.Error("the proxy container is gone")
 	}
 }
 

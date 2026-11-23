@@ -20,6 +20,10 @@ const ItemProxy = "proxy"
 // CodeDisableProxyFailed ends the proxy item of a standalone switch-off that could not take the project down.
 const CodeDisableProxyFailed = "disable_proxy_failed"
 
+// CodeForeignContainer is the refusal of a switch-off of a standalone host whose compose project of the proxy holds a
+// container that is not the proxy: the project's down would remove it too, and it is not TierPlan's to remove (WR-A3).
+const CodeForeignContainer = "ingress_foreign_container"
+
 // standaloneDisableItems are the items of the standalone disable job in the order they run. The proxy goes before the
 // network, which an attached container would keep, and the network before the volume, which holds every private key and so
 // is the last thing of the host's to go (PROH-25-06).
@@ -49,11 +53,44 @@ func (s *Service) checkDisableStandalone(ctx context.Context, info EnvInfo, canV
 				"Reconnect it and switch ingress off again. Nothing was changed.",
 		})
 	}
+	if hostConnected(info) {
+		// A read that fails here is left to the step, which reads again and refuses on any failure.
+		if foreign, err := s.foreignProjectContainers(ctx, info); err != nil {
+			s.log().Warn("could not read the host for a switch-off", "environment", info.ID, "error", err)
+		} else if len(foreign) > 0 {
+			findings = append(findings, Finding{
+				Code: CodeForeignContainer, Severity: SeverityError, Items: foreign,
+				Message: "The host holds containers in the " + ingress.ProjectName + " compose project that are not TierPlan's, and switching " +
+					"ingress off would remove them with the proxy. Remove them or move them to another project, then switch ingress off " +
+					"again. Nothing was changed.",
+			})
+		}
+	}
 	routes, err := s.disableRoutesLive(ctx, info, canView)
 	if err != nil {
 		return nil, err
 	}
 	return append(findings, routes...), nil
+}
+
+// foreignProjectContainers are the names of the containers of the proxy's compose project on the host that are not the
+// proxy: the project's down removes every container of the project, so only a project that holds the proxy alone is
+// taken down (the swarm's switch-off leaves a service that is not the proxy alone, by the same ownership rule).
+func (s *Service) foreignProjectContainers(ctx context.Context, info EnvInfo) ([]string, error) {
+	var foreign []string
+	err := s.d.Engine.OnNode(ctx, info.ID, info.Nodes[0].AgentID, func(c *dockerx.Client) error {
+		rows, err := c.ComposeContainers(ctx, ingress.ProjectName)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if !ingress.OwnsProxyContainer(row.Labels) {
+				foreign = append(foreign, row.Name)
+			}
+		}
+		return nil
+	})
+	return foreign, err
 }
 
 // previewDisableStandalone says what a switch-off of a standalone host would remove and what would stop it, and writes
@@ -125,6 +162,17 @@ func (e *disableRun) proxy(ctx context.Context) error {
 	}
 	if e.s.d.System == nil {
 		return fail(CodeDisableProxyFailed, errors.New("ingress: no deployer of the standalone proxy's project"))
+	}
+	// The down removes every container of the project, so it is not run while one is not the proxy (WR-A3): the check at
+	// the start of the job refused that, and a container that came since is refused here.
+	foreign, err := e.s.foreignProjectContainers(ctx, info)
+	if err != nil {
+		return fail(CodeDisableProxyFailed, err, dockerx.DaemonText(err))
+	}
+	if len(foreign) > 0 {
+		return fail(CodeDisableProxyFailed, errors.New("the ingress compose project holds containers that are not TierPlan's"),
+			"These containers are in the "+ingress.ProjectName+" compose project and are not TierPlan's, so the project was not taken down: "+
+				strings.Join(foreign, ", ")+". Remove them or move them to another project, then switch ingress off again.")
 	}
 	if err := e.s.d.System.DownSystem(ctx, e.envID, info.Nodes[0].AgentID); err != nil {
 		return fail(CodeDisableProxyFailed, err, dockerx.DaemonText(err))
