@@ -349,8 +349,9 @@ describe("Overview: the other cards", () => {
               ipv4: "10.0.0.2",
               mac: "02:42:0a:00:00:02",
               aliases: ["web", "site"],
+              ingress: false,
             },
-            { networkId: "n2", name: "back", aliases: [] },
+            { networkId: "n2", name: "back", aliases: [], ingress: false },
           ],
         }),
       );
@@ -432,8 +433,14 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
   const withNetworks = () =>
     detail({
       networks: [
-        { networkId: "front-id", name: "front", ipv4: "10.0.0.2", aliases: ["web"] },
-        { networkId: "back-id", name: "back", aliases: [] },
+        {
+          networkId: "front-id",
+          name: "front",
+          ipv4: "10.0.0.2",
+          aliases: ["web"],
+          ingress: false,
+        },
+        { networkId: "back-id", name: "back", aliases: [], ingress: false },
       ],
     });
 
@@ -490,7 +497,7 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
       Response.json(
         detail({
           networks: [
-            { networkId: "front-id", name: "front", aliases: ["web"] },
+            { networkId: "front-id", name: "front", aliases: ["web"], ingress: false },
             {
               networkId: "ing-id",
               name: "tierplan-ingress",
