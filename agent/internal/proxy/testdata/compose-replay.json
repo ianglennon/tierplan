@@ -634,6 +634,11 @@
   },
   {
     "method": "GET",
+    "path": "/networks/tierplan-ingress",
+    "hasBody": false
+  },
+  {
+    "method": "GET",
     "path": "/networks/replay_front",
     "hasBody": false
   },
