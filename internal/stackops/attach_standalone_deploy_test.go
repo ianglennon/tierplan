@@ -189,3 +189,39 @@ func TestStandaloneDeployAttachReadFailure(t *testing.T) {
 		}
 	})
 }
+
+// TestStandaloneRollbackLoadsAttached: a standalone revision is loaded with the attachment the environment has now, as a
+// swarm one is (D-16): with ingress on the routed service lists the shared network with its alias and the plan records
+// the attachment; with it off neither. A switch that cannot be read refuses the revision at the ingress stage.
+func TestStandaloneRollbackLoadsAttached(t *testing.T) {
+	t.Parallel()
+	pins := map[string]string{"web": gatePinned, "db": gatePinned}
+	st := standaloneStackOf("demo")
+	target := rollbackTarget(routedAndPlainStandalone)
+
+	on, err := stackops.Deps{Ingress: &fakeIngress{attach: attachedBy()}}.PrepareRollbackStandaloneWith(context.Background(), st, target, pins, nil)
+	if err != nil {
+		t.Fatalf("with ingress on: %v", err)
+	}
+	cfg := on.Loaded.Project.Services["web"].Networks[ingress.NetworkName]
+	if cfg == nil || !slices.Equal(cfg.Aliases, []string{ingress.Alias("demo", "web")}) {
+		t.Errorf("web joins %+v, want %s with the alias %s", on.Loaded.Project.Services["web"].Networks, ingress.NetworkName, ingress.Alias("demo", "web"))
+	}
+	if on.Attach == nil || on.Attach.Network != ingress.NetworkName || on.Loaded.Ingress == nil {
+		t.Errorf("attachment = %+v, loaded record = %+v, want both set", on.Attach, on.Loaded.Ingress)
+	}
+
+	off, err := stackops.Deps{Ingress: &fakeIngress{}}.PrepareRollbackStandaloneWith(context.Background(), st, target, pins, nil)
+	if err != nil {
+		t.Fatalf("with ingress off: %v", err)
+	}
+	if _, joined := off.Loaded.Project.Services["web"].Networks[ingress.NetworkName]; joined || off.Attach != nil || off.Loaded.Ingress != nil {
+		t.Errorf("with ingress off: web joins %v, attachment %+v, record %+v, want none", off.Loaded.Project.Services["web"].Networks, off.Attach, off.Loaded.Ingress)
+	}
+
+	_, err = stackops.Deps{Ingress: &fakeIngress{err: errors.New("the ingress store is down")}}.PrepareRollbackStandaloneWith(context.Background(), st, target, pins, nil)
+	var pe *stackops.PrepareError
+	if !errors.As(err, &pe) || pe.Stage != stackops.PrepareIngress {
+		t.Errorf("with the switch unreadable: %v, want a PrepareError at the ingress stage", err)
+	}
+}

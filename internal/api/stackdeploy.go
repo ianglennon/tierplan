@@ -680,8 +680,24 @@ func declaresIngress(c stacks.WorkingCopy) bool {
 // policy and the name have all passed.
 func deployStandaloneStack(ctx context.Context, d StacksDeps, p, viewer *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker, pol *stacks.IngressPolicy) (*StackDeployOutput, error) {
 	repo := d.repo()
-	// ingress: unattached, the standalone attach is Phase 25
-	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol})
+	// A routed service joins the host's ingress bridge exactly when ingress is on for this environment (D-16), judged as
+	// the swarm gate judges it: a read that fails refuses a copy that names an ingress label, and a copy that names none
+	// has no routed service. The job reads the switch again under the lock and decides the attachment itself, so a
+	// switch flipped after this check changes what is deployed, never whether the deploy was judged.
+	attach, err := ingressAttachFor(ctx, d, env.ID, st.Target)
+	if err != nil {
+		if declaresIngress(draft.Copy) {
+			return nil, deployableProblem(d, env.ID, err)
+		}
+		lg := d.Log
+		if lg == nil {
+			lg = slog.Default()
+		}
+		lg.WarnContext(ctx, "whether ingress is on could not be read; a stack that names no ingress label is checked without an attachment",
+			"env", env.ID, "stack", st.ID, "error", err)
+		attach = nil
+	}
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline, IngressPolicy: pol, Ingress: attach})
 	if checked.Loaded == nil {
 		return nil, stackInvalidOrRefused(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
@@ -911,8 +927,8 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	}()
 
 	// The revision was converted with the answer to whether ingress is on that was read before the lock. It is read
-	// again now that no other operation can run, and the revision is prepared again when it changed (a standalone
-	// host has no attachment).
+	// again now that no other operation can run, and the revision is prepared again when it changed. A standalone
+	// deploy job reads it itself under this lock (D-16), so a standalone revision needs no second preparation.
 	if !standalone {
 		attach, aerr := ingressAttachFor(ctx, d, st.EnvID, st.Target)
 		if aerr != nil {
