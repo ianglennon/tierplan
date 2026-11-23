@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1095,6 +1096,7 @@ type detailBody struct {
 	Networks []struct {
 		Name    string   `json:"name"`
 		Aliases []string `json:"aliases"`
+		Ingress bool     `json:"ingress"`
 	} `json:"networks"`
 	Labels map[string]string `json:"labels"`
 }
@@ -1125,6 +1127,30 @@ func (f *envFix) detail(t *testing.T, cookie string, e envBody, id, query string
 		ptyp = problemType(t, rec)
 	}
 	return &envRec{rec.Code, rec.Body.Bytes(), ptyp}
+}
+
+// A container's attachment to TierPlan's ingress network is marked, so the page can say why it has no Disconnect there; the
+// container's other networks are not (WR-D1).
+func TestContainerDetailMarksTheIngressNetwork(t *testing.T) {
+	t.Parallel()
+	cfg := detailEngine()
+	cfg.Containers[1].Networks["tierplan-ingress"] = dockertest.FakeEndpoint{NetworkID: "n2", IPv4: "10.0.8.2", Aliases: []string{"shop-web-4f2a9c1d7b3e"}}
+	f, e := dashEnv(t, cfg)
+	f.addUser(t, "viewer", false)
+	f.addEnvRole(t, "viewer", e.ID, "viewer")
+	cookie, _ := f.signIn(t, "viewer", false)
+
+	rec := f.detail(t, cookie, e, "web", "?nodeId="+e.ID)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := map[string]bool{}
+	for _, n := range decode[detailBody](t, rec).Networks {
+		got[n.Name] = n.Ingress
+	}
+	if want := map[string]bool{"front": false, "tierplan-ingress": true}; !reflect.DeepEqual(got, want) {
+		t.Errorf("networks marked ingress = %v, want %v", got, want)
+	}
 }
 
 func TestContainerDetailOfAViewerNamesTheVariablesAndWithholdsEveryValue(t *testing.T) {

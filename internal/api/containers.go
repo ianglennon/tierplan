@@ -27,6 +27,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/redact"
 	"github.com/ianglennon/tierplan/internal/store"
@@ -213,6 +214,7 @@ type ContainerNetworkBody struct {
 	IPv6      string   `json:"ipv6,omitempty"`
 	MAC       string   `json:"mac,omitempty"`
 	Aliases   []string `json:"aliases" doc:"The DNS names the container answers to on this network"`
+	Ingress   bool     `json:"ingress" doc:"True for TierPlan's ingress network, by its reserved name tierplan-ingress: the container's attachment to it is the ensure loop's, so a disconnect from it is refused as ingress_owned"`
 }
 
 // ContainerLogConfigBody is the log driver and its options.
@@ -596,7 +598,7 @@ func containerDetailBody(c dockerx.ContainerDetail, nodeID string, node envs.Nod
 		b.Mounts = append(b.Mounts, ContainerMountBody{Type: m.Type, Name: m.Name, Source: m.Source, Destination: m.Destination, Mode: m.Mode, RW: m.RW})
 	}
 	for _, n := range c.Networks {
-		b.Networks = append(b.Networks, ContainerNetworkBody{NetworkID: n.NetworkID, Name: n.Name, IPv4: n.IPv4, IPv6: n.IPv6, MAC: n.MAC, Aliases: n.Aliases})
+		b.Networks = append(b.Networks, ContainerNetworkBody{NetworkID: n.NetworkID, Name: n.Name, IPv4: n.IPv4, IPv6: n.IPv6, MAC: n.MAC, Aliases: n.Aliases, Ingress: n.Name == ingress.NetworkName})
 	}
 	return b
 }

@@ -7463,6 +7463,8 @@ export interface components {
         ContainerNetworkBody: {
             /** @description The DNS names the container answers to on this network */
             aliases: string[] | null;
+            /** @description True for TierPlan's ingress network, by its reserved name tierplan-ingress: the container's attachment to it is the ensure loop's, so a disconnect from it is refused as ingress_owned */
+            ingress: boolean;
             ipv4?: string;
             ipv6?: string;
             mac?: string;
