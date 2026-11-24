@@ -5,15 +5,24 @@ package ingressdeploy_test
 
 import (
 	"bytes"
+	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/netip"
+	"regexp"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/vault"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -142,5 +151,234 @@ func TestEnableVIPOnSwarm(t *testing.T) {
 	}
 	if _, held := v.locks.Held(v.envID); held {
 		t.Error("the operation lock is still held after the job")
+	}
+}
+
+// recordingHandler keeps every log record's message and attributes, as text.
+type recordingHandler struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.buf.WriteString(r.Message)
+	r.Attrs(func(a slog.Attr) bool {
+		fmt.Fprintf(&h.buf, " %s=%v", a.Key, a.Value.Resolve())
+		return true
+	})
+	h.buf.WriteByte('\n')
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *recordingHandler) text() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.buf.String()
+}
+
+// keyShape is the form the key takes wherever it could leak: 64 hex digits.
+var keyShape = regexp.MustCompile(`[0-9a-fA-F]{64}`)
+
+// seenOf gathers everything an enable shows: the job with its items and details, its output, the preview, the audit
+// details, the created service's spec and the log.
+func seenOf(t *testing.T, v *vipEnableRig, log *recordingHandler, job jobs.Job, pv ingressdeploy.VIPPreview) string {
+	t.Helper()
+	var all strings.Builder
+	for _, x := range []any{job, pv} {
+		raw, err := json.Marshal(x)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(raw)
+	}
+	lines, _ := v.hub.Output(job.ID)
+	for _, l := range lines {
+		all.WriteString(l.Text)
+	}
+	rows, err := v.st.Read.Query(`SELECT details FROM audit_log`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d string
+		if err := rows.Scan(&d); err != nil {
+			t.Fatal(err)
+		}
+		all.WriteString(d)
+	}
+	for _, c := range v.fake.ServiceCreates() {
+		raw, err := json.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(raw)
+	}
+	all.WriteString(log.text())
+	return all.String()
+}
+
+// TestEnableVIPNeverShowsTheKey: the key's bytes and their hex form are in no job item, detail or output line, no preview field,
+// no log record, no audit detail and not the service's spec or environment; only the secret's content carries them (PROH-26-03).
+func TestEnableVIPNeverShowsTheKey(t *testing.T) {
+	log := &recordingHandler{}
+	v := newVIPEnableRig(t, nil, func(d *ingressdeploy.Deps) { d.Log = slog.New(log) })
+	ctx := testsupport.Context(t)
+	req := ingressdeploy.VIPRequest{Address: vipTestAddress}
+	pv, err := v.svc.PreviewVIP(ctx, v.envID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := v.enableVIP(req)
+	wantVIPAllDone(t, job)
+
+	row, err := v.istore.GetVIP(ctx, v.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vl, err := vault.New(bytes.Repeat([]byte{7}, 32), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := vl.Open(vault.ContextIngressVIPKey+v.envID, row.KeySealed)
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("the sealed key = %d bytes, %v", len(raw), err)
+	}
+	seen := seenOf(t, v, log, job, pv)
+	if strings.Contains(seen, string(raw)) {
+		t.Error("the key's raw bytes are shown somewhere")
+	}
+	if strings.Contains(seen, hex.EncodeToString(raw)) {
+		t.Error("the key's hex form is shown somewhere")
+	}
+	if m := keyShape.FindString(seen); m != "" {
+		t.Errorf("a 64-digit hex string is shown: %q", m)
+	}
+	// Only the secret's content carries the key: it is the text hex: and the 64 digits, 68 bytes.
+	if creates := v.fake.SecretCreates(); len(creates) != 1 || creates[0].DataBytes != 68 {
+		t.Errorf("secret creates = %+v, want one of 68 bytes", creates)
+	}
+	// The container environment carries the key's file path and never the key.
+	for _, c := range v.fake.ServiceCreates() {
+		env := strings.Join(c.Spec.TaskTemplate.ContainerSpec.Env, "\n")
+		if !strings.Contains(env, ingressdeploy.KeepalivedKeyFile) {
+			t.Errorf("the service environment lacks the key file's path: %s", env)
+		}
+	}
+
+	// A failing secret step shows no key shape either, in its job, output or log.
+	f := newVIPEnableRig(t, func(c *dockertest.FakeConfig) { c.WriteError = "the manager refused the write" },
+		func(d *ingressdeploy.Deps) { d.Log = slog.New(log) })
+	failed := f.enableVIP(req)
+	if failed.State == jobs.JobDone {
+		t.Fatal("the enable with a refusing manager ended done")
+	}
+	if m := keyShape.FindString(seenOf(t, f, log, failed, pv)); m != "" {
+		t.Errorf("a failed enable shows a 64-digit hex string: %q", m)
+	}
+}
+
+// TestEnableVIPLocked: a second enable while the first's job holds the lock is refused with the first as the holder, and
+// writes nothing of its own.
+func TestEnableVIPLocked(t *testing.T) {
+	v := newVIPEnableRig(t, nil, nil)
+	ctx := testsupport.Context(t)
+	req := ingressdeploy.VIPRequest{Address: vipTestAddress}
+	g := newGate()
+	v.eng.gate = g
+	id, err := v.svc.EnableVIP(ctx, testActor, testOwner, v.envID, req)
+	if err != nil {
+		t.Fatalf("EnableVIP: %v", err)
+	}
+	select {
+	case <-g.entered:
+	case <-ctx.Done():
+		t.Fatal("the job never reached its first write")
+	}
+	_, err = v.svc.EnableVIP(ctx, testActor, testOwner, v.envID, req)
+	var locked *ingressdeploy.LockedError
+	if !errors.As(err, &locked) || locked.Holder.Kind != stackops.HolderKindIngress || locked.Holder.JobID != id || locked.Holder.By != testOwner {
+		t.Fatalf("a second EnableVIP = %v, want a *LockedError naming the first job %s", err, id)
+	}
+	if got := len(v.fake.SecretCreates()); got != 0 {
+		t.Errorf("the refused enable or the gated one made %d secrets before the gate opened", got)
+	}
+	close(g.proceed)
+	wantVIPAllDone(t, v.wait(id))
+	if _, held := v.locks.Held(v.envID); held {
+		t.Error("the lock is held after the job ended")
+	}
+}
+
+// TestEnableVIPFailedStep: a SecretCreate that fails ends the secret item with vip_secret_failed, the service and switch items
+// as not run, no row stored and nothing rolled back or retried; the key item stays done.
+func TestEnableVIPFailedStep(t *testing.T) {
+	v := newVIPEnableRig(t, func(c *dockertest.FakeConfig) { c.WriteError = "the manager refused the write: boom" }, nil)
+	job := v.enableVIP(ingressdeploy.VIPRequest{Address: vipTestAddress})
+	if job.State == jobs.JobDone {
+		t.Fatalf("the job ended done: %+v", job.Items)
+	}
+	want := map[string]struct{ state, code string }{
+		ingressdeploy.ItemVIPKey:     {jobs.ItemDone, ""},
+		ingressdeploy.ItemVIPSecret:  {jobs.ItemFailed, ingressdeploy.CodeVIPSecretFailed},
+		ingressdeploy.ItemVIPService: {jobs.ItemSkipped, ingressdeploy.CodeNotRun},
+		ingressdeploy.ItemVIPSwitch:  {jobs.ItemSkipped, ingressdeploy.CodeNotRun},
+	}
+	for id, w := range want {
+		if it := itemOf(job, id); it.State != w.state || it.Code != w.code {
+			t.Errorf("item %s = %q (%q), want %q (%q)", id, it.State, it.Code, w.state, w.code)
+		}
+	}
+	if it := itemOf(job, ingressdeploy.ItemVIPSecret); strings.Contains(it.Message, "boom") || strings.Contains(it.Detail, "boom") {
+		t.Errorf("the secret item shows the engine's words: %+v", it)
+	}
+	if _, err := v.istore.GetVIP(testsupport.Context(t), v.envID); !errors.Is(err, ingressstore.ErrVIPNotFound) {
+		t.Errorf("a failed enable stored a row: %v", err)
+	}
+	if n := len(v.fake.ServiceCreates()); n != 0 {
+		t.Errorf("a failed secret step went on to create %d services", n)
+	}
+	if v.auditCount("ingress.vip_enabled") != 0 {
+		t.Error("a failed enable wrote an audit row")
+	}
+	if _, held := v.locks.Held(v.envID); held {
+		t.Error("the lock is held after the failed job")
+	}
+}
+
+// TestEnableVIPStartsOverAfterAFailedService: a service step that fails leaves the secret behind; switching on again removes it,
+// makes a new key and secret, and finishes, because no row means nothing else relies on that secret.
+func TestEnableVIPStartsOverAfterAFailedService(t *testing.T) {
+	v := newVIPEnableRig(t, func(c *dockertest.FakeConfig) { c.ServiceCreateError = "the manager cannot create the service" }, nil)
+	req := ingressdeploy.VIPRequest{Address: vipTestAddress}
+	job := v.enableVIP(req)
+	if it := itemOf(job, ingressdeploy.ItemVIPService); it.State != jobs.ItemFailed || it.Code != ingressdeploy.CodeVIPServiceFailed {
+		t.Fatalf("service item = %q (%q), want failed with vip_service_failed", it.State, it.Code)
+	}
+	if it := itemOf(job, ingressdeploy.ItemVIPSwitch); it.State != jobs.ItemSkipped {
+		t.Errorf("switch item = %q, want skipped", it.State)
+	}
+
+	v.fake.Reconfigure(v.base)
+	wantVIPAllDone(t, v.enableVIP(req))
+	name := ingressdeploy.KeepalivedSecretName(v.envID, 1)
+	n := 0
+	for _, s := range v.secrets() {
+		if s.Name == name {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("the swarm holds %d secrets named %s, want 1", n, name)
+	}
+	if _, err := v.istore.GetVIP(testsupport.Context(t), v.envID); err != nil {
+		t.Errorf("GetVIP after the second enable: %v", err)
 	}
 }
