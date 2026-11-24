@@ -4,8 +4,17 @@
 package ingressbundle
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/netip"
+	"regexp"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // What the keepalived helper (the ingress module's vip subcommands) and the TierPlan server must agree on
@@ -151,10 +160,118 @@ var ErrVIPLine = errors.New("ingress vip line refused")
 // MarshalLine returns the event as one JSON line without its trailing newline. It sets V when it is zero and
 // refuses an event the parser would refuse, so the helper cannot write a line the server drops.
 func (e VIPEvent) MarshalLine() ([]byte, error) {
-	return nil, errors.New("not implemented")
+	if e.V == 0 {
+		e.V = VIPLineVersion
+	}
+	if err := e.validate(); err != nil {
+		return nil, err
+	}
+	line, err := json.Marshal(e)
+	if err != nil {
+		return nil, vipRefused("encode")
+	}
+	if len(line) > VIPLineMax {
+		return nil, vipRefused("line too long")
+	}
+	return line, nil
 }
 
-// ParseVIPLine reads one line, with or without its trailing newline.
+// ParseVIPLine reads one line, with or without its trailing newline. The length cap comes first, so a hostile
+// line is never decoded; the decode refuses any field it does not know, so a later helper's extra field is a
+// version bump and not a silent pass; and every value is then checked against its rule.
 func ParseVIPLine(line []byte) (VIPEvent, error) {
-	return VIPEvent{}, errors.New("not implemented")
+	if len(line) > VIPLineMax {
+		return VIPEvent{}, vipRefused("line too long")
+	}
+	line = bytes.TrimSuffix(line, []byte("\n"))
+	if bytes.ContainsAny(line, "\r\n") {
+		return VIPEvent{}, vipRefused("line break inside the line")
+	}
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.DisallowUnknownFields()
+	var e VIPEvent
+	if err := dec.Decode(&e); err != nil {
+		// json's own errors name the offending field or value, so none of their text is passed on.
+		return VIPEvent{}, vipRefused("not a valid event object")
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return VIPEvent{}, vipRefused("data after the event object")
+	}
+	if err := e.validate(); err != nil {
+		return VIPEvent{}, err
+	}
+	return e, nil
+}
+
+// vipRefused wraps ErrVIPLine with a fixed rule name. The text is never built from the input.
+func vipRefused(rule string) error { return fmt.Errorf("%w: %s", ErrVIPLine, rule) }
+
+var (
+	// vipNodeID is the shape of a swarm node ID: 25 lower-case alphanumerics.
+	vipNodeID = regexp.MustCompile(`^[a-z0-9]{25}$`)
+	// vipIfaceName is a Linux interface name as the helper reports it: at most 15 characters from a set that
+	// holds no space, slash or control character.
+	vipIfaceName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,15}$`)
+)
+
+// validate holds every rule of the format, shared by MarshalLine and ParseVIPLine so a helper cannot write
+// what the server would refuse.
+func (e VIPEvent) validate() error {
+	if e.V != VIPLineVersion {
+		return vipRefused("schema version")
+	}
+	switch e.Event {
+	case VIPEventStart, VIPEventState, VIPEventFault, VIPEventForeignRouter, VIPEventClockSkew:
+	default:
+		return vipRefused("event")
+	}
+	switch e.State {
+	case "", VIPStateMaster, VIPStateBackup, VIPStateFault, VIPStateStop:
+	default:
+		return vipRefused("state")
+	}
+	if e.Event == VIPEventState && e.State == "" {
+		return vipRefused("state event without a state")
+	}
+	switch e.Reason {
+	case "", VIPReasonNoInterface, VIPReasonAmbiguousInterface, VIPReasonAddressInUse, VIPReasonProbeFailing:
+	default:
+		return vipRefused("reason")
+	}
+	if e.Event == VIPEventFault && e.Reason == "" {
+		return vipRefused("fault event without a reason")
+	}
+	switch e.Counter {
+	case "", VIPCounterInvalidHMAC, VIPCounterMissing, VIPCounterUnknownKey:
+	default:
+		return vipRefused("counter")
+	}
+	if !vipNodeID.MatchString(e.Node) {
+		return vipRefused("node id")
+	}
+	// The name is shown in the UI. A line is bounded to VIPLineMax anyway, so 64 characters is a display rule,
+	// and a control character (an escape sequence) is refused because the name reaches a terminal-like view.
+	if utf8.RuneCountInString(e.Name) > vipMaxName || !utf8.ValidString(e.Name) || strings.IndexFunc(e.Name, unicode.IsControl) >= 0 {
+		return vipRefused("name")
+	}
+	if e.Router < 0 || e.Router > 255 {
+		return vipRefused("router id")
+	}
+	if e.Iface != "" && !vipIfaceName.MatchString(e.Iface) {
+		return vipRefused("interface name")
+	}
+	if len(e.Ifaces) > vipMaxIfaces {
+		return vipRefused("too many interface names")
+	}
+	for _, n := range e.Ifaces {
+		if !vipIfaceName.MatchString(n) {
+			return vipRefused("interface name")
+		}
+	}
+	if e.Addr != "" {
+		if _, err := netip.ParseAddr(e.Addr); err != nil {
+			return vipRefused("addr")
+		}
+	}
+	return nil
 }
