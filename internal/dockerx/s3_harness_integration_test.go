@@ -366,16 +366,52 @@ func (r *s3Rig) has(n *dockertest.Node, dev string) bool {
 	return strings.Contains(out, "inet "+r.vip.Addr().String()+"/")
 }
 
-// holders is every node that lists the address on any interface, including one whose keepalived was killed and left it.
-func (r *s3Rig) holders() []*dockertest.Node {
+// holdersOn is every node that lists the address on dev ("" for every interface), including one whose keepalived was
+// killed and left it.
+func (r *s3Rig) holdersOn(dev string) []*dockertest.Node {
 	r.t.Helper()
 	var out []*dockertest.Node
 	for _, n := range r.sw.Nodes() {
-		if r.has(n, "") {
+		if r.has(n, dev) {
 			out = append(out, n)
 		}
 	}
 	return out
+}
+
+func (r *s3Rig) holders() []*dockertest.Node { return r.holdersOn("") }
+
+// runningTasks is how many tasks of the keepalived service are running now, without failing the test when there are none.
+func (r *s3Rig) runningTasks() int {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	filters := make(client.Filters)
+	filters.Add("service", r.svcID)
+	res, err := r.mgr.TaskList(ctx, client.TaskListOptions{Filters: filters})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, tk := range res.Items {
+		if tk.DesiredState == swarm.TaskStateRunning && tk.Status.State == swarm.TaskStateRunning {
+			n++
+		}
+	}
+	return n
+}
+
+// serviceLogs is what every keepalived container on every node, running or not, has written.
+func (r *s3Rig) serviceLogs() string {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var all strings.Builder
+	for _, n := range r.sw.Nodes() {
+		out, _ := n.Sh(ctx, "for c in $(docker ps -aq --filter label=com.docker.swarm.service.name="+s3Service+"); do docker logs $c 2>&1; done")
+		all.WriteString(out)
+	}
+	return all.String()
 }
 
 func s3Names(ns []*dockertest.Node) string {
