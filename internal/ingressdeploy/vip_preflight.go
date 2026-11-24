@@ -83,6 +83,13 @@ type vipView struct {
 // manager to read) and otherwise gathers every finding, so a person fixes them in one pass. An error is a read that failed,
 // not a refusal.
 func (s *Service) vipPreflight(ctx context.Context, info EnvInfo, req VIPRequest) (VIPPreview, []Finding, error) {
+	return s.vipChecks(ctx, info, req, false)
+}
+
+// vipChecks is vipPreflight for an enable (change false) and for a change of the virtual IP the environment has (change true).
+// A change runs every check of the enable on the new request, with two differences: the environment must have a virtual IP
+// already (ErrVIPNotEnabled when it has none) and having one is no refusal, and the preview lists the steps of the change.
+func (s *Service) vipChecks(ctx context.Context, info EnvInfo, req VIPRequest, change bool) (VIPPreview, []Finding, error) {
 	pv := VIPPreview{Warning: VIPPrivilegeWarning, Items: vipItemLabelList(), DerivedRouterID: DerivedRouterID(info.ClusterID)}
 	refuse := func(code, msg string) (VIPPreview, []Finding, error) {
 		return pv, []Finding{{Code: code, Message: msg, Severity: SeverityError}}, nil
@@ -104,10 +111,12 @@ func (s *Service) vipPreflight(ctx context.Context, info EnvInfo, req VIPRequest
 	if err != nil {
 		return pv, nil, err
 	}
-	for _, v := range vips {
-		if v.EnvID == info.ID {
-			return refuse(CodeVIPAlreadyEnabled, vipAlreadyEnabledText)
-		}
+	has := slices.ContainsFunc(vips, func(v ingressstore.VIPConfig) bool { return v.EnvID == info.ID })
+	switch {
+	case change && !has:
+		return pv, nil, ErrVIPNotEnabled
+	case !change && has:
+		return refuse(CodeVIPAlreadyEnabled, vipAlreadyEnabledText)
 	}
 	if !info.ManagerConnected {
 		f, err := checkManager(ctx, s, checkInput{Info: info})
