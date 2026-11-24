@@ -55,7 +55,7 @@ RUN echo "a0faef8e401c143487b131b526df7541c1e33d9b8814642fa9dfe8bb250a9632  /src
 ARG SOURCE_DATE_EPOCH=0
 COPY keepalived/image/sbom/keepalived.spdx.json.in /src/keepalived.spdx.json.in
 RUN mkdir -p /out/sbom \
- && OPENSSL_VERSION="$(apk info -v openssl-libs-static | sed 's/^openssl-libs-static-//')" \
+ && OPENSSL_VERSION="$(apk list -I openssl-libs-static | sed -nE 's/^openssl-libs-static-([^ ]+) .*/\1/p' | head -n 1)" \
  && [ -n "${OPENSSL_VERSION}" ] \
  && CREATED="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)" \
  && sed -e "s/@OPENSSL_VERSION@/${OPENSSL_VERSION}/g" -e "s/@CREATED@/${CREATED}/g" /src/keepalived.spdx.json.in >/out/sbom/keepalived.spdx.json \

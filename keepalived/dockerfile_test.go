@@ -173,7 +173,7 @@ func TestKeepalivedDockerfileShape(t *testing.T) {
 	if !build.has(regexp.MustCompile(`COPY keepalived/image/sbom/keepalived\.spdx\.json\.in `)) {
 		t.Errorf("the build stage does not copy the SBOM template")
 	}
-	if !build.has(regexp.MustCompile(`apk info -v openssl-libs-static`)) || !build.has(regexp.MustCompile(`@OPENSSL_VERSION@`)) {
+	if !build.has(regexp.MustCompile(`apk list -I openssl-libs-static`)) || !build.has(regexp.MustCompile(`@OPENSSL_VERSION@`)) {
 		t.Errorf("the build stage does not read OpenSSL's version from the installed openssl-libs-static package")
 	}
 	if !build.has(regexp.MustCompile(`@CREATED@`)) || !build.has(regexp.MustCompile(`SOURCE_DATE_EPOCH`)) {
