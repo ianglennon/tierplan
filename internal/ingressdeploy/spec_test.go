@@ -339,6 +339,50 @@ func TestProxySpecPublishesTheReadinessPort(t *testing.T) {
 	}
 }
 
+// TestEnsureAddsTheReadinessPortOnce: a swarm whose ingress is already on holds a proxy service that publishes 80 and 443
+// only. The next ensure pass plans one update that adds the readiness port (the proxies roll once, stop-first, one at a
+// time), and the pass after it plans no write (A-06).
+func TestEnsureAddsTheReadinessPortOnce(t *testing.T) {
+	r := enabledRig(t, rigOptions{})
+	live := r.liveSpec()
+	if got := len(live.EndpointSpec.Ports); got != 3 {
+		t.Fatalf("the enable published %d ports, want 3", got)
+	}
+	live.EndpointSpec.Ports = slices.DeleteFunc(live.EndpointSpec.Ports, func(p swarm.PortConfig) bool {
+		return p.PublishedPort == ingressdeploy.ReadyPublished
+	})
+	if !r.fake.ReplaceServiceSpec(ingress.ServiceName, live) {
+		t.Fatal("could not change the live service")
+	}
+	before := len(r.fake.ServiceUpdates())
+
+	r.round()
+	ups := r.fake.ServiceUpdates()
+	if len(ups) != before+1 {
+		t.Fatalf("service updates = %d, want one more than the %d before the pass", len(ups), before)
+	}
+	got := ups[len(ups)-1].Spec
+	if n := len(got.EndpointSpec.Ports); n != 3 {
+		t.Fatalf("the update publishes %d ports, want 3", n)
+	}
+	if p := got.EndpointSpec.Ports[2]; p.PublishedPort != ingressdeploy.ReadyPublished || p.TargetPort != ingressdeploy.ReadyTarget ||
+		p.PublishMode != swarm.PortConfigPublishModeHost {
+		t.Errorf("the added port = %+v, want the host-mode readiness port", p)
+	}
+	if got.UpdateConfig == nil || got.UpdateConfig.Order != swarm.UpdateOrderStopFirst || got.UpdateConfig.Parallelism != 1 {
+		t.Errorf("the update config = %+v, want stop-first, one at a time", got.UpdateConfig)
+	}
+
+	writes := len(r.fake.Writes())
+	r.round()
+	if n := len(r.fake.ServiceUpdates()); n != before+1 {
+		t.Errorf("a pass after the roll wrote another update (%d in all)", n)
+	}
+	if n := len(r.fake.Writes()); n != writes {
+		t.Errorf("a pass after the roll wrote %v", r.fake.Writes()[writes:])
+	}
+}
+
 // TestNetworkSpec proves the ingress network is a swarm overlay on the given subnet and that its
 // attachable flag is the one S5 decided.
 func TestNetworkSpec(t *testing.T) {
