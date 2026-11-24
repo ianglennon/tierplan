@@ -130,8 +130,8 @@ func ingressVIPBody(st ingressdeploy.VIPStatus) IngressVIPBody {
 	return body
 }
 
-// RegisterIngressVIP registers the virtual IP's status and its move history. Both need ingress.manage on the environment
-// (its Admin) and answer with Cache-Control no-store. They share the deployer's dependencies: without a Service they answer
+// RegisterIngressVIP registers the virtual IP's status, its move history and its write routes (ingress_vip.go). All need
+// ingress.manage on the environment (its Admin) and answer with Cache-Control no-store. They share the deployer's dependencies: without a Service they answer
 // 503 ingress_unavailable.
 func RegisterIngressVIP(r *httpx.Router, d IngressDeployDeps) {
 	if d.Log == nil {
@@ -216,6 +216,8 @@ func RegisterIngressVIP(r *httpx.Router, d IngressDeployDeps) {
 		}
 		return &IngressVIPMovesOutput{CacheControl: "no-store", Body: body}, nil
 	})
+
+	registerIngressVIPWrites(r, d)
 }
 
 // IngressVIPMovesInput is the path and the paging of the move history.

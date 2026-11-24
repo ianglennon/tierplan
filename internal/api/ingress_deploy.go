@@ -268,12 +268,12 @@ type IngressJobPathInput struct {
 // IngressJobBody is an ingress job.
 type IngressJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
-	Kind       string               `json:"kind" enum:"ingress_enable,ingress_disable,ingress_ensure" doc:"What the job does: ingress_enable, ingress_disable, or ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person)"`
+	Kind       string               `json:"kind" enum:"ingress_enable,ingress_disable,ingress_ensure,ingress_vip_enable,ingress_vip_change,ingress_vip_disable" doc:"What the job does: ingress_enable, ingress_disable, ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person), or, for the virtual IP, ingress_vip_enable, ingress_vip_change or ingress_vip_disable"`
 	StartedBy  string               `json:"startedBy" doc:"Who started it, as the hub records its owner"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
-	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; virtual_ip (which removes the virtual IP first, and is done with nothing removed when there is none), switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable"`
+	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; virtual_ip (which removes the virtual IP first, and is done with nothing removed when there is none), switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable; vip_key, vip_secret, vip_service and vip_switch for ingress_vip_enable; vip_change_service and vip_change_save for ingress_vip_change; vip_remove_service, vip_wait_tasks, vip_remove_secret and vip_forget for ingress_vip_disable"`
 	Output     []StackJobOutputLine `json:"output" doc:"The output log, oldest first"`
 }
 
