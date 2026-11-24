@@ -556,6 +556,32 @@ type IngressRoute struct {
 	UpdatedAt  int64
 }
 
+type IngressVip struct {
+	EnvID         string
+	Address       string
+	PrefixLen     int64
+	RouterID      int64
+	RouterDerived int64
+	KeySealed     string
+	KeyGeneration int64
+	Enabled       int64
+	CreatedAt     int64
+	UpdatedAt     int64
+	EnsureAt      int64
+	EnsureError   string
+}
+
+type IngressVipMove struct {
+	ID           int64
+	EnvID        string
+	At           int64
+	FromNodeID   string
+	FromNodeName string
+	ToNodeID     string
+	ToNodeName   string
+	Reason       string
+}
+
 type JanitorDefault struct {
 	ID                      int64
 	Enabled                 int64
