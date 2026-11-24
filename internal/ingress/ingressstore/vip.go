@@ -233,6 +233,54 @@ func (s *Store) DeleteVIP(ctx context.Context, envID string) (bool, error) {
 	return n > 0, nil
 }
 
+// UpdateVIPAddressWithHook is UpdateVIPAddress with hook run in the same transaction, after the row is written: an error of
+// the hook rolls the change back. The change job writes its audit row here, so the address never changes without it. A nil
+// hook is UpdateVIPAddress.
+func (s *Store) UpdateVIPAddressWithHook(ctx context.Context, envID string, addr netip.Addr, prefixLen, routerID int, routerDerived bool, hook DeployHook) error {
+	return s.writeQuiet(ctx, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		n, err := q.UpdateVIPAddress(ctx, sqlc.UpdateVIPAddressParams{
+			Address: addr.String(), PrefixLen: int64(prefixLen), RouterID: int64(routerID),
+			RouterDerived: boolInt(routerDerived), UpdatedAt: toNanos(s.now().UTC()), EnvID: envID,
+		})
+		if err != nil {
+			return false, fmt.Errorf("ingressstore: update the virtual IP address of environment %q: %w", envID, err)
+		}
+		if n == 0 {
+			return false, ErrVIPNotFound
+		}
+		if hook != nil {
+			if err := hook(ctx, tx); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+}
+
+// DeleteVIPWithHook is DeleteVIP with hook run in the same transaction, after the row is deleted and only when there was one:
+// an error of the hook rolls the delete back. The switch-off writes its audit row here, so the row never goes without it. A nil
+// hook is DeleteVIP.
+func (s *Store) DeleteVIPWithHook(ctx context.Context, envID string, hook DeployHook) (bool, error) {
+	deleted := false
+	err := s.writeQuiet(ctx, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		n, err := q.DeleteVIP(ctx, envID)
+		if err != nil {
+			return false, fmt.Errorf("ingressstore: delete the virtual IP of environment %q: %w", envID, err)
+		}
+		if n == 0 {
+			return false, nil
+		}
+		if hook != nil {
+			if err := hook(ctx, tx); err != nil {
+				return false, err
+			}
+		}
+		deleted = true
+		return true, nil
+	})
+	return deleted, err
+}
+
 // RecordVIPEnsure stores the result of one ensure pass: when it ended and the class of its failure, ""
 // for success. errClass must be a short class, never engine text, which can carry a secret. It
 // changes no configuration, so UpdatedAt stays. A missing row is ErrVIPNotFound.

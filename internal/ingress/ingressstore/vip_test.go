@@ -353,3 +353,48 @@ func TestSealVIPKeyOpensUnderItsContext(t *testing.T) {
 		t.Fatal("the sealed key opened under another environment's context")
 	}
 }
+
+// TestVIPHooksRollBack pins the two hook variants the change and the switch-off write their audit rows with: a hook that
+// fails leaves the row as it was, a hook that succeeds runs once in the same transaction, and a delete of no row runs no hook.
+func TestVIPHooksRollBack(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	if err := s.PutVIP(ctx, vipFixture("env-a")); err != nil {
+		t.Fatalf("PutVIP: %v", err)
+	}
+	boom := errors.New("the audit write failed")
+	failing := func(context.Context, *sql.Tx) error { return boom }
+
+	err := s.UpdateVIPAddressWithHook(ctx, "env-a", netip.MustParseAddr("10.0.0.5"), 16, 77, false, failing)
+	if !errors.Is(err, boom) {
+		t.Fatalf("UpdateVIPAddressWithHook with a failing hook = %v, want the hook's error", err)
+	}
+	if got, _ := s.GetVIP(ctx, "env-a"); got.Address != netip.MustParseAddr("192.168.10.250") || got.RouterID != 51 {
+		t.Fatalf("a failing hook left the row changed: %+v", got)
+	}
+	ran := 0
+	counting := func(context.Context, *sql.Tx) error { ran++; return nil }
+	if err := s.UpdateVIPAddressWithHook(ctx, "env-a", netip.MustParseAddr("10.0.0.5"), 16, 77, false, counting); err != nil || ran != 1 {
+		t.Fatalf("UpdateVIPAddressWithHook = %v with %d hook runs, want nil and 1", err, ran)
+	}
+	if got, _ := s.GetVIP(ctx, "env-a"); got.Address != netip.MustParseAddr("10.0.0.5") || got.RouterID != 77 {
+		t.Fatalf("the update did not land: %+v", got)
+	}
+	if err := s.UpdateVIPAddressWithHook(ctx, "env-none", netip.MustParseAddr("10.0.0.5"), 16, 77, false, counting); !errors.Is(err, ErrVIPNotFound) || ran != 1 {
+		t.Fatalf("UpdateVIPAddressWithHook of a missing row = %v with %d runs, want ErrVIPNotFound and no run", err, ran)
+	}
+
+	if _, err := s.DeleteVIPWithHook(ctx, "env-a", failing); !errors.Is(err, boom) {
+		t.Fatalf("DeleteVIPWithHook with a failing hook = %v, want the hook's error", err)
+	}
+	if _, err := s.GetVIP(ctx, "env-a"); err != nil {
+		t.Fatalf("a failing hook let the row go: %v", err)
+	}
+	if ok, err := s.DeleteVIPWithHook(ctx, "env-a", counting); err != nil || !ok || ran != 2 {
+		t.Fatalf("DeleteVIPWithHook = %v, %v with %d runs, want true, nil and 2", ok, err, ran)
+	}
+	if ok, err := s.DeleteVIPWithHook(ctx, "env-a", counting); err != nil || ok || ran != 2 {
+		t.Fatalf("a second DeleteVIPWithHook = %v, %v with %d runs, want false, nil and no run", ok, err, ran)
+	}
+}

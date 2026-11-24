@@ -89,3 +89,6 @@ func (s *Service) SeedVIPState(envID string, nodes []SeedNode, holderlessSince t
 	}
 	e.view = view
 }
+
+// VIPIsDisabling reports whether the reader is marked as watching a switch-off of the environment's virtual IP.
+func (s *Service) VIPIsDisabling(envID string) bool { return s.vipIsDisabling(envID) }
