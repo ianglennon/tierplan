@@ -1900,8 +1900,40 @@ export interface paths {
          * @description Says which address the swarm's ingress answers on and which node holds it (none, one or many), when it last lost its holder, how each node that can hold it stands (its VRRP state, whether its proxy is ready, its keepalived task, its last fault and when TierPlan last heard from it), whether each manager allows privileged services, whether another router uses the router ID, which nodes have clock trouble, the authentication window in seconds and the last pass that kept the service as wanted. A swarm with no virtual IP answers 404 vip_not_enabled. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
          */
         get: operations["getIngressVIP"];
+        /**
+         * Change the address or the router ID of a swarm's virtual IP
+         * @description The body is the whole configuration, as the preview takes it: an address, and a router ID or none to derive it from the cluster ID again. Takes the environment's operation lock, runs every check of the preview again on the new request and answers 202 with a job's ID at once. The job updates the keepalived service and stores the new address with its audit entry (ingress.vip_changed). The key and its secret are kept: a change never rotates them. An address change rolls one node at a time and a router ID change removes the service and creates it again, which the preview says first. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 404 vip_not_enabled when the environment has no virtual IP. A refusal is 409 with the finding's code as the type and the server's sentence as the detail, as for the enable, and an address that is not an address with its prefix length is 422 vip_address_invalid; 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin).
+         */
+        put: operations["changeIngressVIP"];
+        /**
+         * Switch the virtual IP on for a swarm
+         * @description Takes the environment's operation lock, runs every check of the preview again and answers 202 with a job's ID at once. The job makes the VRRP key, stores it as a swarm secret, creates the global keepalived service and stores the address with its audit entry (ingress.vip_enabled). Follow it at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. A refusal is 409 with the finding's code as the type and the server's sentence as the detail, and each refusing finding in errors: vip_swarm_only, vip_ingress_off, ingress_paused, vip_already_enabled, vip_privileged_not_allowed (naming TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true, with each manager and its state in errors), vip_not_unicast, vip_is_network_or_broadcast, vip_outside_node_subnet, vip_is_node_address, vip_in_use_by_environment, vip_overlaps_docker, vip_router_id_in_use, vip_ipv6_unsupported and vip_name_taken. An address that is not an address with its prefix length is 422 vip_address_invalid. 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. TierPlan never sets the privileged-services setting itself: every manager's agent must already allow it. The answer and the job never carry the VRRP key. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["enableIngressVIP"];
+        /**
+         * Switch a swarm's virtual IP off
+         * @description Takes the environment's operation lock and answers 202 with a job's ID at once. The job removes the keepalived service, waits for every node to release the address, removes the key's swarm secret and deletes the stored row with its audit entry (ingress.vip_disabled). A step that fails leaves the row switched off and names what is left in the swarm; switching off again finishes it. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 404 vip_not_enabled when the environment has no virtual IP; 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin).
+         */
+        delete: operations["disableIngressVIP"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/vip/disable/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
         put?: never;
-        post?: never;
+        /**
+         * Preview switching a swarm's virtual IP off
+         * @description Says what switching the virtual IP off would remove: the keepalived service, with how many of its tasks run now, and the swarm secret that holds the key, by name and never by content. It writes nothing and needs no manager check, since removing a service is not an escalation. items lists the steps of the job. 404 vip_not_enabled when the environment has no virtual IP. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["previewIngressVIPDisable"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1922,6 +1954,26 @@ export interface paths {
         get: operations["listIngressVIPMoves"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/vip/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching the virtual IP on or changing it
+         * @description Runs every check of the virtual IP on the address and the router ID asked for and writes nothing: no key is made and no secret created. On an environment with no virtual IP it previews switching it on; on one that has a virtual IP it previews changing it, and change is true, with current, currentRouterId, the strategy of the change (roll, replace or none) and a notice that says what it does to the address. The answer is 200 whether or not the checks refuse: each finding has a code, the server's sentence, the items it is about and a severity, where error refuses the job and warning does not. The fixed privilege warning is always in warning, and managers lists each manager's privileged-services setting. The checks are the job's own: an address with no prefix length is the finding vip_address_invalid, and the others are vip_swarm_only, vip_ingress_off, ingress_paused, vip_already_enabled, vip_privileged_not_allowed (naming TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true, with each manager and its state), vip_ipv6_unsupported, vip_not_unicast, vip_is_network_or_broadcast, vip_outside_node_subnet, vip_is_node_address, vip_in_use_by_environment, vip_overlaps_docker, vip_router_id_in_use and vip_name_taken, with the warnings vip_inside_pool and vip_unverified. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["previewIngressVIP"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10770,13 +10822,13 @@ export interface components {
             finishedAt: string;
             /** @description The job ID */
             id: string;
-            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; virtual_ip (which removes the virtual IP first, and is done with nothing removed when there is none), switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable */
+            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; virtual_ip (which removes the virtual IP first, and is done with nothing removed when there is none), switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable; vip_key, vip_secret, vip_service and vip_switch for ingress_vip_enable; vip_change_service and vip_change_save for ingress_vip_change; vip_remove_service, vip_wait_tasks, vip_remove_secret and vip_forget for ingress_vip_disable */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What the job does: ingress_enable, ingress_disable, or ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person)
+             * @description What the job does: ingress_enable, ingress_disable, ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person), or, for the virtual IP, ingress_vip_enable, ingress_vip_change or ingress_vip_disable
              * @enum {string}
              */
-            kind: "ingress_enable" | "ingress_disable" | "ingress_ensure";
+            kind: "ingress_enable" | "ingress_disable" | "ingress_ensure" | "ingress_vip_enable" | "ingress_vip_change" | "ingress_vip_disable";
             /** @description The output log, oldest first */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description Who started it, as the hub records its owner */
@@ -11067,6 +11119,21 @@ export interface components {
              */
             vrrpState: "MASTER" | "BACKUP" | "FAULT" | "STOP" | "";
         };
+        IngressVIPDisablePreviewBody: {
+            /** @description The environment's virtual IP with the prefix length of its network */
+            address: string;
+            /** @description The steps the switch-off job runs, as their labels */
+            items: string[] | null;
+            /** @description The names of the swarm secrets that hold the virtual IP's key, never the key; when the swarm could not be read, the name the stored key's generation gives */
+            secrets: string[] | null;
+            /** @description The keepalived service's name; empty when the swarm was read and does not hold one of TierPlan's */
+            service: string;
+            /**
+             * Format: int64
+             * @description How many keepalived tasks run now; 0 when none do or the swarm could not be read
+             */
+            tasks: number;
+        };
         IngressVIPEnsureBody: {
             /**
              * Format: date-time
@@ -11129,6 +11196,74 @@ export interface components {
             items: components["schemas"]["IngressVIPMoveBody"][] | null;
             /** @description Pass this as before to read the next, older page; absent on the last page */
             next?: string;
+        };
+        IngressVIPPreviewBody: {
+            /** @description The address as parsed, with its prefix length; empty when it was refused as typed */
+            address: string;
+            /** @description True when the environment has a virtual IP already, so the preview is of a change; false for an enable */
+            change: boolean;
+            /** @description For a change, the address the environment has now, with its prefix length */
+            current?: string;
+            /**
+             * Format: int64
+             * @description For a change, the router ID the environment has now
+             */
+            currentRouterId?: number;
+            /**
+             * Format: int64
+             * @description The router ID the swarm's cluster ID gives, to show beside an override
+             */
+            derivedRouterId: number;
+            /** @description Everything the checks found, errors and warnings, in the order they ran. A finding of severity error refuses the enable or the change */
+            findings: components["schemas"]["IngressFindingBody"][] | null;
+            /** @description The steps the job would run, as their labels */
+            items: string[] | null;
+            /** @description The privileged-services opt-in of every manager; empty when it could not be read */
+            managers: components["schemas"]["IngressVIPPreviewManagerBody"][] | null;
+            /** @description For a change that is not refused, what it does to the address. Show it as sent */
+            notice?: string;
+            /** @description True when the router ID is the derived one, false when the request chose it */
+            routerDerived: boolean;
+            /**
+             * Format: int64
+             * @description The router ID the job would use; 0 when it was refused
+             */
+            routerId: number;
+            /**
+             * @description For a change that is not refused, how it is made: roll moves one node at a time, replace removes the service and creates it again, none touches no node
+             * @enum {string}
+             */
+            strategy?: "roll" | "replace" | "none";
+            /** @description The fixed privilege warning, always present and not only on a warning. Show it as sent */
+            warning: string;
+        };
+        IngressVIPPreviewManagerBody: {
+            /** @description The host name the swarm lists for the manager */
+            hostname: string;
+            /** @description True for a manager reached only through TierPlan's own Docker socket, which counts as allowing */
+            localSocket: boolean;
+            /** @description The manager's swarm node ID */
+            nodeId: string;
+            /** @description A sentence about this manager to show with it; set for a manager reached through TierPlan's own Docker socket, which counts as allowing */
+            note?: string;
+            /**
+             * @description allows: the manager lets services run privileged. refuses: it does not, so keepalived cannot run on it. unknown: its agent did not answer
+             * @enum {string}
+             */
+            state: "allows" | "refuses" | "unknown";
+        };
+        IngressVIPRequest: {
+            /** @description The virtual IP with the prefix length of its network, for example 192.168.1.50/24. The prefix is required and only IPv4 is accepted */
+            address: string;
+            /**
+             * Format: int64
+             * @description The VRRP router ID, 1 to 255. Leave it out to let TierPlan derive one from the swarm's cluster ID. A change takes the whole configuration: leaving it out derives it again
+             */
+            routerId?: number;
+        };
+        IngressVIPStartBody: {
+            /** @description The job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
+            jobId: string;
         };
         InstallBody: {
             /** @description The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
@@ -22199,6 +22334,146 @@ export interface operations {
             };
         };
     };
+    changeIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressVIPRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    enableIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressVIPRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressVIPDisable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPDisablePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listIngressVIPMoves: {
         parameters: {
             query?: {
@@ -22224,6 +22499,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngressVIPMovesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressVIPRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPPreviewBody"];
                 };
             };
             /** @description Error */
