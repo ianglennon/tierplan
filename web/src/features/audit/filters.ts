@@ -232,6 +232,10 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "ingress.node_enrolled",
   "ingress.node_removed",
   "ingress.vip_changed",
+  // The virtual IP (Phase 26).
+  "ingress.vip_enabled",
+  "ingress.vip_disabled",
+  "ingress.vip_handoff",
   // The node lifecycle and the ingress join token (Phase 22).
   "ingress.node_revoked",
   "ingress.join_token_created",

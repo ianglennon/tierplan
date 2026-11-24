@@ -553,7 +553,10 @@ var phase18DetailKeys = map[string][]string{
 	audit.ActionIngressCertFailed:               {"hostname", "issuer", "reason"},
 	audit.ActionIngressNodeEnrolled:             {"node"},
 	audit.ActionIngressNodeRemoved:              {"node"},
-	audit.ActionIngressVIPChanged:               {"address"},
+	audit.ActionIngressVIPEnabled:               {"address", "router_id", "generation"},
+	audit.ActionIngressVIPChanged:               {"address", "router_id"},
+	audit.ActionIngressVIPDisabled:              {"address", "router_id", "generation"},
+	audit.ActionIngressVIPHandoff:               {"node", "holder", "outcome"},
 }
 
 func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -573,8 +576,8 @@ func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 			}
 		}
 	}
-	if len(phase18DetailKeys) != 14 {
-		t.Fatalf("phase18DetailKeys pins %d actions, want the 14 ingress actions", len(phase18DetailKeys))
+	if len(phase18DetailKeys) != 17 {
+		t.Fatalf("phase18DetailKeys pins %d actions, want the 17 ingress actions", len(phase18DetailKeys))
 	}
 	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase18DetailKeys) {
 		t.Fatalf("verify = %+v", got)
@@ -593,7 +596,10 @@ func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 		"ingress.cert_failed":                audit.ActionIngressCertFailed,
 		"ingress.node_enrolled":              audit.ActionIngressNodeEnrolled,
 		"ingress.node_removed":               audit.ActionIngressNodeRemoved,
+		"ingress.vip_enabled":                audit.ActionIngressVIPEnabled,
 		"ingress.vip_changed":                audit.ActionIngressVIPChanged,
+		"ingress.vip_disabled":               audit.ActionIngressVIPDisabled,
+		"ingress.vip_handoff":                audit.ActionIngressVIPHandoff,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)
