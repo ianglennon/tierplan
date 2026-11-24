@@ -210,6 +210,10 @@ type Service struct {
 	// It holds a clear text, in memory only; outstandingMu guards it.
 	outstandingMu sync.Mutex
 	outstanding   map[string]StandaloneToken
+	// vip is what the virtual IP reader knows of every environment's keepalived helpers, from their logs (D-21).
+	vip *vipState
+	// vipHook, when set, is called after every round of the virtual IP reader. Only a test sets it (export_test.go).
+	vipHook func()
 }
 
 // New builds the deployer.
@@ -220,7 +224,7 @@ func New(d Deps) *Service {
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{d: d, wake: make(chan struct{}, 1)}
+	return &Service{d: d, wake: make(chan struct{}, 1), vip: newVIPState()}
 }
 
 func (s *Service) log() *slog.Logger { return s.d.Log }

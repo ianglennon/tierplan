@@ -3,7 +3,10 @@
 
 package ingressdeploy
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // SetRoundHook sets a function Run calls after every round, so a test waits on a signal instead of a poll.
 func (s *Service) SetRoundHook(fn func()) { s.roundHook = fn }
@@ -26,3 +29,39 @@ func (s *Service) SetWipeHook(fn func()) { s.wipeHook = fn }
 
 // WipeRound takes one pass of the wipe loop and returns when it is done.
 func (s *Service) WipeRound(ctx context.Context) { s.wipeRound(ctx) }
+
+// SetVIPHook sets a function RunVIPReader calls after every round, so a test waits on a signal.
+func (s *Service) SetVIPHook(fn func()) { s.vipHook = fn }
+
+// ReadVIPOnce takes one pass of the virtual IP reader over one environment and returns when it is done.
+func (s *Service) ReadVIPOnce(ctx context.Context, envID string) { s.readVIPOnce(ctx, envID) }
+
+// VIPNodeStates is what the reader knows of the environment's nodes.
+func (s *Service) VIPNodeStates(envID string) []vipNode { return s.vipNodeStates(envID) }
+
+// VIPHolders is the nodes whose last state is MASTER.
+func (s *Service) VIPHolders(envID string) []vipNode {
+	nodes := map[string]vipNode{}
+	for _, n := range s.vipNodeStates(envID) {
+		nodes[n.NodeID] = n
+	}
+	return holders(nodes)
+}
+
+// VIPHolderlessSince is when the environment's address last lost its holder.
+func (s *Service) VIPHolderlessSince(envID string) time.Time { return s.vipHolderlessSince(envID) }
+
+// MarkVIPHandoff and MarkVIPDisabling set the reader's marks.
+func (s *Service) MarkVIPHandoff(envID, nodeID string)    { s.markVIPHandoff(envID, nodeID) }
+func (s *Service) MarkVIPDisabling(envID string, on bool) { s.markVIPDisabling(envID, on) }
+
+// VIPSkipped is how many lines the reader refused or dropped in the environment.
+func (s *Service) VIPSkipped(envID string) uint64 {
+	e := s.vip.find(envID)
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.skipped
+}
