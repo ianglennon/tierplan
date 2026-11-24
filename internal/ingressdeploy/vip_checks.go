@@ -4,6 +4,8 @@
 package ingressdeploy
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"net/netip"
 	"slices"
 	"strings"
@@ -276,4 +278,62 @@ func cutAll(names []string) []string {
 		out[i] = vipName(n)
 	}
 	return out
+}
+
+// The bounds of a virtual router ID (VRRP carries it in one byte and 0 is reserved).
+const (
+	vipRouterIDMin = 1
+	vipRouterIDMax = 255
+)
+
+// DerivedRouterID is the virtual router ID a swarm gets when the Admin gives none (D-05): 1 plus the first four
+// bytes of the SHA-256 of the swarm cluster ID, read big-endian as an unsigned integer, modulo 255, so always 1 to 255.
+//
+// Costly to change: every swarm that runs without an override uses this value, so a different formula would move
+// their router IDs on upgrade. TestDerivedRouterID pins the byte order with literal vectors.
+func DerivedRouterID(clusterID string) int {
+	sum := sha256.Sum256([]byte(clusterID))
+	return vipRouterIDMin + int(binary.BigEndian.Uint32(sum[:4])%255)
+}
+
+// ResolveRouterID picks the router ID to use: the override when there is one and it is 1 to 255, else the value derived
+// from the cluster ID (derived is then true). An override outside 1 to 255 is refused with vip_router_id_invalid.
+func ResolveRouterID(override *int, clusterID string) (id int, derived bool, f *Finding) {
+	if override == nil {
+		return DerivedRouterID(clusterID), true, nil
+	}
+	if *override < vipRouterIDMin || *override > vipRouterIDMax {
+		return 0, false, &Finding{Code: CodeVIPRouterIDInvalid, Message: vipRouterIDInvalidText, Severity: SeverityError}
+	}
+	return *override, false, nil
+}
+
+// CheckRouterIDCollision refuses a router ID that another environment of this install already uses on an overlapping
+// network (D-06). self is the environment being configured, which never collides with itself. A collision on the wire
+// with a router TierPlan does not manage cannot be refused in advance; the helper reports it later (A-04).
+func CheckRouterIDCollision(self string, id int, prefix netip.Prefix, others []VIPOther) *Finding {
+	if !prefix.IsValid() {
+		return nil
+	}
+	network := prefix.Masked()
+	sorted := slices.Clone(others)
+	slices.SortFunc(sorted, func(a, b VIPOther) int {
+		if c := strings.Compare(a.EnvName, b.EnvName); c != 0 {
+			return c
+		}
+		return strings.Compare(a.EnvID, b.EnvID)
+	})
+	for _, o := range sorted {
+		if o.EnvID == self || o.RouterID != id || !o.Prefix.IsValid() {
+			continue
+		}
+		if !network.Overlaps(o.Prefix.Masked()) {
+			continue
+		}
+		return &Finding{
+			Code: CodeVIPRouterIDInUse, Message: vipRouterIDInUseText(o.EnvName, id),
+			Items: []string{vipName(o.EnvName)}, Severity: SeverityError,
+		}
+	}
+	return nil
 }

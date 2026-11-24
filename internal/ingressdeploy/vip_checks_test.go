@@ -396,7 +396,7 @@ func TestResolveRouterID(t *testing.T) {
 		})
 	}
 
-	for _, v := range []int{0, 256, -1, 1 << 40} {
+	for _, v := range []int{0, 256, -1, 1000000} {
 		t.Run("refuses "+strconv.Itoa(v), func(t *testing.T) {
 			_, _, f := ingressdeploy.ResolveRouterID(intp(v), "swarm-a")
 			if f == nil || f.Code != ingressdeploy.CodeVIPRouterIDInvalid || f.Severity != ingressdeploy.SeverityError {
