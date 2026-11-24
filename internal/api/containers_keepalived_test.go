@@ -5,8 +5,10 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
@@ -132,4 +134,64 @@ func TestKeepalivedTaskIsOwnContainer(t *testing.T) {
 	if w := g.fake.Writes(); !slices.Equal(w, []string{"POST /containers/plain-1/stop"}) {
 		t.Errorf("bulk writes = %v, want only the plain container stopped", w)
 	}
+}
+
+func TestKeepalivedTaskNetworkAndShell(t *testing.T) {
+	t.Parallel()
+
+	// A network connect of the task needs its name typed, from a fresh inspect, and with it the call is sent.
+	cfg := ownNetworkEngine()
+	cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+		ID: keepalivedTaskID, Names: []string{"/" + keepalivedTaskName}, Image: "tierplan-keepalived:edge", State: "running",
+		Labels: keepalivedTaskLabels(),
+	})
+	f, e := dashEnv(t, cfg)
+	rec := f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q}`, keepalivedTaskID))
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+		t.Fatalf("connect without a name: %d %q, want 422 confirmation_required: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Fatalf("the daemon saw %v, want nothing", w)
+	}
+	rec = f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q,"confirm":%q}`, keepalivedTaskID, keepalivedTaskName))
+	if rec.code != http.StatusNoContent {
+		t.Fatalf("connect with its name: %d: %s", rec.code, rec.body)
+	}
+	if w := f.fake.Writes(); !slices.Equal(w, []string{"POST /networks/br0/connect"}) {
+		t.Fatalf("writes = %v, want the one connect", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 3 || rows[0].Reason != "confirmation_required" || rows[0].Details["own"] != "ingress_vip" ||
+		rows[1].Details["stage"] != "initiated" || rows[2].Details["stage"] != "completed" || rows[2].Details["own"] != "ingress_vip" {
+		t.Fatalf("audit = %+v, want the refusal, then initiated, then completed, each naming ingress_vip", rows)
+	}
+
+	// A disconnect needs it too.
+	g, ge := dashEnv(t, cfg)
+	rec = g.disconnectNet(t, ge, "app0", fmt.Sprintf(`{"containerId":%q}`, keepalivedTaskID))
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+		t.Fatalf("disconnect without a name: %d %q, want 422 confirmation_required: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if w := g.fake.Writes(); len(w) != 0 {
+		t.Fatalf("the daemon saw %v, want nothing", w)
+	}
+
+	// A shell in the task is refused before any exec is made, with a sentence that names the virtual IP service.
+	scfg := actionEngine()
+	scfg.Containers = append(scfg.Containers, dockertest.FakeContainer{
+		ID: keepalivedTaskID, Names: []string{"/" + keepalivedTaskName}, Image: "tierplan-keepalived:edge", State: "running", Status: "Up 1 hour",
+		Labels: keepalivedTaskLabels(),
+	})
+	sf := newShellFixOn(t, scfg, nil)
+	for _, ref := range []string{keepalivedTaskID, keepalivedTaskName} {
+		rec := sf.open(t, ref, openBody)
+		if rec.code != http.StatusConflict || rec.ptyp != "own_container" {
+			t.Fatalf("%s: %d %q, want 409 own_container: %s", ref, rec.code, rec.ptyp, rec.body)
+		}
+		const sentence = "TierPlan doesn't open shells in its virtual IP service. Switch the virtual IP off to remove it."
+		if !strings.Contains(string(rec.body), sentence) {
+			t.Errorf("%s: body %s does not say %q", ref, rec.body, sentence)
+		}
+	}
+	sf.refusedNothingStarted(t)
 }
