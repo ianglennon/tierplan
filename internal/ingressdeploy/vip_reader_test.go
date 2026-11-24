@@ -251,3 +251,157 @@ func TestVIPReaderRunsOnTheClock(t *testing.T) {
 	cancel()
 	testsupport.Await(t, "the reader to stop", done)
 }
+
+// nodeState returns the reader's state of the node with the host name.
+func (v *vipRig) nodeState(host string) (st struct {
+	LastEvent, LastHeard time.Time
+	State                string
+}, ok bool) {
+	for _, n := range v.svc.VIPNodeStates(v.envID) {
+		if n.Hostname == host {
+			st.LastEvent, st.LastHeard, st.State = n.LastEvent, n.LastHeard, n.State
+			return st, true
+		}
+	}
+	return st, false
+}
+
+// TestVIPReaderRestartStoresNothingTwice pins the restart rule (D-21): a server that starts with no memory reads every
+// log from its start, rebuilds every node's state, and stores only the moves newer than the newest one the store holds.
+func TestVIPReaderRestartStoresNothingTwice(t *testing.T) {
+	v := newVIPRig(t)
+	t1, t3 := vipT0.Add(1*time.Second), vipT0.Add(3*time.Second)
+	v.a.AppendLogs("ka-a",
+		logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")),
+		logLine(t, t3, vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateMaster, "")),
+	)
+	v.b.AppendLogs("ka-b",
+		logLine(t, t1, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateMaster, "")),
+		logLine(t, vipT0.Add(2*time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, "")),
+	)
+	// The move of t1 is stored already, by the server that ran before the restart.
+	err := v.istore.InsertVIPMove(testsupport.Context(t), ingressstore.VIPMove{
+		EnvID: v.envID, At: t1, FromNodeID: vipNodeA, FromNodeName: "node-a", ToNodeID: vipNodeB, ToNodeName: "node-b",
+		Reason: ingressdeploy.VIPMoveUnknown,
+	})
+	if err != nil {
+		t.Fatalf("InsertVIPMove: %v", err)
+	}
+
+	fresh := ingressdeploy.New(v.deps)
+	fresh.ReadVIPOnce(testsupport.Context(t), v.envID)
+	got := v.moves()
+	if len(got) != 2 {
+		t.Fatalf("%d moves after the first pass of a fresh server, want 2 (the stored one and the later one): %+v", len(got), got)
+	}
+	if !got[0].At.Equal(t1) || !got[1].At.Equal(t3) || got[1].FromNodeID != vipNodeB || got[1].ToNodeID != vipNodeA {
+		t.Fatalf("moves = %+v, want the one at t1 and then B to A at t3", got)
+	}
+	if h := fresh.VIPHolders(v.envID); len(h) != 1 || h[0].Hostname != "node-a" {
+		t.Fatalf("holders after the restart = %v, want [node-a]", h)
+	}
+
+	fresh.ReadVIPOnce(testsupport.Context(t), v.envID)
+	if n := len(v.moves()); n != 2 {
+		t.Fatalf("a second pass left %d moves, want 2", n)
+	}
+
+	// A third server with the same store and logs stores nothing either.
+	third := ingressdeploy.New(v.deps)
+	third.ReadVIPOnce(testsupport.Context(t), v.envID)
+	if n := len(v.moves()); n != 2 {
+		t.Fatalf("a second restart left %d moves, want 2", n)
+	}
+}
+
+// TestVIPReaderBounds pins what a hostile or busy log can cost (Pitfall 15, T-26-21): at most 500 lines of a container
+// are read in a pass, and a line that is not an event, is too long, or names another node is counted and dropped.
+func TestVIPReaderBounds(t *testing.T) {
+	v := newVIPRig(t)
+	at := func(i int) time.Time { return vipT0.Add(time.Duration(i) * time.Millisecond) }
+	const total = 800
+	lines := make([]dockertest.FakeLogLine, 0, total)
+	for i := range total {
+		switch i {
+		case 9:
+			lines = append(lines, dockertest.FakeLogLine{Time: at(i), Text: "this is not an event"})
+		case 19:
+			lines = append(lines, dockertest.FakeLogLine{Time: at(i), Text: strings.Repeat("x", 3000)})
+		case 29:
+			lines = append(lines, logLine(t, at(i), ingressbundle.VIPEvent{Event: ingressbundle.VIPEventClockSkew, Node: vipNodeB, Seq: uint64(i + 1)}))
+		default:
+			lines = append(lines, logLine(t, at(i), ingressbundle.VIPEvent{
+				Event: ingressbundle.VIPEventClockSkew, Node: vipNodeA, Seq: uint64(i + 1), Active: i%2 == 0,
+			}))
+		}
+	}
+	v.a.AppendLogs("ka-a", lines...)
+	t1 := v.clock.Now()
+
+	v.read()
+	a, ok := v.nodeState("node-a")
+	if !ok {
+		t.Fatal("the reader knows nothing of node-a after the first pass")
+	}
+	if !a.LastEvent.Equal(at(499)) {
+		t.Fatalf("the last event read after the first pass is at %s, want the 500th line at %s", a.LastEvent, at(499))
+	}
+	if n := v.svc.VIPSkipped(v.envID); n != 3 {
+		t.Fatalf("%d lines skipped after the first pass, want 3 (not an event, too long, another node's)", n)
+	}
+
+	// The node that cannot be reached is not read and keeps the time it was last heard.
+	t2 := t1.Add(time.Minute)
+	v.clock.set(t2)
+	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[1].Connected = false })
+	before := len(v.b.LogQueries())
+	v.read()
+	a, _ = v.nodeState("node-a")
+	if !a.LastEvent.Equal(at(799)) {
+		t.Fatalf("the last event read after the second pass is at %s, want the 800th line at %s", a.LastEvent, at(799))
+	}
+	if !a.LastHeard.Equal(t2) {
+		t.Errorf("node-a was last heard at %s, want %s", a.LastHeard, t2)
+	}
+	b, ok := v.nodeState("node-b")
+	if !ok || !b.LastHeard.Equal(t1) {
+		t.Errorf("node-b was last heard at %s (known %v), want %s: a node that is not connected keeps its time", b.LastHeard, ok, t1)
+	}
+	if got := len(v.b.LogQueries()); got != before {
+		t.Errorf("node-b's log was read %d times while its agent was not connected", got-before)
+	}
+	if n := v.svc.VIPSkipped(v.envID); n != 3 {
+		t.Errorf("%d lines skipped after the second pass, want still 3: nothing is read twice", n)
+	}
+}
+
+// TestVIPReaderFollowsNoStream pins T-26-22: the reader asks for plain reads that end, never a follow, so no
+// interactive stream slot of the tunnel is held.
+func TestVIPReaderFollowsNoStream(t *testing.T) {
+	v := newVIPRig(t)
+	v.a.AppendLogs("ka-a", logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
+	v.b.AppendLogs("ka-b", logLine(t, vipT0, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateBackup, "")))
+	v.read()
+	v.a.AppendLogs("ka-a", logLine(t, vipT0.Add(time.Second), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")))
+	v.read()
+
+	for name, f := range map[string]*dockertest.Fake{"node-a": v.a, "node-b": v.b} {
+		qs := f.LogQueries()
+		if len(qs) == 0 {
+			t.Fatalf("%s's log was never read", name)
+		}
+		for _, q := range qs {
+			if q.Get("follow") == "1" {
+				t.Errorf("%s: a log request followed the stream: %v", name, q)
+			}
+		}
+		if n := f.LogFollows(); n != 0 {
+			t.Errorf("%s: %d follows are open", name, n)
+		}
+	}
+	// The second read of node-a starts after the first's last line, not at the start of its log.
+	last := v.a.LogQueries()[len(v.a.LogQueries())-1]
+	if last.Get("since") == "" || last.Get("tail") != "" && last.Get("tail") != "all" {
+		t.Errorf("the second read of node-a asked %v, want a since and no tail", last)
+	}
+}
