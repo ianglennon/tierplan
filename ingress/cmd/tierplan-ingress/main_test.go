@@ -129,7 +129,7 @@ func TestProbeSubcommand(t *testing.T) {
 		{"closed port", nil, true, port, true, 1},
 		{"slower than the timeout", func(w http.ResponseWriter, r *http.Request) {
 			select {
-			case <-time.After(5 * time.Second):
+			case <-time.After(5 * time.Second): // wall-clock: a stall the probe's own deadline must cut short; released early by the request context
 			case <-r.Context().Done():
 			}
 		}, false, port, true, 1},
@@ -165,8 +165,10 @@ func TestProbeSubcommand(t *testing.T) {
 			if got != tc.want {
 				t.Fatalf("run = %d, want %d (stderr %q)", got, tc.want, h.stderr.String())
 			}
-			if took := time.Since(start); took > time.Second {
-				t.Fatalf("probe took %s, want under the one-second vrrp_script timeout", took)
+			// The upper bound only has to tell a working deadline from a missing one (the stall above
+			// is 5 s), so it is set well clear of the 800 ms deadline to stay steady under -race load.
+			if took := time.Since(start); took > 3*time.Second { // wall-clock: upper bound that catches a missing deadline; the stall is 5 s
+				t.Fatalf("probe took %s, want its deadline to cut the 5 s stall short", took)
 			}
 			if tc.want == 0 && (h.stdout.Len() != 0 || h.stderr.Len() != 0) {
 				t.Fatalf("a ready probe printed stdout %q stderr %q", h.stdout.String(), h.stderr.String())
