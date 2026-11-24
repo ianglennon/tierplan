@@ -538,3 +538,71 @@ func TestChangeAndDisableIngressVIPRoutes(t *testing.T) {
 		t.Errorf("switch off again: %d %s, want 404 vip_not_enabled", rec.Code, rec.Body)
 	}
 }
+
+// TestIngressVIPRoutesNeedIngressManage: each of the seven virtual IP routes (the status and the history, the two previews, the
+// enable, the change and the switch-off) needs ingress.manage on the environment, which is its Admin: an Operator is 403, an
+// Admin of another environment is no one here, an anonymous caller is 401, and an Admin passes the check. Nothing is written for
+// a caller who is refused, and no answer to the Admin, with a virtual IP on, carries the key (T-26-55, PROH-26-03).
+func TestIngressVIPRoutesNeedIngressManage(t *testing.T) {
+	t.Parallel()
+	v := newVIPWriteFix(t, nil)
+	base := "/api/env/" + v.envA + "/ingress/vip"
+	// Bodies that an Admin's request is refused on, so that passing the permission check writes nothing: an address outside the
+	// network of the nodes, and no virtual IP to change or remove.
+	refused := vipBody("192.168.5.50/24")
+	routes := []struct{ name, method, path, body string }{
+		{"getIngressVIP", http.MethodGet, base, ""},
+		{"listIngressVIPMoves", http.MethodGet, base + "/moves", ""},
+		{"previewIngressVIP", http.MethodPost, base + "/preview", refused},
+		{"enableIngressVIP", http.MethodPost, base, refused},
+		{"changeIngressVIP", http.MethodPut, base, refused},
+		{"previewIngressVIPDisable", http.MethodPost, base + "/disable/preview", ""},
+		{"disableIngressVIP", http.MethodDelete, base, ""},
+	}
+	for _, rt := range routes {
+		if rec := v.credCall(t, v.operatorA, rt.method, rt.path, rt.body); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: an Operator got %d %s, want 403", rt.name, rec.Code, rec.Body)
+		}
+		if rec := v.call(t, authReq{method: rt.method, path: rt.path, body: rt.body}); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s: an anonymous caller got %d %s, want 401", rt.name, rec.Code, rec.Body)
+		}
+		if rec := v.credCall(t, v.adminB, rt.method, rt.path, rt.body); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+			t.Errorf("%s: an Admin of another environment got %d %s, want 403 or 404", rt.name, rec.Code, rec.Body)
+		}
+		rec := v.credCall(t, v.adminA, rt.method, rt.path, rt.body)
+		if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden || rec.Code >= http.StatusInternalServerError {
+			t.Errorf("%s: an Admin got %d %s, want the permission check passed", rt.name, rec.Code, rec.Body)
+		}
+	}
+	v.wantNothingWritten(t)
+
+	// With a virtual IP on, every answer to the Admin is free of the key. The switch-off is last, as it ends the virtual IP.
+	if job := v.startAndWait(t, http.MethodPost, base, vipBody(vipWriteAddress)); job.State != jobs.JobDone {
+		t.Fatalf("enable job = %+v, want done", job)
+	}
+	refusedNow := vipBody("10.9.0.11/24")
+	for _, rt := range routes {
+		body := rt.body
+		if body == refused {
+			body = refusedNow
+		}
+		rec := v.credCall(t, v.adminA, rt.method, rt.path, body)
+		if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden || rec.Code >= http.StatusInternalServerError {
+			t.Errorf("%s with a virtual IP: an Admin got %d %s", rt.name, rec.Code, rec.Body)
+			continue
+		}
+		v.wantNoVIPKey(t, rt.name, rec.Body.String())
+		if rec.Code == http.StatusAccepted {
+			// A job that was started is waited for, so that it has ended when the fixture's swarm is closed.
+			start := decodeBody[struct {
+				JobID string `json:"jobId"`
+			}](t, rec)
+			if _, err := v.hub.Wait(testsupport.Context(t), start.JobID); err != nil {
+				t.Fatalf("%s: wait for the job: %v", rt.name, err)
+			}
+		}
+		if strings.Contains(strings.ToLower(rec.Body.String()), "sealed") || strings.Contains(rec.Body.String(), "keySealed") {
+			t.Errorf("%s carries the sealed key: %s", rt.name, rec.Body)
+		}
+	}
+}
