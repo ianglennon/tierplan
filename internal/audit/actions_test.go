@@ -610,6 +610,46 @@ func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 	}
 }
 
+// The four virtual IP actions can never hold the VRRP key under any name (A-14, D-03, T-26-07): a detail key that is or
+// contains key, secret, token or password is refused by Record and nothing is written, while the documented keys
+// (address, router_id, generation, node, holder, outcome) record. The key generation is a number under "generation".
+func TestVIPActionsRefuseSecretDetailKeys(t *testing.T) {
+	vip := []string{
+		audit.ActionIngressVIPEnabled,
+		audit.ActionIngressVIPChanged,
+		audit.ActionIngressVIPDisabled,
+		audit.ActionIngressVIPHandoff,
+	}
+	refused := []string{
+		"key", "Key", "vrrp_key", "keyring", "auth_key", "secret", "client_secret", "token", "join_token", "password",
+		"Password", "key_generation_password",
+	}
+	for _, action := range vip {
+		f := newFixture(t)
+		for _, bad := range refused {
+			e := ent(action)
+			e.Details = map[string]string{"address": "x", bad: "value"}
+			if err := f.w.Record(context.Background(), e); !errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s with detail key %q: err = %v, want ErrSecretField", action, bad, err)
+			}
+		}
+		if n := f.count(t); n != 0 {
+			t.Fatalf("%s: a refused entry was written (%d rows)", action, n)
+		}
+		e := ent(action)
+		e.Details = map[string]string{}
+		for _, k := range phase18DetailKeys[action] {
+			e.Details[k] = "x"
+		}
+		if len(e.Details) == 0 {
+			t.Fatalf("%s has no documented detail keys in phase18DetailKeys", action)
+		}
+		if err := f.w.Record(context.Background(), e); err != nil {
+			t.Errorf("%s with its documented keys: %v", action, err)
+		}
+	}
+}
+
 // phase20DetailKeys maps every per-hostname certificate action to the detail keys the plans that record it must use
 // (Phase 20, D-33). The ingress.* actions are environment-scoped; the two https.* ones are install-wide (D-37). A key
 // containing a secret word would fail Record, so the whole table is recorded through the real Writer.
