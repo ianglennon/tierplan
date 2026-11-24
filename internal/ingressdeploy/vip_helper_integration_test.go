@@ -791,3 +791,167 @@ func TestVIPHelperDiscoveryFault(t *testing.T) {
 	}
 	t.Logf("S3 helper-discovery-fault: engine=%s tasks=%d fault=no_interface", r.sw.Engine, len(r.sw.Nodes()))
 }
+
+// The bounds of the address-in-use case (A-05). vhInUseHold is how long the nodes are watched while another machine holds the
+// address, vhInUseReleased the wait for one holder once it is gone (the helper looks again every 12 s).
+const (
+	vhInUseHold     = 30 * time.Second
+	vhInUseReleased = 45 * time.Second
+	// vhRestarts is how many times the service is force-updated while a peer holds the address.
+	vhRestarts = 3
+)
+
+// startSquatter runs a plain container on the nodes' bridge that holds addr as its own address, which is what another
+// machine answering for the virtual address looks like. It is removed at cleanup.
+func (r *vipHelperRig) startSquatter(addr netip.Addr) string {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	res, err := r.host.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name:       "vh-squatter-" + hex.EncodeToString(randBytes(r.t, 4)),
+		Config:     &container.Config{Image: traefiktest.WhoamiImage},
+		HostConfig: &container.HostConfig{NetworkMode: container.NetworkMode(r.sw.Network)},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			r.sw.Network: {IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: addr}},
+		}},
+	})
+	if err != nil {
+		r.t.Fatalf("create the container that holds %s: %v", addr, err)
+	}
+	r.removeAtCleanup(res.ID)
+	if _, err := r.host.ContainerStart(ctx, res.ID, client.ContainerStartOptions{}); err != nil {
+		r.t.Fatalf("start the container that holds %s: %v", addr, err)
+	}
+	insp, err := r.host.ContainerInspect(ctx, res.ID, client.ContainerInspectOptions{})
+	if err != nil {
+		r.t.Fatalf("inspect the container that holds %s: %v", addr, err)
+	}
+	if ep := insp.Container.NetworkSettings.Networks[r.sw.Network]; ep == nil || ep.IPAddress != addr {
+		r.t.Fatalf("the container was not given %s on %s: %+v", addr, r.sw.Network, insp.Container.NetworkSettings.Networks)
+	}
+	return res.ID
+}
+
+func randBytes(t testing.TB, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("read random bytes: %v", err)
+	}
+	return b
+}
+
+// forceUpdate rolls the service over to new tasks with the same spec (the update configuration of the production spec: one
+// node at a time, the old task first, ten seconds apart) and waits until every node runs a task of the new generation.
+func (r *vipHelperRig) forceUpdate(svc *vhService) {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cur, err := r.mgr.ServiceInspect(ctx, svc.id, client.ServiceInspectOptions{})
+	if err != nil {
+		r.t.Fatalf("inspect %s: %v", svc.name, err)
+	}
+	spec := cur.Service.Spec
+	spec.TaskTemplate.ForceUpdate++
+	want := spec.TaskTemplate.ForceUpdate
+	if _, err := r.mgr.ServiceUpdate(ctx, svc.id, client.ServiceUpdateOptions{Version: cur.Service.Version, Spec: spec}); err != nil {
+		r.t.Fatalf("update %s: %v", svc.name, err)
+	}
+	// The status of the update before still says completed for a moment, so the new generation is what is awaited first.
+	dockertest.Wait(r.t, vhSettle, "every node to run a task of generation "+strconv.FormatUint(want, 10), func() (bool, string) {
+		filters := make(client.Filters)
+		filters.Add("service", svc.id)
+		res, err := r.mgr.TaskList(ctx, client.TaskListOptions{Filters: filters})
+		if err != nil {
+			return false, err.Error()
+		}
+		running := 0
+		for _, tk := range res.Items {
+			if tk.DesiredState == swarm.TaskStateRunning && tk.Status.State == swarm.TaskStateRunning && tk.Spec.ForceUpdate == want {
+				running++
+			}
+		}
+		return running == len(r.sw.Nodes()), fmt.Sprintf("%d tasks of the new generation running", running)
+	})
+	dockertest.WaitServiceUpdateState(r.t, r.sw.Managers[0], svc.id, "completed", vhSettle)
+}
+
+// TestVIPHelperAddressInUse is D-11 and A-05 through the production spec, and the judgement of whether the check is reliable
+// enough to hold nodes in FAULT (T-26-47). A plain container on the nodes' bridge holds the virtual address before the service
+// starts: every node writes fault address_in_use and none holds the address for a watch. Once the container is gone one node
+// holds it and the faults clear. Then, with a holder, the service is force-updated three times, so each node restarts while a
+// peer holds the address: no restarted node may write address_in_use, because a peer's adverts are on the segment.
+func TestVIPHelperAddressInUse(t *testing.T) {
+	r := newVIPHelperRig(t)
+	addr := r.vip.Addr()
+	squatter := r.startSquatter(addr)
+	svc := r.start(ingress.ServiceNameKeepalived, r.vip, vhRouterID)
+	r.tasks(svc)
+
+	inUse := func(e ingressbundle.VIPEvent) bool {
+		return e.Event == ingressbundle.VIPEventFault && e.Reason == ingressbundle.VIPReasonAddressInUse
+	}
+	raised := map[string]ingressbundle.VIPEvent{}
+	for _, n := range r.sw.Nodes() {
+		dockertest.Wait(t, vhLogBound, n.Hostname+" to write fault address_in_use", func() (bool, string) {
+			ev, ok := vhFind(r.taskLog(n, svc.name), func(e ingressbundle.VIPEvent) bool { return inUse(e) && e.Active })
+			raised[n.Hostname] = ev
+			return ok, "no active address_in_use line yet"
+		})
+	}
+	if v := vhWatch(vhInUseHold, func() string {
+		if got := r.holders(addr); len(got) != 0 {
+			return vhNames(got) + " hold the address another machine answers for"
+		}
+		for _, n := range r.sw.Nodes() {
+			if _, master := vhFind(r.taskLog(n, svc.name), vhState(ingressbundle.VIPStateMaster, "")); master {
+				return n.Hostname + " became MASTER"
+			}
+		}
+		return ""
+	}); v != "" {
+		t.Fatalf("S3 helper-address-in-use: engine=%s violated: %s", r.sw.Engine, v)
+	}
+	t.Logf("S3 helper-address-in-use: engine=%s held-out nodes=%d watch=%s", r.sw.Engine, len(r.sw.Nodes()), vhInUseHold)
+
+	// The other machine goes away: one node holds the address and every fault clears.
+	r.removeContainer(squatter)
+	holder, secs := r.waitOneHolder(addr, vhInUseReleased, nil)
+	for _, n := range r.sw.Nodes() {
+		dockertest.Wait(t, vhInUseReleased, n.Hostname+" to clear fault address_in_use", func() (bool, string) {
+			_, ok := vhFind(r.taskLog(n, svc.name), func(e ingressbundle.VIPEvent) bool {
+				return inUse(e) && !e.Active && e.Seq > raised[n.Hostname].Seq
+			})
+			return ok, "no cleared address_in_use line yet"
+		})
+	}
+	t.Logf("S3 helper-address-in-use: engine=%s released seconds=%.1f holder=%s", r.sw.Engine, secs, holder.Hostname)
+
+	// A node that restarts while a peer holds the address is never told the address is in use.
+	baseline := map[string]bool{}
+	for _, n := range r.sw.Nodes() {
+		for _, id := range r.containers(n, svc.name, false) {
+			baseline[id] = true
+		}
+	}
+	for i := 1; i <= vhRestarts; i++ {
+		r.forceUpdate(svc)
+		for _, n := range r.sw.Nodes() {
+			// A task that reported BACKUP or MASTER has finished its check, which runs before keepalived starts.
+			dockertest.Wait(t, vhLogBound, n.Hostname+" to finish the check of restart "+strconv.Itoa(i), func() (bool, string) {
+				s := vhLastState(r.taskLog(n, svc.name))
+				return s == ingressbundle.VIPStateBackup || s == ingressbundle.VIPStateMaster, "last state " + s
+			})
+			for _, id := range r.containers(n, svc.name, false) {
+				if baseline[id] {
+					continue
+				}
+				if _, flagged := vhFind(r.containerLog(n, id), inUse); flagged {
+					t.Fatalf("S3 helper-address-in-use: engine=%s FLAGGED restart=%d node=%s: a restarted node was told the address is in use while a peer held it", r.sw.Engine, i, n.Hostname)
+				}
+			}
+		}
+		r.waitOneHolder(addr, vhFirstHolder, nil)
+	}
+	t.Logf("S3 helper-address-in-use: engine=%s restarts=%d flagged=0", r.sw.Engine, vhRestarts)
+}
