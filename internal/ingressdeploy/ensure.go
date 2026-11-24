@@ -59,6 +59,9 @@ const (
 	// EnsureUpdateFailed is a pass that left the proxy service alone because the update this server wants was written
 	// before and the swarm rolled it back (WR-07). It is tried again when the wanted spec changes or after UpdateRetryAfter.
 	EnsureUpdateFailed = "update_failed"
+	// EnsurePrivilegedLost is a pass over a virtual IP that found a manager no longer allowing privileged services (D-19): nothing
+	// is written and the keepalived service that runs is left running. It is recorded on the virtual IP's row only.
+	EnsurePrivilegedLost = "privileged_lost"
 )
 
 // UpdateRetryAfter is how long, on the injected clock, the loop leaves a proxy service alone after the swarm rolled back an
@@ -149,11 +152,18 @@ func (s *Service) pass(ctx context.Context, envID string) {
 		return
 	}
 	class, record := s.ensure(ctx, envID, state)
-	if !record || ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return
 	}
-	if err := s.d.Store.RecordEnsure(ctx, envID, s.d.Clock.Now(), class); err != nil {
-		s.log().Warn("the ingress ensure loop could not record a pass", "environment", envID, "error", err)
+	if record {
+		if err := s.d.Store.RecordEnsure(ctx, envID, s.d.Clock.Now(), class); err != nil {
+			s.log().Warn("the ingress ensure loop could not record a pass", "environment", envID, "error", err)
+		}
+	}
+	// The virtual IP is the second leg of the pass. A paused environment is only observed: nothing of the virtual IP is written
+	// or removed until an Admin resumes it (D-42).
+	if !state.Paused {
+		s.ensureVIP(ctx, envID)
 	}
 }
 
@@ -493,4 +503,362 @@ func (s *Service) updateHeld(envID string, d *dockerx.ServiceDetail, spec swarm.
 		return false
 	}
 	return s.d.Clock.Now().Before(memo.at.Add(UpdateRetryAfter))
+}
+
+// vipHeldKey is the key the keepalived service's last written spec is remembered under: the environment's, apart from its
+// proxy service's.
+func vipHeldKey(envID string) string { return envID + "/keepalived" }
+
+// errVIPSecretStep is what a failed repair of the key secret answers. It carries nothing of the engine's or the vault's words: an
+// error that touched the key is never put in a log (PROH-26-03).
+var errVIPSecretStep = errors.New("the virtual IP key secret could not be made again")
+
+// vipPlan is what one reading of the swarm says the virtual IP's leg has to do.
+type vipPlan struct {
+	service *dockerx.ServiceDetail
+	// secret is the key secret of the row's generation, nil when the swarm does not hold it.
+	secret  *dockerx.SecretRow
+	secrets []dockerx.SecretRow
+	// work is true when something has to be written: the secret or the service is missing, the service differs from what this
+	// server wants, or key secrets of older generations are to go.
+	work bool
+	// held is true when the service differs but the update to the wanted spec was rolled back already, so it is not written.
+	held bool
+}
+
+// class is the class of a pass that writes nothing more than the plan says.
+func (p vipPlan) class() string {
+	if p.held {
+		return EnsureUpdateFailed
+	}
+	return EnsureOK
+}
+
+// ensureVIP is the virtual IP's leg of a pass over an environment whose ingress is on and not paused. An environment with no
+// virtual IP is left alone. An enabled one is kept as desired (D-18): the key secret of its generation made again from the sealed
+// key when it is gone, the keepalived service created or updated when its spec differs from KeepalivedServiceSpec (the image tag
+// too, so a server upgrade rolls it), and the key secrets of older generations removed once the service has settled. One whose
+// switch is off, a switch-off that failed part-way, is finished through removeVIP (D-16, PROH-26-06). The gate is read on every
+// pass: a manager that no longer allows privileged services ends the pass with privileged_lost, writes nothing and never removes
+// what runs (D-19). The plan is made lock-free and made again under the operation lock, which is taken and never waited for.
+// The class is recorded on the virtual IP's row with the time, and returned; the ingress row is not touched.
+func (s *Service) ensureVIP(ctx context.Context, envID string) string {
+	class, record := s.ensureVIPClass(ctx, envID)
+	if record && ctx.Err() == nil {
+		err := s.d.Store.RecordVIPEnsure(ctx, envID, s.d.Clock.Now(), class)
+		if err != nil && !errors.Is(err, ingressstore.ErrVIPNotFound) {
+			s.log().Warn("the ingress ensure loop could not record a virtual IP pass", "environment", envID, "error", err)
+		}
+	}
+	return class
+}
+
+// ensureVIPClass decides the virtual IP's pass and returns its class. record is false when the pass leaves the row alone: there
+// is none, or it was removed.
+func (s *Service) ensureVIPClass(ctx context.Context, envID string) (class string, record bool) {
+	cfg, err := s.d.Store.GetVIP(ctx, envID)
+	if errors.Is(err, ingressstore.ErrVIPNotFound) {
+		return "", false
+	}
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not read an environment's virtual IP", "environment", envID, "error", err)
+		return "", false
+	}
+	info, err := s.d.Envs.Info(ctx, envID)
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not read an environment", "environment", envID, "error", err)
+		return EnsureUnreachable, true
+	}
+	if !info.Swarm {
+		return "", false
+	}
+	if !info.ManagerConnected {
+		return EnsureUnreachable, true
+	}
+	if cfg.Enabled {
+		if class := s.vipGateClass(ctx, envID); class != "" {
+			return class, true
+		}
+		p, class := s.vipSurvey(ctx, envID, cfg)
+		if class != "" {
+			return class, true
+		}
+		if !p.work {
+			return p.class(), true
+		}
+	}
+	release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
+		Kind: stackops.HolderKindIngress, By: ensureHolder, Workload: "ingress", Started: s.d.Clock.Now(),
+	})
+	if !ok {
+		s.log().Debug("the ingress ensure loop left a virtual IP for the next pass: the environment is busy", "environment", envID, "holder", held.Kind)
+		return EnsureLocked, true
+	}
+	defer release()
+	// Under the lock the switches and the swarm are read again, and what changed since the plan decides what is written.
+	st, err := s.d.Store.DeployState(ctx, envID)
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not read an environment's state under the lock", "environment", envID, "error", err)
+		return EnsureWriteFailed, true
+	}
+	if !st.Enabled || st.Paused {
+		return "", false
+	}
+	cfg, err = s.d.Store.GetVIP(ctx, envID)
+	if errors.Is(err, ingressstore.ErrVIPNotFound) {
+		return "", false
+	}
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not read an environment's virtual IP under the lock", "environment", envID, "error", err)
+		return EnsureWriteFailed, true
+	}
+	if !cfg.Enabled {
+		// A switch-off that did not finish: removing a service is no escalation, so the gate is not asked (D-19).
+		if err := s.removeVIP(ctx, audit.SystemIngress, envID, nil, nil); err != nil {
+			if errors.Is(err, ErrVIPNotEnabled) {
+				return "", false
+			}
+			s.log().Warn("the ingress ensure loop could not finish a virtual IP switch-off", "environment", envID, "error", err)
+			return EnsureWriteFailed, true
+		}
+		return "", false
+	}
+	if class := s.vipGateClass(ctx, envID); class != "" {
+		return class, true
+	}
+	p, class := s.vipSurvey(ctx, envID, cfg)
+	if class != "" {
+		return class, true
+	}
+	if !p.work {
+		return p.class(), true
+	}
+	held2, err := s.repairVIP(ctx, envID, cfg, p)
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not put the virtual IP right", "environment", envID, "error", err)
+		return EnsureWriteFailed, true
+	}
+	if held2 {
+		return EnsureUpdateFailed, true
+	}
+	return EnsureOK, true
+}
+
+// vipGateClass reads the managers' opt-in and asks the gate. It is empty when every manager allows privileged services,
+// EnsurePrivilegedLost when one does not, and EnsureUnreachable when the table could not be read, which says nothing about any
+// manager.
+func (s *Service) vipGateClass(ctx context.Context, envID string) string {
+	rows, err := s.vipManagerRows(ctx, envID)
+	if ok, _ := EvaluateManagerGate(rows); ok {
+		return ""
+	}
+	if err != nil {
+		return EnsureUnreachable
+	}
+	return EnsurePrivilegedLost
+}
+
+// desiredKeepalived is the keepalived service this server wants for the row, naming the key secret by its name and ID.
+func (s *Service) desiredKeepalived(cfg ingressstore.VIPConfig, secretID, secretName string) swarm.ServiceSpec {
+	spec := KeepalivedServiceSpec(KeepalivedSpecInput{
+		Image: KeepalivedImage(s.d.ServerVersion), Address: cfg.Prefix(), RouterID: cfg.RouterID, SecretName: secretName,
+	})
+	spec.TaskTemplate.ContainerSpec.Secrets[0].SecretID = secretID
+	return spec
+}
+
+// vipSurvey reads the swarm and makes the plan. A class that is not empty says why it could not: the swarm cannot be read, the
+// comparison failed, or the swarm holds a service or a secret of the name that is not TierPlan's, which is never touched.
+func (s *Service) vipSurvey(ctx context.Context, envID string, cfg ingressstore.VIPConfig) (vipPlan, string) {
+	var p vipPlan
+	if err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+		var err error
+		if p.secrets, err = c.SecretList(ctx); err != nil {
+			return err
+		}
+		svc, _, err := c.ServiceInspect(ctx, ingress.ServiceNameKeepalived)
+		switch {
+		case err == nil:
+			p.service = &svc
+		case errors.Is(err, dockerx.ErrServiceNotFound):
+		default:
+			return err
+		}
+		return nil
+	}); err != nil {
+		s.log().Warn("the ingress ensure loop could not read a swarm for its virtual IP", "environment", envID, "error", err)
+		return vipPlan{}, EnsureUnreachable
+	}
+	if p.service != nil && !ingress.OwnsKeepalivedService(p.service.Name, p.service.Labels) {
+		return vipPlan{}, EnsureWriteFailed
+	}
+	name := KeepalivedSecretName(envID, cfg.KeyGeneration)
+	for _, row := range p.secrets {
+		if row.Name != name {
+			continue
+		}
+		if !ingress.OwnsKeepalivedSecret(row.Name, row.Labels) {
+			return vipPlan{}, EnsureWriteFailed
+		}
+		p.secret = &row
+	}
+	if p.secret == nil || p.service == nil {
+		p.work = true
+		return p, ""
+	}
+	var nets []dockerx.NetworkRow
+	if err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
+		nets, err = c.Networks(ctx)
+		return err
+	}); err != nil {
+		s.log().Warn("the ingress ensure loop could not read a swarm's networks for its virtual IP", "environment", envID, "error", err)
+		return vipPlan{}, EnsureUnreachable
+	}
+	desired := s.desiredKeepalived(cfg, p.secret.ID, name)
+	changes, err := serviceChanges(desired, p.service.Spec, nets)
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not compare a swarm with the virtual IP it wants", "environment", envID, "error", err)
+		return vipPlan{}, EnsureWriteFailed
+	}
+	if len(changes) > 0 {
+		if !s.updateHeld(vipHeldKey(envID), p.service, desired) {
+			p.work = true
+			return p, ""
+		}
+		p.held = true
+	}
+	p.work = serviceSettled(p.service) && len(staleVIPSecrets(p.secrets, envID, name, liveSecretNames(p.service)...)) > 0
+	return p, ""
+}
+
+// staleVIPSecrets are the key secrets of the environment other than the current one and the ones in keep, which the live service
+// still references.
+func staleVIPSecrets(rows []dockerx.SecretRow, envID, current string, keep ...string) []dockerx.SecretRow {
+	var out []dockerx.SecretRow
+	for _, row := range vipSecretsOf(rows, envID) {
+		if row.Name != current && !slices.Contains(keep, row.Name) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// repairVIP makes the key secret again when it is gone, writes the keepalived service when it is missing or differs, and takes the
+// key secrets of earlier generations away once the service names the current one and has settled. The caller holds the
+// operation lock and has asked the gate. held is true when the service was left alone because its update to the wanted spec was
+// rolled back already.
+func (s *Service) repairVIP(ctx context.Context, envID string, cfg ingressstore.VIPConfig, p vipPlan) (held bool, err error) {
+	name := KeepalivedSecretName(envID, cfg.KeyGeneration)
+	secretID := ""
+	if p.secret != nil {
+		secretID = p.secret.ID
+	} else if secretID, err = s.makeVIPSecret(ctx, envID, cfg, name); err != nil {
+		return false, err
+	}
+	image := KeepalivedImage(s.d.ServerVersion)
+	auth, err := s.authFor(ctx, envID, image)
+	if err != nil {
+		return false, err
+	}
+	spec := s.desiredKeepalived(cfg, secretID, name)
+	wrote := false
+	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) (err error) {
+		wrote, err = s.ensureKeepalived(ctx, c, envID, spec, auth)
+		return err
+	}); err != nil {
+		if !errors.Is(err, errUpdateHeld) {
+			return false, err
+		}
+		held = true
+	}
+	// Earlier generations' secrets go only once the service names the current one and its last update has settled, so a rollback
+	// of that update still finds the secret it needs.
+	if wrote || p.service == nil || !serviceSettled(p.service) {
+		return held, nil
+	}
+	return held, s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) error {
+		rows, err := c.SecretList(ctx)
+		if err != nil {
+			return err
+		}
+		for _, row := range staleVIPSecrets(rows, envID, name, liveSecretNames(p.service)...) {
+			if err := c.SecretRemove(ctx, row.ID); err != nil && !errors.Is(err, dockerx.ErrObjectInUse) && !errors.Is(err, dockerx.ErrObjectNotFound) {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// makeVIPSecret creates the swarm secret of the row's generation from the sealed key and returns its ID. The key is opened here
+// and nowhere else in the loop, held in locals, wiped as soon as the secret is sent and in no log: a failure answers the fixed
+// errVIPSecretStep (PROH-26-03).
+func (s *Service) makeVIPSecret(ctx context.Context, envID string, cfg ingressstore.VIPConfig, name string) (string, error) {
+	raw, err := s.d.Store.OpenVIPKey(envID, cfg.KeySealed)
+	if err != nil {
+		return "", errVIPSecretStep
+	}
+	defer clear(raw)
+	content, err := KeepalivedSecretContent(raw)
+	if err != nil {
+		return "", errVIPSecretStep
+	}
+	defer clear(content)
+	id := ""
+	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) (err error) {
+		id, err = c.SecretCreate(ctx, dockerx.SecretSpec{Name: name, Labels: ingress.KeepalivedLabels(), Data: content})
+		return err
+	}); err != nil {
+		return "", errVIPSecretStep
+	}
+	return id, nil
+}
+
+// ensureKeepalived creates the keepalived service, or, when one that is TierPlan's exists, updates it at the version read, carrying
+// its force-update counter over, and only when the live spec differs from spec. It reports whether it wrote. c is a manager's
+// client, inside one write. Nothing waits for the update to converge.
+func (s *Service) ensureKeepalived(ctx context.Context, c *dockerx.Client, envID string, spec swarm.ServiceSpec, auth string) (bool, error) {
+	cur, _, err := c.ServiceInspect(ctx, ingress.ServiceNameKeepalived)
+	switch {
+	case err == nil:
+		if !ingress.OwnsKeepalivedService(cur.Name, cur.Labels) {
+			return false, errors.New("the swarm holds a service named " + cur.Name + " that is not TierPlan's")
+		}
+		spec.TaskTemplate.ForceUpdate = liveForceUpdate(cur.Spec)
+		nets, err := c.Networks(ctx)
+		if err != nil {
+			return false, err
+		}
+		changes, err := serviceChanges(spec, cur.Spec, nets)
+		if err != nil {
+			return false, err
+		}
+		if len(changes) == 0 {
+			return false, nil
+		}
+		if s.updateHeld(vipHeldKey(envID), &cur, spec) {
+			return false, errUpdateHeld
+		}
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			return false, err
+		}
+		if _, err = c.ServiceUpdate(ctx, cur.ID, cur.Version, raw, auth); err != nil {
+			return false, err
+		}
+		s.noteWritten(vipHeldKey(envID), spec)
+		return true, nil
+	case errors.Is(err, dockerx.ErrServiceNotFound):
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			return false, err
+		}
+		if _, _, err = c.ServiceCreate(ctx, raw, auth); err != nil {
+			return false, err
+		}
+		s.noteWritten(vipHeldKey(envID), spec)
+		return true, nil
+	default:
+		return false, err
+	}
 }

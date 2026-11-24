@@ -165,6 +165,20 @@ func (s *Store) SealVIPKey(envID string, raw []byte) (string, error) {
 	return sealed, nil
 }
 
+// OpenVIPKey opens a sealed VRRP key of the environment, the one inverse of SealVIPKey, for the one place that makes the swarm
+// secret again (the ensure loop's repair of a secret that is gone). The caller wipes the bytes as soon as the secret is sent and
+// never logs them; the error names the environment and never the key.
+func (s *Store) OpenVIPKey(envID, sealed string) ([]byte, error) {
+	if s.v == nil {
+		return nil, errors.New("ingressstore: no vault to open the virtual IP key with")
+	}
+	raw, err := s.v.Open(vault.ContextIngressVIPKey+envID, sealed)
+	if err != nil {
+		return nil, fmt.Errorf("ingressstore: open the virtual IP key of environment %q: %w", envID, err)
+	}
+	return raw, nil
+}
+
 // GetVIP reads an environment's virtual IP. An environment with none is ErrVIPNotFound.
 func (s *Store) GetVIP(ctx context.Context, envID string) (VIPConfig, error) {
 	row, err := s.st.RQ.GetVIP(ctx, envID)
