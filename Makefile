@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke ingress-image ingress-image-smoke keepalived-image edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke ingress-image ingress-image-smoke keepalived-image keepalived-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -427,7 +427,8 @@ ingress-image:
 # fetches and checks against the pinned sha256, so building needs the network once.
 # The context is laid out as goreleaser lays it out: $TARGETPLATFORM/tierplan-ingress
 # (the helper, the same plain build as ingress-image) and build/keepalived/ with the
-# tarball. KEEPALIVED_CTX is overridable (a relative path or an absolute one) so two
+# tarball, plus keepalived/image (the SBOM template and the notice the Dockerfile
+# copies). KEEPALIVED_CTX is overridable (a relative path or an absolute one) so two
 # builds on one runner can use separate contexts. Needs Docker with buildx and curl.
 KEEPALIVED_ARCH ?= $(shell go env GOARCH)
 KEEPALIVED_CTX ?= .devdata/keepalived-image
@@ -437,9 +438,18 @@ keepalived-image:
 	rm -rf $(KEEPALIVED_CTX)
 	mkdir -p $(KEEPALIVED_CTX)/linux/$(KEEPALIVED_ARCH) $(KEEPALIVED_CTX)/build/keepalived
 	cp build/keepalived/keepalived-2.4.3.tar.gz $(KEEPALIVED_CTX)/build/keepalived/keepalived-2.4.3.tar.gz
+	mkdir -p $(KEEPALIVED_CTX)/keepalived
+	cp -R keepalived/image $(KEEPALIVED_CTX)/keepalived/image
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(KEEPALIVED_ARCH) go -C ingress build -trimpath -ldflags "-s -w" \
 		-o $(abspath $(KEEPALIVED_CTX))/linux/$(KEEPALIVED_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
 	docker buildx build --platform linux/$(KEEPALIVED_ARCH) -f keepalived/Dockerfile -t $(KEEPALIVED_TAG) --load $(KEEPALIVED_CTX)
+
+# Checks the keepalived image (D-26, D-27): keepalived reports 2.4.3; the licence text,
+# the SBOM entry, the notice and the helper are in it with a size above zero; there is no
+# shell, busybox or package manager; the labels carry the tarball's URL and sha256. Reads
+# names and sizes from the archive docker cp makes, never contents. Needs Docker and tar.
+keepalived-image-smoke:
+	scripts/keepalived-image-smoke.sh
 
 # Runs tierplan-ingress:dev as a node runs it, with and without the hardening
 # flags: UID and GID 1000, no capability, no-new-privileges set by the binary, no
