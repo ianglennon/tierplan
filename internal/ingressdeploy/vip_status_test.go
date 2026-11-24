@@ -147,5 +147,155 @@ func TestVIPStatusOneHolder(t *testing.T) {
 	}
 }
 
-var _ = errors.New
-var _ = strings.Repeat
+// TestVIPStatusHolderStates pins the three answers about the holder, and that an environment with no row is not an empty
+// status (VIP-03).
+func TestVIPStatusHolderStates(t *testing.T) {
+	lost := vipT0.Add(5 * time.Minute)
+	t.Run("none", func(t *testing.T) {
+		s := newStatusRig(t)
+		s.svc.SeedVIPState(s.envID, []ingressdeploy.SeedNode{
+			{NodeID: vipNodeA, Hostname: "node-a", State: ingressbundle.VIPStateBackup},
+			{NodeID: vipNodeB, Hostname: "node-b", State: ingressbundle.VIPStateStop},
+		}, lost)
+		st := s.mustStatus()
+		if st.Holder.State != ingressdeploy.VIPHolderNone || len(st.Holder.NodeIDs) != 0 || !st.HolderlessSince.Equal(lost) {
+			t.Fatalf("holder = %+v since %v, want none since %v", st.Holder, st.HolderlessSince, lost)
+		}
+	})
+	t.Run("many", func(t *testing.T) {
+		s := newStatusRig(t)
+		s.svc.SeedVIPState(s.envID, []ingressdeploy.SeedNode{
+			{NodeID: vipNodeB, Hostname: "node-b", State: ingressbundle.VIPStateMaster},
+			{NodeID: vipNodeA, Hostname: "node-a", State: ingressbundle.VIPStateMaster},
+		}, time.Time{})
+		st := s.mustStatus()
+		if st.Holder.State != ingressdeploy.VIPHolderMany || len(st.Holder.NodeIDs) != 2 ||
+			st.Holder.NodeIDs[0] != vipNodeA || st.Holder.NodeIDs[1] != vipNodeB {
+			t.Fatalf("holder = %+v, want many listing both nodes in order", st.Holder)
+		}
+		if !st.HolderlessSince.IsZero() {
+			t.Fatalf("HolderlessSince = %v with holders", st.HolderlessSince)
+		}
+	})
+	t.Run("reader has not read", func(t *testing.T) {
+		s := newStatusRig(t)
+		st := s.mustStatus()
+		if st.Holder.State != ingressdeploy.VIPHolderNone || len(st.Candidates) != 0 {
+			t.Fatalf("status before any read = %+v, want no holder and no candidates", st)
+		}
+	})
+	t.Run("no row", func(t *testing.T) {
+		s := newStatusRig(t)
+		if _, err := s.istore.DeleteVIP(testsupport.Context(t), s.envID); err != nil {
+			t.Fatalf("DeleteVIP: %v", err)
+		}
+		st, err := s.status()
+		if !errors.Is(err, ingressdeploy.ErrVIPNotEnabled) {
+			t.Fatalf("VIPStatus without a row = %+v, %v; want ErrVIPNotEnabled", st, err)
+		}
+	})
+}
+
+// TestVIPStatusOrder pins that candidates come back ordered by host name, then node ID.
+func TestVIPStatusOrder(t *testing.T) {
+	s := newStatusRig(t)
+	zID, bID := strings.Repeat("z", 25), strings.Repeat("b", 25)
+	s.svc.SeedVIPState(s.envID, []ingressdeploy.SeedNode{
+		{NodeID: "id-m2", Hostname: "m2"}, {NodeID: "id-m1", Hostname: "m1"},
+		{NodeID: zID, Hostname: "a"}, {NodeID: bID, Hostname: "a"},
+	}, time.Time{})
+	var got []string
+	for _, c := range s.mustStatus().Candidates {
+		got = append(got, c.Hostname+"("+c.NodeID+")")
+	}
+	want := []string{"a(" + bID + ")", "a(" + zID + ")", "m1(id-m1)", "m2(id-m2)"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+}
+
+// TestVIPStatusWarnings pins the foreign router, the clock skew, the unreadable manager table and the ensure state.
+func TestVIPStatusWarnings(t *testing.T) {
+	s := newStatusRig(t)
+	ensured := vipT0.Add(2 * time.Hour)
+	if err := s.istore.RecordVIPEnsure(testsupport.Context(t), s.envID, ensured, ingressdeploy.EnsureEnableFailed); err != nil {
+		t.Fatalf("RecordVIPEnsure: %v", err)
+	}
+	s.svc.SeedVIPState(s.envID, []ingressdeploy.SeedNode{
+		{NodeID: vipNodeA, Hostname: "node-a", State: ingressbundle.VIPStateMaster, Foreign: true, ForeignSender: "10.0.0.4"},
+		{NodeID: vipNodeB, Hostname: "node-b", State: ingressbundle.VIPStateBackup, ClockSkew: true},
+	}, time.Time{})
+	s.managers.err = errors.New("no manager list")
+
+	st := s.mustStatus()
+	if !st.ForeignRouter || st.ForeignSender != netip.MustParseAddr("10.0.0.4") {
+		t.Fatalf("foreign router = %v from %v, want true from 10.0.0.4", st.ForeignRouter, st.ForeignSender)
+	}
+	if len(st.ClockSkewNodes) != 1 || st.ClockSkewNodes[0] != vipNodeB {
+		t.Fatalf("clock skew nodes = %v, want [%s]", st.ClockSkewNodes, vipNodeB)
+	}
+	if st.ManagersReadable || len(st.Managers) != 0 {
+		t.Fatalf("managers = %+v readable %v, want an unreadable table", st.Managers, st.ManagersReadable)
+	}
+	if !st.EnsureAt.Equal(ensured) || st.EnsureError != ingressdeploy.EnsureEnableFailed {
+		t.Fatalf("ensure = %v %q, want %v %q", st.EnsureAt, st.EnsureError, ensured, ingressdeploy.EnsureEnableFailed)
+	}
+
+	// A sender that is not an address is never shown, though the warning stands.
+	s.svc.SeedVIPState(s.envID, []ingressdeploy.SeedNode{
+		{NodeID: vipNodeA, Hostname: "node-a", Foreign: true, ForeignSender: "not an address"},
+	}, time.Time{})
+	if st := s.mustStatus(); !st.ForeignRouter || st.ForeignSender.IsValid() {
+		t.Fatalf("a bad sender gave foreign %v sender %v, want the warning without the sender", st.ForeignRouter, st.ForeignSender)
+	}
+
+	// A readable table is carried as read.
+	s.managers.err = nil
+	s.managers.rows = []envs.ManagerPolicyRow{{NodeID: vipNodeA, Hostname: "node-a", State: envs.ManagerAllows}}
+	if st := s.mustStatus(); !st.ManagersReadable || len(st.Managers) != 1 || st.Managers[0].State != envs.ManagerAllows {
+		t.Fatalf("managers = %+v readable %v, want the one row", st.Managers, st.ManagersReadable)
+	}
+}
+
+// TestVIPHolds pins the drain hook's question (D-25): whether the node holds the address and whether it holds it alone.
+func TestVIPHolds(t *testing.T) {
+	cases := []struct {
+		name                 string
+		other                string
+		otherReady           bool
+		wantHolds, wantAlone bool
+	}{
+		{"another BACKUP with a ready proxy", ingressbundle.VIPStateBackup, true, true, false},
+		{"the other is FAULT", ingressbundle.VIPStateFault, true, true, true},
+		{"the other's proxy is not ready", ingressbundle.VIPStateBackup, false, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStatusRig(t)
+			s.nodes.rows = []ingresshub.Node{readyProxy(vipNodeA)}
+			if c.otherReady {
+				s.nodes.rows = append(s.nodes.rows, readyProxy(vipNodeB))
+			}
+			s.svc.SeedVIPState(s.envID, []ingressdeploy.SeedNode{
+				{NodeID: vipNodeA, Hostname: "node-a", State: ingressbundle.VIPStateMaster},
+				{NodeID: vipNodeB, Hostname: "node-b", State: c.other},
+			}, time.Time{})
+			holds, alone, err := s.svc.VIPHolds(testsupport.Context(t), s.envID, vipNodeA)
+			if err != nil || holds != c.wantHolds || alone != c.wantAlone {
+				t.Fatalf("VIPHolds(holder) = %v, %v, %v; want %v, %v", holds, alone, err, c.wantHolds, c.wantAlone)
+			}
+			if holds, alone, err := s.svc.VIPHolds(testsupport.Context(t), s.envID, vipNodeB); err != nil || holds || alone {
+				t.Fatalf("VIPHolds(non-holder) = %v, %v, %v; want false, false", holds, alone, err)
+			}
+		})
+	}
+	t.Run("no virtual IP", func(t *testing.T) {
+		s := newStatusRig(t)
+		if _, err := s.istore.DeleteVIP(testsupport.Context(t), s.envID); err != nil {
+			t.Fatalf("DeleteVIP: %v", err)
+		}
+		if holds, alone, err := s.svc.VIPHolds(testsupport.Context(t), s.envID, vipNodeA); err != nil || holds || alone {
+			t.Fatalf("VIPHolds without a row = %v, %v, %v; want false, false, nil", holds, alone, err)
+		}
+	})
+}

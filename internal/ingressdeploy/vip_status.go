@@ -236,3 +236,34 @@ func (s *Service) VIPStatus(ctx context.Context, envID string) (VIPStatus, error
 	}
 	return st, nil
 }
+
+// VIPHolds answers the drain hook's question about one node (D-25): whether it holds the address, and whether it holds it
+// alone, meaning no other candidate is BACKUP with a ready proxy to take it. An environment with no virtual IP answers
+// false, false. It reads only what the reader knows and the proxy nodes' rows, never the swarm.
+func (s *Service) VIPHolds(ctx context.Context, envID, swarmNodeID string) (holds, alone bool, err error) {
+	if _, err := s.d.Store.GetVIP(ctx, envID); errors.Is(err, ingressstore.ErrVIPNotFound) {
+		return false, false, nil
+	} else if err != nil {
+		return false, false, err
+	}
+	ready, err := s.vipProxyReady(ctx, envID)
+	if err != nil {
+		return false, false, err
+	}
+	states := s.vipNodeStates(envID)
+	for _, n := range states {
+		if n.NodeID == swarmNodeID && n.State == ingressbundle.VIPStateMaster {
+			holds = true
+		}
+	}
+	if !holds {
+		return false, false, nil
+	}
+	alone = true
+	for _, n := range states {
+		if n.NodeID != swarmNodeID && n.State == ingressbundle.VIPStateBackup && ready[n.NodeID] {
+			alone = false
+		}
+	}
+	return holds, alone, nil
+}
