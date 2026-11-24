@@ -8,6 +8,8 @@ import (
 	"flag"
 	"net/netip"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +44,39 @@ func TestRenderGolden(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("Render differs from %s (run with -update, read the diff):\n--- got ---\n%s--- want ---\n%s", goldenFile, got, want)
+	}
+}
+
+// TestRenderNeverHoldsTheKey pins A-03 and PROH-26-03: the key appears in the text as one file reference and
+// Config has no field that could carry key bytes.
+func TestRenderNeverHoldsTheKey(t *testing.T) {
+	cfg := goldenConfig()
+	out := string(Render(cfg, "eth0"))
+
+	var keyLines []string
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) > 0 && f[0] == "key" {
+			keyLines = append(keyLines, line)
+		}
+	}
+	if len(keyLines) != 1 {
+		t.Fatalf("want exactly one key line, got %d: %q", len(keyLines), keyLines)
+	}
+	f := strings.Fields(keyLines[0])
+	if len(f) != 3 || f[2] != "file:"+cfg.KeyFile {
+		t.Errorf("key line %q is not a file reference to %s", keyLines[0], cfg.KeyFile)
+	}
+	if strings.Contains(out, "hex:") {
+		t.Error("the text holds an inline hex key")
+	}
+
+	typ := reflect.TypeOf(cfg)
+	for i := 0; i < typ.NumField(); i++ {
+		switch fld := typ.Field(i); fld.Type.Kind() {
+		case reflect.String, reflect.Int, reflect.Struct:
+		default:
+			t.Errorf("Config.%s is a %s: only strings, ints and the address prefix are allowed, never bytes", fld.Name, fld.Type)
+		}
 	}
 }
