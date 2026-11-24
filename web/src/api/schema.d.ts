@@ -7223,7 +7223,7 @@ export interface components {
         };
         ContainerActionResult: {
             /**
-             * @description Why a target failed. ingress_owned: the container is TierPlan's standalone ingress proxy, which only switching ingress off removes; with result failed for a single target and skipped in a bulk, and nothing is sent. own_container (with result skipped): TierPlan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. ingress_owned: the container is TierPlan's standalone ingress proxy, which only switching ingress off removes; with result failed for a single target and skipped in a bulk, and nothing is sent. own_container (with result skipped): TierPlan's own server, an agent container, or a task container of the ingress proxy or the virtual IP service, in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
             code?: "own_container" | "ingress_owned" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "container_running" | "connection_lost" | "action_failed";
@@ -7322,10 +7322,10 @@ export interface components {
             /** @enum {string} */
             restartPolicy: "no" | "always" | "on-failure" | "unless-stopped";
             /**
-             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), empty otherwise
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), ingress_vip for a task container of TierPlan's virtual IP service (the component label keepalived and the service name tierplan-keepalived), empty otherwise
              * @enum {string}
              */
-            selfKind: "" | "server" | "agent" | "ingress";
+            selfKind: "" | "server" | "agent" | "ingress" | "ingress_vip";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
@@ -7392,10 +7392,10 @@ export interface components {
             /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
             restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
-             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), ingress_vip for a task container of TierPlan's virtual IP service (the component label keepalived and the service name tierplan-keepalived), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
              * @enum {string}
              */
-            selfKind: "" | "server" | "agent" | "ingress";
+            selfKind: "" | "server" | "agent" | "ingress" | "ingress_vip";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
