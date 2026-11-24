@@ -459,16 +459,18 @@ keepalived-image-smoke:
 ingress-image-smoke:
 	scripts/ingress-image-smoke.sh
 
-# The three build contexts for the :edge images: the binaries laid out as
-# $TARGETPLATFORM/tierplan (server), $TARGETPLATFORM/tierplan-agent (agent) and
-# $TARGETPLATFORM/tierplan-ingress (ingress) next to their Dockerfiles, as goreleaser
+# The four build contexts for the :edge images: the binaries laid out as
+# $TARGETPLATFORM/tierplan (server), $TARGETPLATFORM/tierplan-agent (agent),
+# $TARGETPLATFORM/tierplan-ingress (ingress) and $TARGETPLATFORM/tierplan-ingress again
+# (the keepalived image's helper, the same binary) next to their Dockerfiles, as goreleaser
 # does it, plus the web SBOM the server Dockerfile copies (build/sbom/, which
-# goreleaser's before hook has just written) and the ingress image's state and doc
-# directories. The ingress image gets no SBOM file (D-26). CI pushes them with buildx
-# from the main branch.
+# goreleaser's before hook has just written), the ingress image's state and doc
+# directories, and the keepalived image's keepalived/image and source tarball
+# (scripts/keepalived-source.sh, A-09). The ingress image gets no SBOM file (D-26). CI
+# pushes them with buildx from the main branch.
 edge-context:
 	$(GORELEASER) build --snapshot --clean
-	rm -rf dist/edge dist/edge-agent dist/edge-ingress
+	rm -rf dist/edge dist/edge-agent dist/edge-ingress dist/edge-keepalived
 	mkdir -p dist/edge/linux/amd64 dist/edge/linux/arm64
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/tierplan
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/tierplan
@@ -486,6 +488,13 @@ edge-context:
 	cp -R ingress/image/state dist/edge-ingress/ingress/image/state
 	cp -R ingress/image/doc dist/edge-ingress/ingress/image/doc
 	cp ingress/Dockerfile dist/edge-ingress/Dockerfile
+	scripts/keepalived-source.sh
+	mkdir -p dist/edge-keepalived/linux/amd64 dist/edge-keepalived/linux/arm64 dist/edge-keepalived/keepalived dist/edge-keepalived/build/keepalived
+	cp dist/edge-ingress/linux/amd64/tierplan-ingress dist/edge-keepalived/linux/amd64/tierplan-ingress
+	cp dist/edge-ingress/linux/arm64/tierplan-ingress dist/edge-keepalived/linux/arm64/tierplan-ingress
+	cp -R keepalived/image dist/edge-keepalived/keepalived/image
+	cp build/keepalived/keepalived-2.4.3.tar.gz dist/edge-keepalived/build/keepalived/keepalived-2.4.3.tar.gz
+	cp keepalived/Dockerfile dist/edge-keepalived/Dockerfile
 
 # --- End-to-end (D-80, D-59, RESEARCH Pattern 11) ---
 # The built image behind Caddy at https://127.0.0.1:8443/tierplan with a generated

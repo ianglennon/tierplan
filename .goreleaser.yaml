@@ -3,11 +3,13 @@
 #
 # Release configuration for goreleaser v2 (pinned in the Makefile and in
 # release.yml). A v* tag runs it from .github/workflows/release.yml and
-# publishes three images with the same tags: ghcr.io/ianglennon/tierplan:X.Y.Z
+# publishes four images with the same tags: ghcr.io/ianglennon/tierplan:X.Y.Z
 # and :X.Y, the agent image ghcr.io/ianglennon/tierplan-agent (built from the
-# agent/ module) and the ingress image ghcr.io/ianglennon/tierplan-ingress (built
-# from the ingress/ module), each at the server's version. Pushes to main publish
-# :edge of all three from ci.yml. No floating catch-all tag is ever published
+# agent/ module), the ingress image ghcr.io/ianglennon/tierplan-ingress (built
+# from the ingress/ module) and the virtual IP image ghcr.io/ianglennon/tierplan-keepalived
+# (the ingress helper plus keepalived compiled from verified source), each at the
+# server's version. The keepalived source tarball is attached to the release (D-27).
+# Pushes to main publish :edge of all four from ci.yml. No floating catch-all tag is ever published
 # while TierPlan is 0.x (D-75), and no release is cut in Phase 1.
 #
 # Validate with `make release-check`; build the image locally with `make image`.
@@ -23,6 +25,10 @@ before:
     # the release workflow runs the D-27 completeness check too. The archives and
     # the server image carry it.
     - make web-sbom
+    # The keepalived source tarball (D-26), fetched from keepalived.org and checked
+    # against its pinned sha256. The keepalived image is compiled from these very
+    # bytes, and the release and checksums.txt carry the same file (D-27).
+    - scripts/keepalived-source.sh
 
 builds:
   - id: tierplan
@@ -92,6 +98,10 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  # The keepalived source tarball is listed in checksums.txt, which is signed, so
+  # its hash is covered by the same signature as the binaries (D-27).
+  extra_files:
+    - glob: build/keepalived/keepalived-2.4.3.tar.gz
 
 # SPDX SBOMs of the archives. scripts/sbom-archive.sh runs syft (installed and
 # pinned by the release workflow) with the SBOM cataloger, so the web interface's
@@ -105,7 +115,8 @@ checksum:
 # sbom): the server image's holds the web SBOM too (it is copied in, and BuildKit's
 # scanner merges it); the agent and ingress images have no web interface, so their
 # SBOMs are Go only (D-26): the ingress image's lists Traefik's modules too, read
-# from the build info of the copied binary.
+# from the build info of the copied binary. The keepalived image's lists the helper's
+# Go modules and merges the hand-written SPDX entry for keepalived and OpenSSL.
 sboms:
   - id: archives
     artifacts: archive
@@ -187,6 +198,33 @@ dockers_v2:
       org.opencontainers.image.created: "{{ .Date }}"
     sbom: true
 
+  # The keepalived image (D-26, D-27): keepalived 2.4.3 compiled from the verified
+  # source tarball in the Dockerfile's build stage, and the ingress helper as PID 1
+  # (ids: the helper is the tierplan-ingress build). keepalived is GPL-2.0-or-later and
+  # the helper AGPL-3.0-or-later, so the GPL code lives in this image alone (VIP-06).
+  # extra_files puts the tarball and keepalived/image (the SBOM template and the notice)
+  # at the same relative paths in the build context. BuildKit's scanner merges the
+  # hand-written SPDX file with the helper's Go SBOM. The same tag rules as the others.
+  - id: tierplan-keepalived
+    ids: [tierplan-ingress]
+    dockerfile: keepalived/Dockerfile
+    images:
+      - ghcr.io/ianglennon/tierplan-keepalived
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    extra_files:
+      - keepalived/image
+      - build/keepalived/keepalived-2.4.3.tar.gz
+    labels:
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+    sbom: true
+
 # Keyless cosign signatures: the identity is the GitHub Actions OIDC token of
 # the release workflow, so there is no key to leak or rotate.
 signs:
@@ -197,7 +235,7 @@ signs:
     args: ["sign-blob", "--yes", "--bundle=${signature}", "${artifact}"]
     output: true
 
-# artifacts: all signs the digest of every image above: server, agent and ingress.
+# artifacts: all signs the digest of every image above: server, agent, ingress and keepalived.
 docker_signs:
   - id: images
     cmd: cosign
@@ -238,3 +276,7 @@ changelog:
 
 release:
   prerelease: auto
+  # The GPL source offer (D-27): the unmodified keepalived 2.4.3 tarball the image is
+  # built from is attached to every release.
+  extra_files:
+    - glob: build/keepalived/keepalived-2.4.3.tar.gz
