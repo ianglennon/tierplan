@@ -4,20 +4,25 @@
 package ingressdeploy_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -210,5 +215,259 @@ func TestDisableVIPRemovesEverything(t *testing.T) {
 	}
 	if _, err := f.svc.PreviewVIPDisable(ctx, f.envID); !errors.Is(err, ingressdeploy.ErrVIPNotEnabled) {
 		t.Errorf("PreviewVIPDisable of nothing = %v, want ErrVIPNotEnabled", err)
+	}
+}
+
+// wantSwitchOffLeft fails the test unless the switch-off ended with the item failed with vip_remove_failed, the items
+// before it done, the items after it skipped as not run (except those named in tried, which ran), the row still there with
+// enabled 0, the reader's mark off and the lock free.
+func wantSwitchOffLeft(t *testing.T, f *vipDisableFix, job jobs.Job, failed string, tried ...string) {
+	t.Helper()
+	if job.State == jobs.JobDone {
+		t.Fatalf("the job ended done: %+v", job.Items)
+	}
+	seen := false
+	for _, id := range []string{ingressdeploy.ItemVIPRemoveService, ingressdeploy.ItemVIPWaitTasks, ingressdeploy.ItemVIPRemoveSecret, ingressdeploy.ItemVIPForget} {
+		it := itemOf(job, id)
+		switch {
+		case id == failed:
+			seen = true
+			if it.State != jobs.ItemFailed || it.Code != ingressdeploy.CodeVIPRemoveFailed || it.Message == "" {
+				t.Errorf("item %s = %q code %q message %q, want failed with vip_remove_failed and a sentence", id, it.State, it.Code, it.Message)
+			}
+		case !seen || slices.Contains(tried, id):
+			if it.State != jobs.ItemDone {
+				t.Errorf("item %s = %q (code %q), want done", id, it.State, it.Code)
+			}
+		default:
+			if it.State != jobs.ItemSkipped || it.Code != ingressdeploy.CodeNotRun {
+				t.Errorf("item %s = %q (code %q), want skipped and not_run", id, it.State, it.Code)
+			}
+		}
+	}
+	row, err := f.istore.GetVIP(testsupport.Context(t), f.envID)
+	if err != nil || row.Enabled {
+		t.Errorf("row = %+v, %v; want it kept with enabled 0 for the ensure loop to finish", row, err)
+	}
+	if got := f.auditCount("ingress.vip_disabled"); got != 0 {
+		t.Errorf("a switch-off that left things behind wrote %d ingress.vip_disabled rows", got)
+	}
+	if f.svc.VIPIsDisabling(f.envID) {
+		t.Error("the reader is still marked as watching a switch-off")
+	}
+	if _, held := f.locks.Held(f.envID); held {
+		t.Error("the operation lock is still held after the job")
+	}
+}
+
+// TestDisableVIPFailures (PROH-26-06): a service that cannot be removed, a secret that cannot be removed and tasks that never
+// stop each end their item with vip_remove_failed and leave the row switched off; the tasks that never stop still let the
+// secret be tried; and switching off again once the cause is gone finishes the job.
+func TestDisableVIPFailures(t *testing.T) {
+	t.Run("the service cannot be removed", func(t *testing.T) {
+		f := newVIPDisableFix(t, vipDisableOpts{})
+		f.enabled()
+		f.fake.SetServiceRemoveError(ingress.ServiceNameKeepalived, "boom: engine words")
+
+		job := f.disableVIP()
+		wantSwitchOffLeft(t, f, job, ingressdeploy.ItemVIPRemoveService)
+		if _, ok := f.keepalivedService(); !ok {
+			t.Error("the service is gone although its removal failed")
+		}
+		if got := f.keepalivedSecrets(); len(got) != 1 {
+			t.Errorf("key secrets = %v, want the one still there", got)
+		}
+
+		f.fake.SetServiceRemoveError(ingress.ServiceNameKeepalived, "")
+		wantVIPDisableDone(t, f.disableVIP())
+		if _, err := f.istore.GetVIP(testsupport.Context(t), f.envID); !errors.Is(err, ingressstore.ErrVIPNotFound) {
+			t.Errorf("GetVIP after the second switch-off = %v, want ErrVIPNotFound", err)
+		}
+	})
+
+	t.Run("the secret cannot be removed", func(t *testing.T) {
+		f := newVIPDisableFix(t, vipDisableOpts{})
+		f.enabled()
+		secret := ingressdeploy.KeepalivedSecretName(f.envID, 1)
+		cfg := f.base
+		cfg.RemoveErrors = map[string]string{secret: "boom: " + strings.Repeat("a", 64)}
+		f.fake.Reconfigure(cfg)
+
+		job := f.disableVIP()
+		wantSwitchOffLeft(t, f, job, ingressdeploy.ItemVIPRemoveSecret)
+		if _, ok := f.keepalivedService(); ok {
+			t.Error("the service is still there although it was removed first")
+		}
+		// No engine word rides with an item that touched the key.
+		if it := itemOf(job, ingressdeploy.ItemVIPRemoveSecret); it.Detail != "" || keyShape.MatchString(it.Message) {
+			t.Errorf("the secret item carries %q / %q, want none of the engine's words", it.Detail, it.Message)
+		}
+
+		f.fake.Reconfigure(f.base)
+		wantVIPDisableDone(t, f.disableVIP())
+		if got := f.keepalivedSecrets(); len(got) != 0 {
+			t.Errorf("key secrets left = %v after the second switch-off", got)
+		}
+	})
+
+	t.Run("the tasks never stop", func(t *testing.T) {
+		f := newVIPDisableFix(t, vipDisableOpts{tasks: true})
+		f.enabled()
+
+		job := f.disableVIP()
+		// The key secret is still tried and removed; the row is kept, since an address may still be held.
+		wantSwitchOffLeft(t, f, job, ingressdeploy.ItemVIPWaitTasks, ingressdeploy.ItemVIPRemoveSecret)
+		if it := itemOf(job, ingressdeploy.ItemVIPForget); it.State != jobs.ItemSkipped || it.Code != ingressdeploy.CodeNotRun {
+			t.Errorf("forget = %q (code %q), want skipped and not_run", it.State, it.Code)
+		}
+		if got := f.keepalivedSecrets(); len(got) != 0 {
+			t.Errorf("key secrets = %v, want the secret tried and removed", got)
+		}
+		// Sixty seconds of the injected clock, polled every PollInterval, and no real wait.
+		if got, max := f.clock.waited(), int(ingressdeploy.VIPDisableTaskDeadline/stackops.PollInterval)+1; got < max-1 || got > max {
+			t.Errorf("waited %d times, want about %d", got, max)
+		}
+
+		f.fake.Reconfigure(f.base)
+		wantVIPDisableDone(t, f.disableVIP())
+	})
+}
+
+// TestDisableVIPRefusals: a switch-off with no virtual IP is ErrVIPNotEnabled for the preview and the job, a held lock is a
+// LockedError with nothing written, and a manager that does not allow privileged services does not block a switch-off, since
+// removing a service is not an escalation (D-19).
+func TestDisableVIPRefusals(t *testing.T) {
+	t.Run("no virtual IP", func(t *testing.T) {
+		f := newVIPDisableFix(t, vipDisableOpts{})
+		ctx := testsupport.Context(t)
+		if _, err := f.svc.PreviewVIPDisable(ctx, f.envID); !errors.Is(err, ingressdeploy.ErrVIPNotEnabled) {
+			t.Errorf("PreviewVIPDisable = %v, want ErrVIPNotEnabled", err)
+		}
+		if _, err := f.svc.DisableVIP(ctx, testActor, testOwner, f.envID); !errors.Is(err, ingressdeploy.ErrVIPNotEnabled) {
+			t.Errorf("DisableVIP = %v, want ErrVIPNotEnabled", err)
+		}
+		if w := f.fake.Writes(); len(w) != 0 {
+			t.Errorf("wrote %v", w)
+		}
+		if _, held := f.locks.Held(f.envID); held {
+			t.Error("the operation lock is still held")
+		}
+	})
+
+	t.Run("the lock is held", func(t *testing.T) {
+		f := newVIPDisableFix(t, vipDisableOpts{})
+		ctx := testsupport.Context(t)
+		f.enabled()
+		release, _, ok := f.locks.TryAcquire(f.envID, stackops.Holder{Kind: stackops.HolderKindIngress, By: "user:someone-else", Started: time.Now()})
+		if !ok {
+			t.Fatal("could not take the lock")
+		}
+		defer release()
+		writes := len(f.fake.Writes())
+
+		_, err := f.svc.DisableVIP(ctx, testActor, testOwner, f.envID)
+		var locked *ingressdeploy.LockedError
+		if !errors.As(err, &locked) || locked.Holder.By != "user:someone-else" {
+			t.Fatalf("DisableVIP = %v, want a LockedError naming the holder", err)
+		}
+		if got := len(f.fake.Writes()); got != writes {
+			t.Errorf("a refused switch-off wrote %v", f.fake.Writes()[writes:])
+		}
+		if row, err := f.istore.GetVIP(ctx, f.envID); err != nil || !row.Enabled {
+			t.Errorf("row = %+v, %v; want it untouched and enabled", row, err)
+		}
+	})
+
+	t.Run("a manager refuses privileged services", func(t *testing.T) {
+		f := newVIPDisableFix(t, vipDisableOpts{})
+		f.enabled()
+		f.managers.set(vipManagerRows(envs.ManagerAllows, envs.ManagerRefuses, envs.ManagerUnknown), nil)
+
+		pv, err := f.svc.PreviewVIPDisable(testsupport.Context(t), f.envID)
+		if err != nil || pv.Service == "" {
+			t.Errorf("PreviewVIPDisable = %+v, %v; want the service named", pv, err)
+		}
+		wantVIPDisableDone(t, f.disableVIP())
+	})
+}
+
+// vipAgentEngine answers OnNode with the engine of the node whose agent ID is asked for, as the node's agent would, and every
+// other call as the engine it wraps.
+type vipAgentEngine struct {
+	ingressdeploy.Engine
+	clis map[string]*dockerx.Client
+}
+
+func (e *vipAgentEngine) OnNode(ctx context.Context, envID, agentID string, fn func(*dockerx.Client) error) error {
+	if c, ok := e.clis[agentID]; ok {
+		return fn(c)
+	}
+	return e.Engine.OnNode(ctx, envID, agentID, fn)
+}
+
+// TestDisableVIPRecordsTheLastMove: with the reader showing node-a as the holder, a switch-off marks the environment as being
+// disabled and reads the nodes while it waits, so the holder's STOP and the address landing on node-b are one move recorded
+// with the reason disabled, and not as a failure of the holder.
+func TestDisableVIPRecordsTheLastMove(t *testing.T) {
+	labels := ingress.KeepalivedLabels()
+	newNode := func(id string) (*dockertest.Fake, *dockerx.Client) {
+		fake := dockertest.NewFake(t, dockertest.FakeConfig{Containers: []dockertest.FakeContainer{{
+			ID: id, Names: []string{"/" + id}, State: "running", Labels: labels,
+		}}})
+		cli, err := dockerx.New(fake)
+		if err != nil {
+			t.Fatalf("dockerx.New: %v", err)
+		}
+		t.Cleanup(func() { _ = cli.Close() })
+		return fake, cli
+	}
+	fa, ca := newNode("ka-a")
+	fb, cb := newNode("ka-b")
+	f := newVIPDisableFix(t, vipDisableOpts{tasks: true, deps: func(d *ingressdeploy.Deps) {
+		d.Engine = &vipAgentEngine{Engine: d.Engine, clis: map[string]*dockerx.Client{"agent-a": ca, "agent-b": cb}}
+	}})
+	f.envs.set(func(i *ingressdeploy.EnvInfo) {
+		i.Nodes = []ingressdeploy.NodeInfo{
+			{SwarmNodeID: vipNodeA, AgentID: "agent-a", Name: "node-a", Role: "manager", Connected: true},
+			{SwarmNodeID: vipNodeB, AgentID: "agent-b", Name: "node-b", Role: "manager", Connected: true},
+		}
+	})
+	ctx := testsupport.Context(t)
+	f.enabled()
+
+	fa.AppendLogs("ka-a",
+		logLine(t, vipT0, ingressbundle.VIPEvent{Event: ingressbundle.VIPEventStart, Node: vipNodeA, Seq: 1, Iface: "eth0"}),
+		logLine(t, vipT0.Add(time.Second), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateMaster, "")),
+	)
+	fb.AppendLogs("ka-b",
+		logLine(t, vipT0, ingressbundle.VIPEvent{Event: ingressbundle.VIPEventStart, Node: vipNodeB, Seq: 1, Iface: "eth0"}),
+		logLine(t, vipT0.Add(time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, "")),
+	)
+	f.svc.ReadVIPOnce(ctx, f.envID)
+	if got := f.svc.VIPHolders(f.envID); len(got) != 1 || got[0].Hostname != "node-a" {
+		t.Fatalf("holders before the switch-off = %+v, want node-a", got)
+	}
+
+	// The holder stops with the service and the other node takes the address, as the swarm's tasks end one after the other.
+	f.clock.hook = func(n int) {
+		switch n {
+		case 1:
+			fa.AppendLogs("ka-a", logLine(t, vipT0.Add(10*time.Second), vipStateEvent(vipNodeA, 3, ingressbundle.VIPStateStop, "")))
+			fb.AppendLogs("ka-b", logLine(t, vipT0.Add(11*time.Second), vipStateEvent(vipNodeB, 3, ingressbundle.VIPStateMaster, "")))
+		case 2:
+			f.fake.Reconfigure(f.base)
+		}
+	}
+	wantVIPDisableDone(t, f.disableVIP())
+
+	moves, err := f.istore.VIPMovesSince(ctx, f.envID, time.Time{})
+	if err != nil {
+		t.Fatalf("VIPMovesSince: %v", err)
+	}
+	if len(moves) != 1 {
+		t.Fatalf("%d moves stored, want the one: %+v", len(moves), moves)
+	}
+	if m := moves[0]; m.FromNodeName != "node-a" || m.ToNodeName != "node-b" || m.Reason != ingressdeploy.VIPMoveDisabled {
+		t.Errorf("move = %+v, want node-a to node-b with reason %q", m, ingressdeploy.VIPMoveDisabled)
 	}
 }
