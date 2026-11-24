@@ -232,11 +232,14 @@ func TestVIPEnableHoldsOnSwarm(t *testing.T) {
 
 // TestVIPMovesWhenTheHolderProxyStops is D-29, VIP-02 and VIP-03: stopping the holder's proxy container makes the other node
 // hold the address within vipMoveBound, the reader stores the move with the reason probe_failing, and when swarm runs a proxy
-// on the old holder again the old holder stays BACKUP and the address stays where it moved (nopreempt).
+// on the old holder again the old holder stays BACKUP and the address stays where it moved (nopreempt). The moves stored
+// before the proxy is stopped are counted and left out: two helpers that both claim the address at the first election are
+// stored as a move, which is not what this test is about.
 func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 	e := startVIPEnv(t)
 	_, holder := e.awaitHeld()
 	other := e.otherThan(holder)
+	first := len(e.moves())
 
 	stopped := e.proxyContainer(holder)
 	if stopped == "" {
@@ -251,7 +254,7 @@ func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 
 	dockertest.Wait(t, vipReadBound, "the reader to store the move from "+holder.Hostname+" to "+other.Hostname, func() (bool, string) {
 		rows := e.moves()
-		return len(rows) == 1, fmt.Sprintf("%d moves", len(rows))
+		return len(rows) == first+1, fmt.Sprintf("%d moves, %d before the proxy was stopped", len(rows), first)
 	})
 	mv := e.moves()[0]
 	if mv.FromNodeID != e.ids[holder] || mv.ToNodeID != e.ids[other] || mv.FromNodeName != holder.Hostname || mv.ToNodeName != other.Hostname || mv.Reason != "probe_failing" {
@@ -289,8 +292,8 @@ func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 	}); v != "" {
 		t.Fatalf("nopreempt violated: %s", v)
 	}
-	if rows := e.moves(); len(rows) != 1 {
-		t.Errorf("%d moves after the old holder came back, want the one", len(rows))
+	if rows := e.moves(); len(rows) != first+1 {
+		t.Errorf("%d moves after the old holder came back, want %d: the one the stop made", len(rows), first+1)
 	}
 }
 
@@ -298,19 +301,29 @@ func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 // no stored row and the address on no node's interface. A move the reader stored while the switch-off ran has the reason
 // disabled.
 //
-// Whether any move is stored is not asserted: the service's removal stops every node's keepalived together, so the other node
-// is usually stopped before the holder's priority-0 advert promotes it, and the reader records only moves between two nodes
-// (D-23), never the address leaving for no node. Measured on engine 29 with two nodes: none stored. What is asserted is that a
-// move that does land in the window is never given another reason.
+// Whether any move is stored during the switch-off is not asserted: the service's removal stops every node's keepalived
+// together, so the other node is sometimes stopped before the holder's priority-0 advert promotes it, and the reader records
+// only moves between two nodes (D-23), never the address leaving for no node. What is asserted is that a move that does land
+// in the window is never given another reason. A move stored before the switch-off began (two helpers that both claimed the
+// address at the first election) is not the switch-off's and is left out.
 func TestVIPDisableLeavesNothing(t *testing.T) {
 	e := startVIPEnv(t)
-	e.awaitHeld()
+	_, holder := e.awaitHeld()
+	before := map[int64]bool{}
+	for _, m := range e.moves() {
+		before[m.ID] = true
+		t.Logf("before the switch-off: move %d from %s to %s (%s) at %s", m.ID, m.FromNodeName, m.ToNodeName, m.Reason, m.At.Format(time.RFC3339Nano))
+	}
 
 	job := e.disableVIP()
 	requireJobDone(t, job)
 	e.requireVIPGone()
 
 	for _, m := range e.moves() {
+		if before[m.ID] {
+			continue
+		}
+		t.Logf("during the switch-off (holder was %s): move %d from %s to %s (%s)", holder.Hostname, m.ID, m.FromNodeName, m.ToNodeName, m.Reason)
 		if m.Reason != "disabled" {
 			t.Errorf("a move from %s to %s stored during the switch-off has the reason %q, want disabled", m.FromNodeName, m.ToNodeName, m.Reason)
 		}
