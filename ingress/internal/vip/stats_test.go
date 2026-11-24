@@ -41,7 +41,7 @@ func (c *instantClock) After(d time.Duration) <-chan time.Time {
 
 func testdata(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile("testdata/" + name)
+	b, err := os.ReadFile("testdata/" + name) //nolint:gosec // G304: a fixed testdata name
 	if err != nil {
 		t.Fatalf("read %s: %v", name, err)
 	}

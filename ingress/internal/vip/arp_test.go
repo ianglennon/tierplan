@@ -35,7 +35,6 @@ type fakeProber struct {
 	script   []answer
 	calls    int
 	listens  int
-	asked    []string
 	onARP    func() // runs inside each ARPProbe
 	lastIf   string
 	lastAddr netip.Addr
@@ -228,7 +227,7 @@ func TestAddressCheckRecheck(t *testing.T) {
 
 	t.Run("a stale flag from a previous run is removed at the start", func(t *testing.T) {
 		r := newCheckerRig(t, answer{})
-		if err := os.MkdirAll(filepath.Dir(r.flag), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(r.flag), 0o750); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(r.flag, []byte("x"), 0o600); err != nil {

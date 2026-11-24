@@ -40,7 +40,7 @@ const (
 
 // vipCodeMessages are the sentences of the job's codes, built here and never from an engine's answer. A code that is not
 // here is read from codeMessages (not_run).
-var vipCodeMessages = map[string]string{
+var vipCodeMessages = map[string]string{ //nolint:gosec // G101: job codes and their sentences, not credentials
 	CodeVIPKeyFailed:     "The VRRP key could not be made or sealed.",
 	CodeVIPSecretFailed:  "The VRRP key could not be stored as a swarm secret.",
 	CodeVIPServiceFailed: "The keepalived service could not be created or updated.",

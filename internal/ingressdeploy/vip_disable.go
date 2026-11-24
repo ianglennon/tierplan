@@ -28,8 +28,8 @@ const JobKindVIPDisable = "ingress_vip_disable"
 // The items of the virtual IP switch-off, in the order they run (D-16, D-17).
 const (
 	ItemVIPRemoveService = "vip_remove_service"
-	ItemVIPWaitTasks     = "vip_wait_tasks"
-	ItemVIPRemoveSecret  = "vip_remove_secret"
+	ItemVIPWaitTasks     = "vip_wait_tasks"    //nolint:gosec // G101: an item name that holds the letters "pw", not a credential
+	ItemVIPRemoveSecret  = "vip_remove_secret" //nolint:gosec // G101: an item name, not a credential
 	ItemVIPForget        = "vip_forget"
 )
 
@@ -48,14 +48,14 @@ const VIPDisableTaskDeadline = 60 * time.Second
 // vipDisableItems are the items of the switch-off in order, and vipDisableLabels their lines.
 var (
 	vipDisableItems  = []string{ItemVIPRemoveService, ItemVIPWaitTasks, ItemVIPRemoveSecret, ItemVIPForget}
-	vipDisableLabels = map[string]string{
+	vipDisableLabels = map[string]string{ //nolint:gosec // G101: item names and their lines, not credentials
 		ItemVIPRemoveService: "Remove the virtual IP service",
 		ItemVIPWaitTasks:     "Wait for every node to release the address",
 		ItemVIPRemoveSecret:  "Remove the virtual IP key",
 		ItemVIPForget:        "Switch the virtual IP off",
 	}
 	// vipDisableMessages are the sentences of a failed item, built here and never from an engine's answer.
-	vipDisableMessages = map[string]string{
+	vipDisableMessages = map[string]string{ //nolint:gosec // G101: item names and their sentences, not credentials
 		ItemVIPRemoveService: "The keepalived service could not be removed.",
 		ItemVIPWaitTasks:     "The keepalived tasks did not all stop in time, so an address may still be held.",
 		ItemVIPRemoveSecret:  "The virtual IP key could not be removed from the swarm.",

@@ -22,7 +22,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
-	"github.com/moby/moby/client"
+	"github.com/moby/moby/client" //nolint:depguard // the dind rig talks to its own engines, as the dockerx integration tests do
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
@@ -195,7 +195,7 @@ func (r *vipHelperRig) start(name string, addr netip.Prefix, routerID int) *vhSe
 		Image: vhImage, Address: addr, RouterID: routerID, SecretName: secretName,
 	})
 	spec.TaskTemplate.ContainerSpec.Secrets[0].SecretID = sec.ID
-	spec.Annotations.Name = name
+	spec.Name = name
 	res, err := r.mgr.ServiceCreate(ctx, client.ServiceCreateOptions{Spec: spec})
 	if err != nil {
 		r.t.Fatalf("create the keepalived service %s on engine %s: %v", name, r.sw.Engine, err)
@@ -770,15 +770,15 @@ func TestVIPHelperDiscoveryFault(t *testing.T) {
 	for _, n := range r.sw.Nodes() {
 		faults := 0
 		for _, e := range r.taskLog(n, odd.name) {
-			switch {
-			case e.Event == ingressbundle.VIPEventFault:
+			switch e.Event {
+			case ingressbundle.VIPEventFault:
 				faults++
 				if e.Reason != ingressbundle.VIPReasonNoInterface || !e.Active {
 					t.Errorf("%s wrote fault %q active=%v, want only no_interface active", n.Hostname, e.Reason, e.Active)
 				}
-			case e.Event == ingressbundle.VIPEventState:
+			case ingressbundle.VIPEventState:
 				t.Errorf("%s wrote state %s with no interface to hold the address on", n.Hostname, e.State)
-			case e.Event == ingressbundle.VIPEventStart:
+			case ingressbundle.VIPEventStart:
 				t.Errorf("%s wrote a start line with no interface", n.Hostname)
 			}
 		}

@@ -34,7 +34,7 @@ type stage struct {
 // readFile reads a repository file relative to this directory.
 func readFile(t *testing.T, path string) string {
 	t.Helper()
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: a fixed repository file named by this test
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}

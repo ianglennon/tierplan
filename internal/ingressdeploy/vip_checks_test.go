@@ -350,7 +350,7 @@ func TestDerivedRouterID(t *testing.T) {
 	}
 
 	t.Run("always in 1 to 255", func(t *testing.T) {
-		rng := rand.New(rand.NewPCG(26, 6))
+		rng := rand.New(rand.NewPCG(26, 6)) //nolint:gosec // G404: a seeded generator for test vectors, not a secret
 		const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 		seen := map[int]bool{}
 		for range 1000 {
@@ -370,7 +370,8 @@ func TestDerivedRouterID(t *testing.T) {
 	})
 
 	t.Run("the same cluster gives the same ID", func(t *testing.T) {
-		if ingressdeploy.DerivedRouterID("swarm-a") != ingressdeploy.DerivedRouterID("swarm-a") {
+		first := ingressdeploy.DerivedRouterID("swarm-a")
+		if again := ingressdeploy.DerivedRouterID("swarm-a"); again != first {
 			t.Error("not deterministic")
 		}
 	})

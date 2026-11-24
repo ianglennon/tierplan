@@ -69,7 +69,7 @@ func delAddrMessage(ifindex int, p netip.Prefix, seq uint32) []byte {
 	ne := binary.NativeEndian
 
 	// nlmsghdr: length, type, flags, sequence, port (0: the kernel).
-	ne.PutUint32(b[0:], uint32(total))
+	ne.PutUint32(b[0:], uint32(total)) //nolint:gosec // G115: the message is a few dozen bytes
 	ne.PutUint16(b[4:], syscall.RTM_DELADDR)
 	ne.PutUint16(b[6:], syscall.NLM_F_REQUEST|syscall.NLM_F_ACK)
 	ne.PutUint32(b[8:], seq)
@@ -78,8 +78,8 @@ func delAddrMessage(ifindex int, p netip.Prefix, seq uint32) []byte {
 	// ifaddrmsg: family, prefix length, flags, scope, interface index.
 	off := syscall.SizeofNlMsghdr
 	b[off] = syscall.AF_INET
-	b[off+1] = byte(p.Bits())
-	ne.PutUint32(b[off+4:], uint32(ifindex))
+	b[off+1] = byte(p.Bits())                //nolint:gosec // G115: a prefix length is 0 to 32
+	ne.PutUint32(b[off+4:], uint32(ifindex)) //nolint:gosec // G115: an interface index is a small positive number
 
 	// The two attributes: length, type, the four address bytes.
 	off += align4(syscall.SizeofIfAddrmsg)
@@ -106,8 +106,8 @@ func parseAck(b []byte, seq uint32) error {
 			if length < syscall.SizeofNlMsghdr+4 {
 				return errors.New("short netlink error reply")
 			}
-			if code := int32(ne.Uint32(b[syscall.SizeofNlMsghdr:])); code != 0 {
-				return fmt.Errorf("netlink: %w", syscall.Errno(-code))
+			if code := int32(ne.Uint32(b[syscall.SizeofNlMsghdr:])); code != 0 { //nolint:gosec // G115: the kernel answers a negated errno that fits an int32
+				return fmt.Errorf("netlink: %w", syscall.Errno(-code)) //nolint:gosec // G115: a small errno
 			}
 			return nil
 		}

@@ -440,7 +440,7 @@ func exitText(err error) string {
 	case err == nil:
 		return "exit status 0"
 	case errors.As(err, &ee):
-		return ee.ProcessState.String()
+		return ee.String()
 	}
 	return "wait failed"
 }

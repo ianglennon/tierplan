@@ -252,7 +252,7 @@ func vipProxyContainer(t *testing.T, n *dockertest.Node) string {
 func vipLeft(t *testing.T, mgr *dockertest.Node) []string {
 	t.Helper()
 	var left []string
-	for kind, line := range map[string]string{
+	for kind, line := range map[string]string{ //nolint:gosec // G101: shell lines that list names, not credentials
 		"service": "docker service ls --format '{{.Name}}'",
 		"secret":  "docker secret ls --format '{{.Name}}'",
 		"network": "docker network ls --format '{{.Name}}'",

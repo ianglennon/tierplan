@@ -48,10 +48,10 @@ func TestDelAddrMessage(t *testing.T) {
 func ackMessage(typ uint16, seq uint32, code int32) []byte {
 	b := make([]byte, syscall.SizeofNlMsghdr+4+syscall.SizeofNlMsghdr)
 	ne := binary.NativeEndian
-	ne.PutUint32(b[0:], uint32(len(b)))
+	ne.PutUint32(b[0:], uint32(len(b))) //nolint:gosec // G115: a test message of a few bytes
 	ne.PutUint16(b[4:], typ)
 	ne.PutUint32(b[8:], seq)
-	ne.PutUint32(b[syscall.SizeofNlMsghdr:], uint32(code))
+	ne.PutUint32(b[syscall.SizeofNlMsghdr:], uint32(code)) //nolint:gosec // G115: a test code that fits
 	return b
 }
 

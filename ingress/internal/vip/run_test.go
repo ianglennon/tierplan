@@ -137,7 +137,7 @@ func TestHelperFakeKeepalived(t *testing.T) {
 	if mode == "" {
 		t.Skip("only runs as the fake keepalived child")
 	}
-	f, err := os.OpenFile(os.Getenv(envFakeFIFO), os.O_RDWR, 0)
+	f, err := os.OpenFile(os.Getenv(envFakeFIFO), os.O_RDWR, 0) //nolint:gosec // G703: the path is this test's own fixture, set by the parent test
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fake keepalived:", err)
 		os.Exit(3)
@@ -172,7 +172,7 @@ func TestHelperFakeKeepalived(t *testing.T) {
 			continue
 		}
 		if mark := os.Getenv(envFakeMark); mark != "" {
-			_ = os.WriteFile(mark, []byte("TERM"), 0o600)
+			_ = os.WriteFile(mark, []byte("TERM"), 0o600) //nolint:gosec // G703: the path is this test's own fixture, set by the parent test
 		}
 		write(fifoLine("STOP"))
 		os.Exit(0)
