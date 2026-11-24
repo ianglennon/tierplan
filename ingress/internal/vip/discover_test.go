@@ -48,7 +48,7 @@ func TestDiscover(t *testing.T) {
 		{name: "an address outside the prefix is no_interface and the interface is seen",
 			ifs: []Interface{iface("eth0", "10.0.0.5/24")}, wantReason: ingressbundle.VIPReasonNoInterface, wantSeen: []string{"eth0"}},
 		{name: "two interfaces in the prefix are ambiguous and sorted",
-			ifs: []Interface{iface("eth0", "192.168.1.10/24"), iface("ens18", "192.168.1.11/24")},
+			ifs:        []Interface{iface("eth0", "192.168.1.10/24"), iface("ens18", "192.168.1.11/24")},
 			wantReason: ingressbundle.VIPReasonAmbiguousInterface, wantSeen: []string{"ens18", "eth0"}},
 		{name: "an IPv6-only interface is skipped",
 			ifs: []Interface{iface("eth1", "fd00::1/64"), iface("eth0", "192.168.1.10/24")}, want: "eth0"},

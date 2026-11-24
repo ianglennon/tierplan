@@ -6,6 +6,7 @@ package vip
 import (
 	"net"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -68,7 +69,18 @@ var (
 	excludedPrefixes = []string{"br-", "veth", "vx-", "vxlan", "ov-", "cali", "flannel", "cni", "tun", "tap"}
 )
 
+// reportable is a name the helper can render into keepalived.conf and write into an event line: at most 15
+// characters from a set with no space, slash or control character. The kernel allows more, but such a name
+// could not be reported, so it is treated as an excluded interface rather than chosen and then refused.
+var reportable = regexp.MustCompile(`^[A-Za-z0-9._-]{1,15}$`)
+
+// maxSeen is the most interface names a DiscoverError carries, the event line's bound.
+const maxSeen = 8
+
 func excluded(name string) bool {
+	if !reportable.MatchString(name) {
+		return true
+	}
 	if slices.Contains(excludedNames, name) {
 		return true
 	}
@@ -115,7 +127,13 @@ func Discover(list Lister, p netip.Prefix) (string, error) {
 	case 1:
 		return match[0], nil
 	case 0:
-		return "", &DiscoverError{Reason: ingressbundle.VIPReasonNoInterface, Seen: seen}
+		return "", &DiscoverError{Reason: ingressbundle.VIPReasonNoInterface, Seen: bounded(seen)}
 	}
-	return "", &DiscoverError{Reason: ingressbundle.VIPReasonAmbiguousInterface, Seen: match}
+	return "", &DiscoverError{Reason: ingressbundle.VIPReasonAmbiguousInterface, Seen: bounded(match)}
+}
+
+// bounded sorts names and keeps the first maxSeen, so the same host always reports the same list.
+func bounded(names []string) []string {
+	slices.Sort(names)
+	return names[:min(len(names), maxSeen)]
 }
