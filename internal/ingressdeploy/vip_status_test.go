@@ -56,6 +56,12 @@ type statusRig struct {
 // newStatusRig builds the rig over tasks, the keepalived tasks of the fake swarm.
 func newStatusRig(t *testing.T, tasks ...swarm.Task) *statusRig {
 	t.Helper()
+	return newStatusRigAt(t, time.Time{}, tasks...)
+}
+
+// newStatusRigAt is newStatusRig with the deployer's clock standing at the instant, unless it is the zero time.
+func newStatusRigAt(t *testing.T, at time.Time, tasks ...swarm.Task) *statusRig {
+	t.Helper()
 	s := &statusRig{nodes: &statusNodes{}, managers: &statusManagers{}}
 	s.rig = newRig(t, rigOptions{
 		config: func(c *dockertest.FakeConfig) {
@@ -69,6 +75,9 @@ func newStatusRig(t *testing.T, tasks ...swarm.Task) *statusRig {
 			d.Nodes = s.nodes
 			d.Managers = s.managers
 			d.CurrentBundle = func(string) (string, bool) { return statusBundle, true }
+			if !at.IsZero() {
+				d.Clock = fixedClock{at: at}
+			}
 		},
 	})
 	err := s.istore.PutVIP(testsupport.Context(t), ingressstore.VIPConfig{

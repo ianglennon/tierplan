@@ -73,6 +73,8 @@ type SeedNode struct {
 	ForeignSender                   string
 	ClockSkew                       bool
 	LastHeard                       time.Time
+	// TaskStarted is when the node's helper last started.
+	TaskStarted time.Time
 }
 
 // SeedVIPState replaces the reader's memory of the environment with the nodes and the instant the address lost its holder.
@@ -84,7 +86,7 @@ func (s *Service) SeedVIPState(envID string, nodes []SeedNode, holderlessSince t
 	for _, n := range nodes {
 		view.Nodes[n.NodeID] = vipNode{
 			NodeID: n.NodeID, Hostname: n.Hostname, State: n.State, Reason: n.Reason, Faults: map[string]bool{},
-			Foreign: n.Foreign, ForeignSender: n.ForeignSender, ClockSkew: n.ClockSkew, LastHeard: n.LastHeard,
+			Foreign: n.Foreign, ForeignSender: n.ForeignSender, ClockSkew: n.ClockSkew, LastHeard: n.LastHeard, TaskStarted: n.TaskStarted,
 		}
 	}
 	e.view = view

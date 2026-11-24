@@ -4,6 +4,8 @@
 package envs
 
 import (
+	"net/netip"
+	"slices"
 	"time"
 )
 
@@ -112,6 +114,31 @@ func VIPWarnings(envID, envName string, f VIPFacts, agents []AgentState, now tim
 	if w, ok := vipNoHolder(base, f, now); ok {
 		out = append(out, w)
 	}
+	if len(f.Holders) > 1 {
+		w := base
+		w.ID, w.Severity, w.Count = WarnVIPMultipleHolders, SeverityWarning, len(f.Holders)
+		w.VIP = &VIPWarningFacts{Address: f.Address}
+		out = append(out, w)
+	}
+	if w, ok := vipMoved(base, f, now); ok {
+		out = append(out, w)
+	}
+	if f.ForeignRouter {
+		w := base
+		w.ID, w.Severity = WarnVIPForeignRouter, SeverityWarning
+		w.VIP = &VIPWarningFacts{Address: f.Address, RouterID: f.RouterID, Sender: validSender(f.ForeignSender)}
+		out = append(out, w)
+	}
+	out = append(out, vipClockItems(base, f, agents)...)
+	if len(f.PrivilegedLost) > 0 {
+		w := base
+		w.ID, w.Severity, w.Count = WarnVIPPrivilegedLost, SeverityWarning, len(f.PrivilegedLost)
+		if len(f.PrivilegedLost) == 1 {
+			w.Node = cleanText(f.PrivilegedLost[0], maxNodeLen)
+		}
+		w.VIP = &VIPWarningFacts{Address: f.Address}
+		out = append(out, w)
+	}
 	SortWarnings(out)
 	return out
 }
@@ -131,4 +158,85 @@ func vipNoHolder(base EnvWarning, f VIPFacts, now time.Time) (EnvWarning, bool) 
 	w.ID, w.Severity, w.Since = WarnVIPNoHolder, SeverityError, f.NoHolderSince
 	w.VIP = &VIPWarningFacts{Address: f.Address}
 	return w, true
+}
+
+// vipMoveReasons are the reasons of a move that raise a bell item. A move with reason disabled raises none: the virtual IP is
+// gone and there is nothing to act on (U-06). Any other value reads as unknown, so a reason that is not on the list never
+// reaches the bell.
+var vipMoveReasons = []string{"holder_failed", "probe_failing", "drain_handoff", "unknown"}
+
+// vipMoved is the one item for the moves of the last VIPMovedWindow, with the count and the latest move's facts. One item per
+// environment however many moves there were, so a flapping address cannot flood the bell (T-26-49).
+func vipMoved(base EnvWarning, f VIPFacts, now time.Time) (EnvWarning, bool) {
+	var latest VIPMoveFact
+	count := 0
+	for _, m := range f.Moves {
+		if m.Reason == "disabled" || now.Sub(m.At) > VIPMovedWindow {
+			continue
+		}
+		if count == 0 || !m.At.Before(latest.At) {
+			latest = m
+		}
+		count++
+	}
+	if count == 0 {
+		return EnvWarning{}, false
+	}
+	reason := latest.Reason
+	if !slices.Contains(vipMoveReasons, reason) {
+		reason = "unknown"
+	}
+	w := base
+	w.ID, w.Severity, w.Count, w.Since = WarnVIPMoved, SeverityWarning, count, latest.At
+	w.VIP = &VIPWarningFacts{
+		Address: f.Address, MoveReason: reason,
+		From: cleanText(latest.From, maxNodeLen), To: cleanText(latest.To, maxNodeLen),
+	}
+	return w, true
+}
+
+// validSender is a foreign router's address when it parses as one, and "" otherwise: the text comes from a network log line.
+func validSender(s string) string {
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return ""
+	}
+	return a.String()
+}
+
+// vipClockItems are the clock items, one per node: a node whose helper reports clock skew, and a node whose agent's clock is
+// at or above half the authentication window out of step with the server's (two clocks that far apart on opposite sides are
+// a whole window apart). A node both name is one item, with the agent's offset.
+func vipClockItems(base EnvWarning, f VIPFacts, agents []AgentState) []EnvWarning {
+	window := int(f.AuthWindow / time.Second)
+	items := map[string]EnvWarning{}
+	item := func(node string) EnvWarning {
+		w, ok := items[node]
+		if !ok {
+			w = base
+			w.ID, w.Severity, w.Node = WarnVIPClockSkew, SeverityWarning, node
+			w.VIP = &VIPWarningFacts{Address: f.Address, WindowSeconds: window}
+		}
+		return w
+	}
+	for _, c := range f.ClockNodes {
+		node := cleanText(c.Host, maxNodeLen)
+		items[node] = item(node)
+	}
+	if f.AuthWindow > 0 {
+		for _, a := range agents {
+			if a.Revoked || abs(a.ClockOffset) < f.AuthWindow/2 {
+				continue
+			}
+			node := cleanText(a.Node, maxNodeLen)
+			w := item(node)
+			w.AgentID, w.Offset, w.Standby = a.ID, a.ClockOffset, a.Standby
+			items[node] = w
+		}
+	}
+	out := make([]EnvWarning, 0, len(items))
+	for _, w := range items {
+		out = append(out, w)
+	}
+	return out
 }
