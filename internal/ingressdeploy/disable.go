@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 )
@@ -32,6 +34,8 @@ const JobKindDisable = "ingress_disable"
 
 // The items of the disable job, in the order they run. token, network and service are the enable job's words too.
 const (
+	// ItemVirtualIP is the first item of a swarm's switch-off: the virtual IP goes before the proxies it points at (D-17).
+	ItemVirtualIP = "virtual_ip"
 	ItemSwitchOff = "switch_off"
 	ItemVolumes   = "volumes"
 	ItemSecret    = "secret"
@@ -55,10 +59,11 @@ const (
 const CodeRoutesLive = "ingress_routes_live"
 
 // disableItems are the items of the job in order.
-var disableItems = []string{ItemSwitchOff, ItemService, ItemVolumes, ItemNetwork, ItemSecret, ItemToken, ItemNodes}
+var disableItems = []string{ItemVirtualIP, ItemSwitchOff, ItemService, ItemVolumes, ItemNetwork, ItemSecret, ItemToken, ItemNodes}
 
 // disableLabels are the lines of the job's steps.
 var disableLabels = map[string]string{
+	ItemVirtualIP: "Turn the virtual IP off",
 	ItemSwitchOff: "Stop serving routes",
 	ItemService:   "Remove the proxy service",
 	ItemVolumes:   "Wipe the certificate cache on each node",
@@ -70,6 +75,7 @@ var disableLabels = map[string]string{
 
 // disableMessages are the sentences of the failure codes, built here and never from an engine's answer.
 var disableMessages = map[string]string{
+	CodeVIPRemoveFailed:      "The virtual IP could not be removed, so ingress was left on.",
 	CodeDisableSwitchFailed:  "Ingress could not be switched off.",
 	CodeDisableServiceFailed: "The proxy service could not be removed.",
 	CodeDisableVolumesFailed: "The certificate cache could not be wiped.",
@@ -86,6 +92,14 @@ type NodeName struct {
 	ID, Name string
 }
 
+// DisableVIPRemoval is the virtual IP a switch-off of ingress removes first (D-17). It holds no key.
+type DisableVIPRemoval struct {
+	// Address is the virtual IP with the prefix length of its segment.
+	Address netip.Prefix
+	// SecretName is the name of the swarm secret that holds the virtual IP's key.
+	SecretName string
+}
+
 // DisableRemoves is what a switch-off would remove.
 type DisableRemoves struct {
 	// Service and Network are the names of the proxy service and the ingress network; empty when the swarm was read and does
@@ -98,6 +112,8 @@ type DisableRemoves struct {
 	// Volumes are the nodes whose certificate cache volume is wiped: every node of the swarm, the one host of a standalone
 	// environment. A node no agent covers has an empty ID.
 	Volumes []NodeName
+	// VirtualIP is the environment's virtual IP, which goes before the proxy service; nil when it has none and for a standalone host.
+	VirtualIP *DisableVIPRemoval
 }
 
 // DisablePreview is what a switch-off would do and what would stop it.
@@ -252,6 +268,13 @@ func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func
 		}
 	}
 	res.Removes.Service, res.Removes.Network = ingress.ServiceName, ingress.NetworkName
+	switch cfg, err := s.d.Store.GetVIP(ctx, envID); {
+	case err == nil:
+		res.Removes.VirtualIP = &DisableVIPRemoval{Address: cfg.Prefix(), SecretName: KeepalivedSecretName(envID, cfg.KeyGeneration)}
+	case errors.Is(err, ingressstore.ErrVIPNotFound):
+	default:
+		return DisablePreview{}, err
+	}
 	if !info.ManagerConnected {
 		return res, nil
 	}
@@ -288,7 +311,8 @@ func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func
 }
 
 // Disable switches ingress off for a swarm environment. It takes the environment's operation lock, refuses while the
-// environment is paused or any claim with routes exists, and starts a job that stops delivery, removes the proxy service,
+// environment is paused or any claim with routes exists, and starts a job that first removes the virtual IP when the
+// environment has one (D-17), then stops delivery, removes the proxy service,
 // wipes the certificate cache volume on every node it can reach, removes the network and the join token secrets, disables
 // the join token and removes the node rows. A node it could not reach is queued, named in the job's result and wiped when its
 // agent connects (D-27). It returns the job's ID. A standalone environment runs the job of disableStandalone instead. A held
@@ -370,7 +394,7 @@ type disableRun struct {
 // nothing is retried and nothing is rolled back.
 func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, info EnvInfo) {
 	run := &disableRun{s: s, actor: actor, envID: info.ID, r: r, release: release, items: disableItems}
-	steps := []func(context.Context) error{run.switchOff, run.service, run.volumes, run.network, run.secret, run.token, run.nodes}
+	steps := []func(context.Context) error{run.virtualIP, run.switchOff, run.service, run.volumes, run.network, run.secret, run.token, run.nodes}
 	if !info.Swarm {
 		run.items = standaloneDisableItems
 		steps = []func(context.Context) error{run.switchOff, run.proxy, run.networkStandalone, run.volumeStandalone, run.token, run.nodes}
@@ -425,6 +449,28 @@ func (e *disableRun) skipFrom(i int, state, code string) {
 // done ends an item that went well.
 func (e *disableRun) done(item string, result map[string]string) {
 	e.r.Finish(item, jobs.ItemDone, "", "", result)
+}
+
+// virtualIP removes the environment's virtual IP before anything of the proxies is touched: a keepalived that outlives the
+// proxies it probes could only ever fail, and leaving it would leave the address, its service and its key behind (D-17,
+// PROH-26-06). It is removeVIP, the one removal the virtual IP's own switch-off and the ensure loop share, run under the lock
+// this job holds and reporting into no item of this job but its own. An environment with no virtual IP is done unchanged. A
+// removal that failed ends the item with vip_remove_failed and, because every item after it is not run, ingress stays on; the
+// virtual IP's row stays, switched off, for the ensure loop or another switch-off to finish.
+func (e *disableRun) virtualIP(ctx context.Context) error {
+	err := e.s.removeVIP(ctx, e.actor, e.envID, e.r, nil)
+	switch {
+	case errors.Is(err, ErrVIPNotEnabled):
+		e.done(ItemVirtualIP, map[string]string{"removed": "false"})
+		return nil
+	case err != nil:
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fail(CodeVIPRemoveFailed, err, vipLeftText)
+	}
+	e.done(ItemVirtualIP, map[string]string{"removed": "true"})
+	return nil
 }
 
 // switchOff stops delivery: ingress is turned off with ingress.disabled in the same transaction, which makes the hub send no
