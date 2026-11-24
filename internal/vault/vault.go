@@ -88,6 +88,11 @@ const (
 	ContextIngressOrderKey       = "ingress-order-key/v1/"    //nolint:gosec // G101: a sealing context label, not a credential
 	ContextIngressACMEAccountKey = "ingress-acme-account/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
+	// The virtual IP's VRRP key (Phase 26), under the environment's ID. It sits in ingress_vip.key_sealed,
+	// registered in SealedColumns so RewrapAll moves it. The key is the one value that never leaves its
+	// three places: the sealed column, the swarm secret and keepalived's memory.
+	ContextIngressVIPKey = "ingress-vip-key/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+
 	keyLen         = 32
 	keyIDDomain    = "tierplan/key-id/v1"
 	keyIDPrefix    = "k1-"

@@ -151,3 +151,161 @@ func TestVIPMoveRoundTrip(t *testing.T) {
 		t.Fatal("a move with a reason outside the five was stored")
 	}
 }
+
+// TestVIPMovesPruneTo500 pins the bound: 505 moves leave the newest 500 of that environment, and
+// another environment's rows are untouched.
+func TestVIPMovesPruneTo500(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedEnv(t, st, "env-b", "Beta")
+
+	for i := 0; i < 3; i++ {
+		if err := s.InsertVIPMove(ctx, VIPMove{EnvID: "env-b", At: fixedNow.Add(time.Duration(i) * time.Second), Reason: "unknown"}); err != nil {
+			t.Fatalf("insert for env-b: %v", err)
+		}
+	}
+	for i := 0; i < VIPMovesKept+5; i++ {
+		m := VIPMove{EnvID: "env-a", At: fixedNow.Add(time.Duration(i) * time.Second), ToNodeID: "n", Reason: "holder_failed"}
+		if err := s.InsertVIPMove(ctx, m); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_vip_moves WHERE env_id = 'env-a'`); n != VIPMovesKept {
+		t.Fatalf("env-a keeps %d moves, want %d", n, VIPMovesKept)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_vip_moves WHERE env_id = 'env-b'`); n != 3 {
+		t.Fatalf("env-b keeps %d moves, want 3 (another environment's pruning touched it)", n)
+	}
+	// The five oldest are the ones that went.
+	oldest := count(t, st, `SELECT COUNT(*) FROM ingress_vip_moves WHERE env_id = 'env-a' AND at < ?`, fixedNow.Add(5*time.Second).UnixNano())
+	if oldest != 0 {
+		t.Fatalf("%d of the five oldest moves survived the prune", oldest)
+	}
+	latest, ok, err := s.LatestVIPMove(ctx, "env-a")
+	if err != nil || !ok || !latest.At.Equal(fixedNow.Add(time.Duration(VIPMovesKept+4)*time.Second)) {
+		t.Fatalf("LatestVIPMove = %+v, %v, %v; want the 505th", latest, ok, err)
+	}
+}
+
+// TestVIPMovesOrderAndPaging pins the order and the keyset cursor: newest first, equal instants by
+// insertion id descending, two moves at one instant are two rows, and paging by two visits all five
+// once with the boundary falling inside the run of equal instants.
+func TestVIPMovesOrderAndPaging(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedEnv(t, st, "env-empty", "Empty")
+
+	// Inserted: three at the early instant, then two at the later one, with a name each to tell them apart.
+	early, late := fixedNow, fixedNow.Add(time.Hour)
+	for _, c := range []struct {
+		name string
+		at   time.Time
+	}{{"e1", early}, {"e2", early}, {"e3", early}, {"l1", late}, {"l2", late}} {
+		if err := s.InsertVIPMove(ctx, VIPMove{EnvID: "env-a", At: c.at, ToNodeName: c.name, Reason: "unknown"}); err != nil {
+			t.Fatalf("insert %s: %v", c.name, err)
+		}
+	}
+	want := []string{"l2", "l1", "e3", "e2", "e1"}
+
+	all, cur, err := s.ListVIPMoves(ctx, "env-a", nil, 10)
+	if err != nil || cur != nil {
+		t.Fatalf("one big page = %v, cursor %v; want no cursor", err, cur)
+	}
+	if got := moveNames(all); !equalStrings(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+
+	var paged []string
+	var cursor *VIPMoveCursor
+	pages := 0
+	for {
+		page, next, err := s.ListVIPMoves(ctx, "env-a", cursor, 2)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		paged = append(paged, moveNames(page)...)
+		pages++
+		if next == nil {
+			break
+		}
+		if pages > 5 {
+			t.Fatal("paging does not end")
+		}
+		cursor = next
+	}
+	if !equalStrings(paged, want) {
+		t.Fatalf("paged by 2 = %v, want %v (a boundary inside equal instants repeated or skipped a row)", paged, want)
+	}
+	if pages != 3 {
+		t.Fatalf("paging by 2 took %d pages, want 3", pages)
+	}
+
+	empty, cur, err := s.ListVIPMoves(ctx, "env-empty", nil, 10)
+	if err != nil || empty == nil || len(empty) != 0 || cur != nil {
+		t.Fatalf("an environment with no moves gave %#v, cursor %v, %v; want an empty non-nil slice and no cursor", empty, cur, err)
+	}
+
+	since, err := s.VIPMovesSince(ctx, "env-a", early)
+	if err != nil || len(since) != 2 {
+		t.Fatalf("VIPMovesSince(early) = %d moves, %v; want the two later ones", len(since), err)
+	}
+	none, err := s.VIPMovesSince(ctx, "env-empty", early)
+	if err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("VIPMovesSince of an empty environment = %#v, %v; want an empty non-nil slice", none, err)
+	}
+}
+
+func moveNames(ms []VIPMove) []string {
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, m.ToNodeName)
+	}
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestVIPRowsCascade pins that deleting the environment removes the virtual IP and its history, and
+// that a row for an environment that does not exist is refused.
+func TestVIPRowsCascade(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedEnv(t, st, "env-b", "Beta")
+	for _, id := range []string{"env-a", "env-b"} {
+		if err := s.PutVIP(ctx, vipFixture(id)); err != nil {
+			t.Fatalf("PutVIP %s: %v", id, err)
+		}
+		if err := s.InsertVIPMove(ctx, VIPMove{EnvID: id, At: fixedNow, Reason: "disabled"}); err != nil {
+			t.Fatalf("InsertVIPMove %s: %v", id, err)
+		}
+	}
+
+	if _, err := st.Write.Exec(`DELETE FROM environments WHERE id = 'env-a'`); err != nil {
+		t.Fatalf("delete the environment: %v", err)
+	}
+	for _, table := range []string{"ingress_vip", "ingress_vip_moves"} {
+		if n := count(t, st, `SELECT COUNT(*) FROM `+table+` WHERE env_id = 'env-a'`); n != 0 {
+			t.Fatalf("%s kept %d rows of the deleted environment", table, n)
+		}
+		if n := count(t, st, `SELECT COUNT(*) FROM `+table+` WHERE env_id = 'env-b'`); n != 1 {
+			t.Fatalf("%s has %d rows of the other environment, want 1", table, n)
+		}
+	}
+	if err := s.PutVIP(ctx, vipFixture("env-gone")); err == nil {
+		t.Fatal("a virtual IP for an environment that does not exist was stored")
+	}
+}
