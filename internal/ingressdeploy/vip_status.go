@@ -267,3 +267,10 @@ func (s *Service) VIPHolds(ctx context.Context, envID, swarmNodeID string) (hold
 	}
 	return holds, alone, nil
 }
+
+// VIPMoves reads one page of the address's moves, newest first by time and then by insertion order, for the history route
+// (D-23). before is nil for the first page, otherwise the cursor the previous page returned, which is nil on the last
+// page. The slice is never nil, and an environment with no moves, or no virtual IP, has an empty one.
+func (s *Service) VIPMoves(ctx context.Context, envID string, before *ingressstore.VIPMoveCursor, limit int) ([]ingressstore.VIPMove, *ingressstore.VIPMoveCursor, error) {
+	return s.d.Store.ListVIPMoves(ctx, envID, before, limit)
+}

@@ -317,6 +317,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterIngressCerts(r, d.IngressCerts)
 	api.RegisterIngressNodes(r, d.IngressNodes)
 	api.RegisterIngressDeploy(r, d.IngressDeploy)
+	api.RegisterIngressVIP(r, d.IngressDeploy)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
