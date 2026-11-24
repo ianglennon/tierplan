@@ -364,7 +364,8 @@ func TestVIPEntrypointPollsStatistics(t *testing.T) {
 	r := newRig(t, "lines")
 	dump := testdata(t, "stats-invalid-hmac.txt")
 	r.deps.RemoveFile = func(path string) error {
-		if path != StatsPath {
+		// The statistics file before each poll; the address flag is the check's, at the start.
+		if path != StatsPath && path != r.deps.FlagPath {
 			t.Errorf("removed %q, want %q", path, StatsPath)
 		}
 		return nil
@@ -390,4 +391,60 @@ func TestVIPEntrypointPollsStatistics(t *testing.T) {
 	if last := lines[len(lines)-1]; last.Event != ingressbundle.VIPEventState || last.State != ingressbundle.VIPStateStop {
 		t.Fatalf("last line = %+v, want STOP", last)
 	}
+}
+
+func TestClockSkewFromStats(t *testing.T) {
+	t.Run("a rising Stale counter sets clock_skew and three quiet polls clear it", func(t *testing.T) {
+		r := newStatsRig(t)
+		r.poll(statsText(authCounters{}))
+		if l := r.out.lines(); len(l) != 0 {
+			t.Fatalf("a clean poll wrote %q", l)
+		}
+		r.poll(statsText(authCounters{Stale: 2}))
+		evs := r.events()
+		if len(evs) != 1 || evs[0].Event != ingressbundle.VIPEventClockSkew || !evs[0].Active || evs[0].Counter != "" || evs[0].Addr != "" {
+			t.Fatalf("events = %+v, want one active clock_skew", evs)
+		}
+		r.poll(statsText(authCounters{Stale: 5})) // still rising: not written again
+		r.poll(statsText(authCounters{Stale: 5})) // quiet 1
+		r.poll(statsText(authCounters{Stale: 5})) // quiet 2
+		if n := len(r.out.lines()); n != 1 {
+			t.Fatalf("%d lines before the third quiet poll, want 1", n)
+		}
+		r.poll(statsText(authCounters{Stale: 5})) // quiet 3
+		evs = r.events()
+		if len(evs) != 2 || evs[1].Event != ingressbundle.VIPEventClockSkew || evs[1].Active {
+			t.Fatalf("events = %+v, want the clearing line", evs)
+		}
+	})
+
+	t.Run("clock skew and a foreign router are separate conditions", func(t *testing.T) {
+		r := newStatsRig(t)
+		r.poll(statsText(authCounters{Stale: 1, InvalidHMAC: 1}))
+		evs := r.events()
+		if len(evs) != 2 || evs[0].Event != ingressbundle.VIPEventForeignRouter || evs[1].Event != ingressbundle.VIPEventClockSkew {
+			t.Fatalf("events = %+v", evs)
+		}
+		// Only the foreign router keeps rising: the clock clears on its own count.
+		for i := range 3 {
+			r.poll(statsText(authCounters{Stale: 1, InvalidHMAC: uint64(2 + i)}))
+		}
+		evs = r.events()
+		if len(evs) != 3 || evs[2].Event != ingressbundle.VIPEventClockSkew || evs[2].Active {
+			t.Fatalf("events = %+v, want the clock cleared and the foreign router still active", evs)
+		}
+	})
+
+	t.Run("a missing or unreadable file is skipped without a line", func(t *testing.T) {
+		r := newStatsRig(t)
+		r.poll("")
+		r.poll("VRRP Instance: " + InstanceName + "\n  Authentication Extension Errors:\n    Missing: 0\n") // cut off
+		r.poll("not a statistics file")
+		if l := r.out.lines(); len(l) != 0 {
+			t.Fatalf("wrote %q", l)
+		}
+		if r.signals != 3 {
+			t.Fatalf("%d signals for three polls", r.signals)
+		}
+	})
 }

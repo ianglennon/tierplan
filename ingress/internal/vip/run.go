@@ -95,6 +95,12 @@ type RunDeps struct {
 	RemoveFile func(path string) error
 	// OpenFile opens a file for reading (the statistics file).
 	OpenFile func(path string) (io.ReadCloser, error)
+	// MkdirAll makes the directory of the address-in-use flag.
+	MkdirAll func(path string, perm os.FileMode) error
+	// Prober checks the segment for another holder of the virtual address (D-11).
+	Prober Prober
+	// FlagPath is the address-in-use flag. Empty means AddressInUseFlag.
+	FlagPath string
 }
 
 func (d RunDeps) withDefaults() RunDeps {
@@ -131,6 +137,12 @@ func (d RunDeps) withDefaults() RunDeps {
 	if d.OpenFile == nil {
 		d.OpenFile = func(path string) (io.ReadCloser, error) { return os.Open(path) } //nolint:gosec // the fixed StatsPath
 	}
+	if d.MkdirAll == nil {
+		d.MkdirAll = os.MkdirAll
+	}
+	if d.Prober == nil {
+		d.Prober = SystemProber{}
+	}
 	return d
 }
 
@@ -160,6 +172,18 @@ func Run(ctx context.Context, d RunDeps) int {
 		return 1
 	}
 	em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventStart, Iface: iface, Stale: stale})
+
+	// Before keepalived can claim anything: is another machine already answering for the address? If so the flag
+	// file keeps the node in FAULT (the probe fails while it exists), and keepalived still starts, because the
+	// flag, not a missing keepalived, is what keeps the node out (D-11, A-05).
+	addr := newAddressChecker(d, cfg, iface, em)
+	addr.clearStale()
+	addr.check(ctx)
+	if ctx.Err() != nil {
+		// Stopped during the check: keepalived never ran.
+		em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventState, State: ingressbundle.VIPStateStop})
+		return 0
+	}
 
 	// keepalived's own output is consumed here and never copied on: only the check's failure becomes a fact,
 	// and only closed-vocabulary lines are ever written (T-26-29). One writer for both streams, so the child
@@ -223,6 +247,14 @@ func Run(ctx context.Context, d RunDeps) int {
 		defer watchers.Done()
 		sw.run(wctx)
 	}()
+	// While the address is held by another machine, look again until it is not (D-11).
+	if addr.inUse {
+		watchers.Add(1)
+		go func() {
+			defer watchers.Done()
+			addr.recheck(wctx)
+		}()
+	}
 
 	code := 0
 	select {

@@ -205,6 +205,10 @@ func newRig(t *testing.T, mode string) *rig {
 	t.Setenv(envFakeMark, mark)
 	r := &rig{t: t, out: newSyncBuf(), errw: newSyncBuf(), clock: newFakeClock(), conf: map[string][]byte{}, proc: make(chan Process, 4), fifo: fifo, mark: mark}
 	r.deps = RunDeps{
+		// No test touches a real socket or the real flag path: the segment is quiet (nobody answers for the
+		// address) unless a test says otherwise.
+		Prober:     &fakeProber{script: []answer{{}}},
+		FlagPath:   filepath.Join(t.TempDir(), "address-in-use"),
 		Getenv:     testEnv,
 		Stdout:     r.out,
 		Stderr:     r.errw,
@@ -424,6 +428,12 @@ func TestVIPEntrypointSignals(t *testing.T) {
 		defer cancel()
 		done := r.run(ctx)
 		r.out.waitLines(t, 1)
+		// The stop must find keepalived running: before it starts, a stop ends Run without starting it.
+		select {
+		case <-r.proc:
+		case <-time.After(20 * time.Second): // wall-clock: failure bound
+			t.Fatal("keepalived was not started")
+		}
 		cancel()
 		r.clock.waitTimer(t, StopWait)
 		r.clock.Advance(StopWait)
