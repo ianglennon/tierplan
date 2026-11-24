@@ -5,14 +5,23 @@
 package ingressdeploy_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
+	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The deployer's virtual IP regression on dind (D-29, plan 26-31): the real keepalived image, run from the spec the deployer
@@ -68,6 +77,17 @@ func (e *vipEnv) nodeOf(id string) *dockertest.Node {
 	return nil
 }
 
+// otherThan is the node that is not n; the harness swarm has two.
+func (e *vipEnv) otherThan(n *dockertest.Node) *dockertest.Node {
+	for _, o := range e.sw.Nodes() {
+		if o != n {
+			return o
+		}
+	}
+	e.t.Fatalf("the swarm has no node but %s", n.Hostname)
+	return nil
+}
+
 // candidate is the status's row for the node, and false when it has none.
 func candidate(st ingressdeploy.VIPStatus, id string) (ingressdeploy.VIPCandidate, bool) {
 	for _, c := range st.Candidates {
@@ -117,6 +137,72 @@ func (e *vipEnv) awaitHeld() (ingressdeploy.VIPStatus, *dockertest.Node) {
 	return st, holder
 }
 
+// proxyContainer is the ID of the node's running proxy container, "" while it has none.
+func (e *vipEnv) proxyContainer(n *dockertest.Node) string {
+	e.t.Helper()
+	out, err := n.Exec(testsupport.Context(e.t), "docker", "ps", "-q", "--no-trunc", "--filter", "status=running",
+		"--filter", "label=com.docker.swarm.service.name="+ingress.ServiceName)
+	if err != nil {
+		e.t.Fatalf("list the proxy containers of %s: %v", n.Hostname, err)
+	}
+	if ids := strings.Fields(out); len(ids) > 0 {
+		return ids[0]
+	}
+	return ""
+}
+
+// keepalivedLeft reports what the virtual IP leaves on the swarm: the keepalived service and the key secrets by their names,
+// and the nodes whose interfaces list the address. Each is a count, so a failure says which.
+func (e *vipEnv) keepalivedLeft() (services, secrets int, holders []*dockertest.Node) {
+	e.t.Helper()
+	if err := e.cluster(func(ctx context.Context, c *dockerx.Client) error {
+		if _, _, err := c.ServiceInspect(ctx, ingress.ServiceNameKeepalived); err == nil {
+			services++
+		} else if !errors.Is(err, dockerx.ErrServiceNotFound) {
+			return err
+		}
+		rows, err := c.SecretList(ctx)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			if strings.HasPrefix(r.Name, ingress.SecretPrefixKeepalived) {
+				secrets++
+			}
+		}
+		return nil
+	}); err != nil {
+		e.t.Fatalf("read the swarm's keepalived objects: %v", err)
+	}
+	return services, secrets, e.holderNodes(e.addr.Addr())
+}
+
+// requireVIPGone fails the test unless nothing of the virtual IP is left: no service, no key secret, no row, no status and
+// no address on any node's interface (PROH-26-06).
+func (e *vipEnv) requireVIPGone() {
+	t := e.t
+	t.Helper()
+	if svc, sec, held := e.keepalivedLeft(); svc != 0 || sec != 0 || len(held) != 0 {
+		t.Errorf("the swarm still holds %d keepalived service(s), %d key secret(s) and the address on %s", svc, sec, vhNames(held))
+	}
+	if _, err := e.istore.GetVIP(testsupport.Context(t), e.envID); !errors.Is(err, ingressstore.ErrVIPNotFound) {
+		t.Errorf("the virtual IP row after the removal: err %v, want ErrVIPNotFound", err)
+	}
+	if _, err := e.vipStatus(); !errors.Is(err, ingressdeploy.ErrVIPNotEnabled) {
+		t.Errorf("the virtual IP status after the removal: err %v, want ErrVIPNotEnabled", err)
+	}
+}
+
+// moves is the environment's stored moves, newest first.
+func (e *vipEnv) moves() []ingressstore.VIPMove {
+	e.t.Helper()
+	rows, _, err := e.deploy.VIPMoves(testsupport.Context(e.t), e.envID, nil, 50)
+	if err != nil {
+		e.t.Fatalf("read the moves: %v", err)
+	}
+	return rows
+}
+
 // TestVIPEnableHoldsOnSwarm is D-29 and SC 1 and 2, the tracer: on a swarm of a manager and a worker with real proxies that
 // enrolled and read ready, EnableVIP with an address of the nodes' network runs its job to done, and one holder, whose proxy
 // is ready, takes the address: the status names it, its interface lists the address and no other node's does, and every
@@ -142,4 +228,137 @@ func TestVIPEnableHoldsOnSwarm(t *testing.T) {
 		t.Errorf("candidate states %v, want one MASTER and the rest BACKUP", states)
 	}
 	t.Logf("the virtual IP %s is held by %s on engine %s", e.addr, holder.Hostname, e.sw.Engine)
+}
+
+// TestVIPMovesWhenTheHolderProxyStops is D-29, VIP-02 and VIP-03: stopping the holder's proxy container makes the other node
+// hold the address within vipMoveBound, the reader stores the move with the reason probe_failing, and when swarm runs a proxy
+// on the old holder again the old holder stays BACKUP and the address stays where it moved (nopreempt).
+func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
+	e := startVIPEnv(t)
+	_, holder := e.awaitHeld()
+	other := e.otherThan(holder)
+
+	stopped := e.proxyContainer(holder)
+	if stopped == "" {
+		t.Fatalf("%s runs no proxy container", holder.Hostname)
+	}
+	e.sh(holder, "docker stop "+stopped)
+
+	dockertest.Wait(t, vipMoveBound, other.Hostname+" to hold the address alone", func() (bool, string) {
+		got := e.holderNodes(e.addr.Addr())
+		return len(got) == 1 && got[0] == other, "holders " + vhNames(got)
+	})
+
+	dockertest.Wait(t, vipReadBound, "the reader to store the move from "+holder.Hostname+" to "+other.Hostname, func() (bool, string) {
+		rows := e.moves()
+		return len(rows) == 1, fmt.Sprintf("%d moves", len(rows))
+	})
+	mv := e.moves()[0]
+	if mv.FromNodeID != e.ids[holder] || mv.ToNodeID != e.ids[other] || mv.FromNodeName != holder.Hostname || mv.ToNodeName != other.Hostname || mv.Reason != "probe_failing" {
+		t.Errorf("the move is %s (%s) -> %s (%s) for %q, want %s (%s) -> %s (%s) for probe_failing",
+			mv.FromNodeName, mv.FromNodeID, mv.ToNodeName, mv.ToNodeID, mv.Reason, holder.Hostname, e.ids[holder], other.Hostname, e.ids[other])
+	}
+
+	// Swarm restarts the proxy on the old holder; once it answers, the helper there leaves FAULT for BACKUP and stays there.
+	dockertest.Wait(t, vipProxyBack, "swarm to run a new proxy task on "+holder.Hostname, func() (bool, string) {
+		id := e.proxyContainer(holder)
+		return id != "" && id != stopped, "container " + id
+	})
+	dockertest.Wait(t, vipProxyBack, holder.Hostname+" to report BACKUP and "+other.Hostname+" to be the one holder", func() (bool, string) {
+		st, err := e.vipStatus()
+		if err != nil {
+			return false, err.Error()
+		}
+		c, ok := candidate(st, e.ids[holder])
+		return ok && c.VRRPState == ingressbundle.VIPStateBackup && st.Holder.State == ingressdeploy.VIPHolderOne && slices.Equal(st.Holder.NodeIDs, []string{e.ids[other]}),
+			fmt.Sprintf("old holder %q, holders %v", c.VRRPState, st.Holder.NodeIDs)
+	})
+	if v := vhWatch(vhHold, func() string {
+		switch got := e.holderNodes(e.addr.Addr()); {
+		case slices.Contains(got, holder):
+			return holder.Hostname + " took the address back"
+		case len(got) != 1 || got[0] != other:
+			return "holders " + vhNames(got)
+		}
+		if st, err := e.vipStatus(); err != nil {
+			return err.Error()
+		} else if c, _ := candidate(st, e.ids[holder]); c.VRRPState == ingressbundle.VIPStateMaster {
+			return holder.Hostname + " reports MASTER"
+		}
+		return ""
+	}); v != "" {
+		t.Fatalf("nopreempt violated: %s", v)
+	}
+	if rows := e.moves(); len(rows) != 1 {
+		t.Errorf("%d moves after the old holder came back, want the one", len(rows))
+	}
+}
+
+// TestVIPDisableLeavesNothing is D-16 and PROH-26-06: DisableVIP runs to done and leaves no keepalived service, no key secret,
+// no stored row and the address on no node's interface. A move the reader stored while the switch-off ran has the reason
+// disabled.
+//
+// Whether any move is stored is not asserted: the service's removal stops every node's keepalived together, so the other node
+// is usually stopped before the holder's priority-0 advert promotes it, and the reader records only moves between two nodes
+// (D-23), never the address leaving for no node. Measured on engine 29 with two nodes: none stored. What is asserted is that a
+// move that does land in the window is never given another reason.
+func TestVIPDisableLeavesNothing(t *testing.T) {
+	e := startVIPEnv(t)
+	e.awaitHeld()
+
+	job := e.disableVIP()
+	requireJobDone(t, job)
+	e.requireVIPGone()
+
+	for _, m := range e.moves() {
+		if m.Reason != "disabled" {
+			t.Errorf("a move from %s to %s stored during the switch-off has the reason %q, want disabled", m.FromNodeName, m.ToNodeName, m.Reason)
+		}
+	}
+}
+
+// TestIngressDisableRemovesVIPOnSwarm is D-17: switching ingress off with the virtual IP on removes the virtual IP first and
+// then the proxies, and nothing of either is left. The order is the order the job's items ended in, read from the job's own
+// events.
+func TestIngressDisableRemovesVIPOnSwarm(t *testing.T) {
+	e := startVIPEnv(t)
+	e.awaitHeld()
+
+	job := e.disable()
+	requireJobDone(t, job)
+
+	ended := e.itemsEnded(job.ID)
+	vip, svc := ended[ingressdeploy.ItemVirtualIP], ended[ingressdeploy.ItemService]
+	if vip == 0 || svc == 0 || vip >= svc {
+		t.Errorf("the item %s ended at event %d and the item %s at event %d, want the virtual IP's first", ingressdeploy.ItemVirtualIP, vip, ingressdeploy.ItemService, svc)
+	}
+
+	e.requireVIPGone()
+	if svc, net, secrets := e.objects(); svc != 0 || net != 0 || secrets != 0 {
+		t.Errorf("the swarm still holds %d proxy service(s), %d network(s) and %d join token secret(s)", svc, net, secrets)
+	}
+}
+
+// itemsEnded is, by item, the number of the job's event in which the item was first reported done. It reads the events the
+// hub kept of the finished job, so it holds the order the job ran in and no clock.
+func (e *vipEnv) itemsEnded(jobID string) map[string]uint64 {
+	t := e.t
+	t.Helper()
+	ctx, cancel := context.WithTimeout(testsupport.Context(t), time.Minute)
+	defer cancel()
+	// The events after the first one: the job's first event is the first item starting.
+	_, events, stop, err := e.jobs.Subscribe(ctx, jobID, 1)
+	if err != nil {
+		t.Fatalf("read the events of job %s: %v", jobID, err)
+	}
+	defer stop()
+	ended := map[string]uint64{}
+	for ev := range events {
+		if ev.Type == jobs.EventItem && ev.Item != nil && ev.Item.State == jobs.ItemDone {
+			if _, seen := ended[ev.Item.ID]; !seen {
+				ended[ev.Item.ID] = ev.ID
+			}
+		}
+	}
+	return ended
 }
