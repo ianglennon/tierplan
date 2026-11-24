@@ -75,6 +75,21 @@ type IngressVIPStartOutput struct {
 	Body         IngressVIPStartBody
 }
 
+// IngressVIPDisablePreviewBody is the answer to the preview of a switch-off of the virtual IP. It holds no key.
+type IngressVIPDisablePreviewBody struct {
+	Address string   `json:"address" doc:"The environment's virtual IP with the prefix length of its network"`
+	Service string   `json:"service" doc:"The keepalived service's name; empty when the swarm was read and does not hold one of TierPlan's"`
+	Tasks   int      `json:"tasks" doc:"How many keepalived tasks run now; 0 when none do or the swarm could not be read"`
+	Secrets []string `json:"secrets" doc:"The names of the swarm secrets that hold the virtual IP's key, never the key; when the swarm could not be read, the name the stored key's generation gives"`
+	Items   []string `json:"items" doc:"The steps the switch-off job runs, as their labels"`
+}
+
+// IngressVIPDisablePreviewOutput wraps IngressVIPDisablePreviewBody for huma.
+type IngressVIPDisablePreviewOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressVIPDisablePreviewBody
+}
+
 // ingressVIPPreviewBody maps the deployer's preview to the body.
 func ingressVIPPreviewBody(pv ingressdeploy.VIPPreview) IngressVIPPreviewBody {
 	body := IngressVIPPreviewBody{
@@ -239,6 +254,88 @@ func registerIngressVIPWrites(r *httpx.Router, d IngressDeployDeps) {
 		id, err := d.Service.EnableVIP(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID, request(in.Body))
 		if err != nil {
 			return nil, fail(ctx, "switch the virtual IP on", err)
+		}
+		return &IngressVIPStartOutput{CacheControl: "no-store", Body: IngressVIPStartBody{JobID: id}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "changeIngressVIP",
+		Method:      http.MethodPut,
+		Path:        "/api/env/{envId}/ingress/vip",
+		Summary:     "Change the address or the router ID of a swarm's virtual IP",
+		Description: "The body is the whole configuration, as the preview takes it: an address, and a router ID or none to derive it from the cluster ID again. Takes the environment's operation lock, " +
+			"runs every check of the preview again on the new request and answers 202 with a job's ID at once. The job updates the keepalived service and stores the new address with its audit entry " +
+			"(ingress.vip_changed). The key and its secret are kept: a change never rotates them. An address change rolls one node at a time and a router ID change removes the service and creates it again, " +
+			"which the preview says first. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. " +
+			"404 " + problemVIPNotEnabled + " when the environment has no virtual IP. A refusal is 409 with the finding's code as the type and the server's sentence as the detail, as for the enable, " +
+			"and an address that is not an address with its prefix length is 422 vip_address_invalid; 409 " + problemOperationLocked + " while another operation holds the environment, naming it. " +
+			"Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin).",
+		DefaultStatus: http.StatusAccepted,
+		Tags:          []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressVIPInput) (*IngressVIPStartOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		id, err := d.Service.ChangeVIP(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID, request(in.Body))
+		if err != nil {
+			return nil, fail(ctx, "change the virtual IP", err)
+		}
+		return &IngressVIPStartOutput{CacheControl: "no-store", Body: IngressVIPStartBody{JobID: id}}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewIngressVIPDisable",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/ingress/vip/disable/preview",
+		Summary:     "Preview switching a swarm's virtual IP off",
+		Description: "Says what switching the virtual IP off would remove: the keepalived service, with how many of its tasks run now, and the swarm secret that holds the key, by name and never by content. " +
+			"It writes nothing and needs no manager check, since removing a service is not an escalation. items lists the steps of the job. " +
+			"404 " + problemVIPNotEnabled + " when the environment has no virtual IP. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressVIPDisablePreviewOutput, error) {
+		if httpx.PrincipalFrom(ctx) == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		pv, err := d.Service.PreviewVIPDisable(ctx, in.EnvID)
+		if err != nil {
+			return nil, fail(ctx, "preview the virtual IP switch-off", err)
+		}
+		body := IngressVIPDisablePreviewBody{
+			Address: pv.Address.String(), Service: pv.Service, Tasks: pv.Tasks,
+			Secrets: append([]string{}, pv.Secrets...), Items: append([]string{}, pv.Items...),
+		}
+		return &IngressVIPDisablePreviewOutput{CacheControl: "no-store", Body: body}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "disableIngressVIP",
+		Method:      http.MethodDelete,
+		Path:        "/api/env/{envId}/ingress/vip",
+		Summary:     "Switch a swarm's virtual IP off",
+		Description: "Takes the environment's operation lock and answers 202 with a job's ID at once. The job removes the keepalived service, waits for every node to release the address, removes the key's swarm secret " +
+			"and deletes the stored row with its audit entry (ingress.vip_disabled). A step that fails leaves the row switched off and names what is left in the swarm; switching off again finishes it. " +
+			"Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 404 " + problemVIPNotEnabled + " when the environment has no virtual IP; " +
+			"409 " + problemOperationLocked + " while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin).",
+		DefaultStatus: http.StatusAccepted,
+		Tags:          []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressVIPStartOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		id, err := d.Service.DisableVIP(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID)
+		if err != nil {
+			return nil, fail(ctx, "switch the virtual IP off", err)
 		}
 		return &IngressVIPStartOutput{CacheControl: "no-store", Body: IngressVIPStartBody{JobID: id}}, nil
 	})
