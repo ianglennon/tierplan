@@ -148,7 +148,7 @@ proxy's own project is never listed as an unmanaged stack, so adopting by that n
 if something else shares the project name, it is listed as not adoptable, and adopting it answers `409 stack_not_adoptable`
 with that sentence. On a swarm the name is free.
 
-**The local socket.** TierPlan's own host works with no agent, and the proxy dials TierPlan from inside a container.
+<a id="the-local-socket"></a>**The local socket.** TierPlan's own host works with no agent, and the proxy dials TierPlan from inside a container.
 Two things must hold for it to enrol: TierPlan must listen on an address other than loopback (a listener on `127.0.0.1` is
 not reachable from a container by any address), and the host part of the agent URL, which is the address the proxy dials,
 must resolve inside a container to an address that reaches TierPlan. A hostname that the host itself resolves to a loopback
