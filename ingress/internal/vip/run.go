@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -130,10 +131,11 @@ func Run(ctx context.Context, d RunDeps) int {
 	}
 	em := NewEmitter(d.Stdout, cfg, d.Clock)
 
-	iface, err := Discover(d.Interfaces, cfg.Address)
-	if err != nil {
-		fmt.Fprintln(d.Stderr, "tierplan-ingress: vip-entrypoint:", err)
-		return 1
+	iface, ok := awaitInterface(ctx, d, cfg, em)
+	if !ok {
+		// Stopped while there was no interface: keepalived never ran, so there is nothing to wait for.
+		em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventState, State: ingressbundle.VIPStateStop})
+		return 0
 	}
 	stale := heldOn(d.Interfaces, iface, cfg.Address.Addr())
 
@@ -143,8 +145,11 @@ func Run(ctx context.Context, d RunDeps) int {
 	}
 	em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventStart, Iface: iface, Stale: stale})
 
-	// keepalived's own output is consumed here and never copied on: only facts it carries become lines.
-	sink := io.Discard
+	// keepalived's own output is consumed here and never copied on: only the check's failure becomes a fact,
+	// and only closed-vocabulary lines are ever written (T-26-29). One writer for both streams, so the child
+	// gets one pipe and the lines arrive in the order keepalived wrote them.
+	facts := &probeFacts{}
+	sink := facts.writer()
 	proc, err := d.Start(KeepalivedBinary, KeepalivedArgs(), sink, sink)
 	if err != nil {
 		fmt.Fprintln(d.Stderr, "tierplan-ingress: vip-entrypoint: start keepalived:", err)
@@ -174,14 +179,19 @@ func Run(ctx context.Context, d RunDeps) int {
 		emitStop()
 		return 1
 	}
+	// The reader turns FIFO lines into a channel; the reporter turns them into events. Closing the FIFO ends
+	// the reader, which ends the reporter, so both are finished before the final STOP line is written.
+	lines := make(chan string)
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
-		readLines(fifo, maxFIFOLine, func(line string) {
-			if state, ok := parseFIFOLine(line); ok {
-				em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventState, State: state})
-			}
-		})
+		defer close(lines)
+		readLines(fifo, maxFIFOLine, func(line string) { lines <- line })
+	}()
+	reporterDone := make(chan struct{})
+	go func() {
+		defer close(reporterDone)
+		reportStates(d.Clock, em, facts, lines)
 	}()
 
 	code := 0
@@ -196,8 +206,98 @@ func Run(ctx context.Context, d RunDeps) int {
 	}
 	_ = fifo.Close()
 	<-readerDone
+	<-reporterDone
 	emitStop()
 	return code
+}
+
+// awaitInterface returns the one interface of the virtual address's network. While there is none or more than
+// one it reports the fault once (again only when it changes), starts nothing and looks again every
+// DiscoveryRescan: a node that cannot hold the address says so and stays up (D-09, Pitfall 15). When the
+// interface appears it writes the fault again with active false, then returns. It returns false when ctx ends
+// first.
+func awaitInterface(ctx context.Context, d RunDeps, cfg Config, em *Emitter) (string, bool) {
+	var shown *DiscoverError
+	var shownKey string
+	for {
+		iface, err := Discover(d.Interfaces, cfg.Address)
+		if err == nil {
+			if shown != nil {
+				em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventFault, Reason: shown.Reason, Ifaces: shown.Seen})
+			}
+			return iface, true
+		}
+		// A failure of the interface list itself leaves the node with no interface it can name.
+		fault := &DiscoverError{Reason: ingressbundle.VIPReasonNoInterface}
+		_ = errors.As(err, &fault)
+		if key := fault.Reason + "|" + strings.Join(fault.Seen, ","); shown == nil || key != shownKey {
+			// Only a line that was written counts as shown, so a dropped one is tried again at the next scan.
+			if em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventFault, Reason: fault.Reason, Ifaces: fault.Seen, Active: true}) {
+				shown, shownKey = fault, key
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-d.Clock.After(DiscoveryRescan):
+		}
+	}
+}
+
+// reportStates turns the notify FIFO's lines into state events until lines is closed. A FAULT is the one state
+// with a reason: probe_failing when keepalived's log said the check failed since the node last was BACKUP or
+// MASTER (D-12). The log can be read after the state it explains, so a FAULT with no failure seen yet is held
+// for up to FaultReasonGrace; any later line, the failure line or the grace ending releases it, in order.
+func reportStates(clock Clock, em *Emitter, facts *probeFacts, lines <-chan string) {
+	var held bool
+	var timer <-chan time.Time
+	var failed <-chan struct{}
+	faultEvent := func() ingressbundle.VIPEvent {
+		ev := ingressbundle.VIPEvent{Event: ingressbundle.VIPEventState, State: ingressbundle.VIPStateFault}
+		if facts.failing() {
+			ev.Reason = ingressbundle.VIPReasonProbeFailing
+		}
+		return ev
+	}
+	release := func() {
+		if held {
+			em.Emit(faultEvent())
+			held, timer, failed = false, nil, nil
+		}
+	}
+	for {
+		select {
+		case line, open := <-lines:
+			if !open {
+				release()
+				return
+			}
+			state, ok := parseFIFOLine(line)
+			if !ok {
+				continue
+			}
+			release()
+			switch state {
+			case ingressbundle.VIPStateFault:
+				failed = facts.wait()
+				if facts.failing() {
+					em.Emit(faultEvent())
+					failed = nil
+					continue
+				}
+				held, timer = true, clock.After(FaultReasonGrace)
+			case ingressbundle.VIPStateBackup, ingressbundle.VIPStateMaster:
+				facts.reset()
+				em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventState, State: state})
+			default:
+				em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventState, State: state})
+			}
+		case <-failed:
+			release()
+		case <-timer:
+			release()
+		}
+	}
 }
 
 // heldOn reports whether the interface named iface holds addr now.

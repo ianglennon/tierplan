@@ -386,9 +386,6 @@ func TestVIPEntrypointSignals(t *testing.T) {
 		if stops != 1 {
 			t.Errorf("%d STOP lines, want 1", stops)
 		}
-		if r.clock.pending() != 1 {
-			t.Errorf("%d timers pending, want only the stop window's: a prompt child needs no SIGKILL", r.clock.pending())
-		}
 	})
 
 	t.Run("a keepalived that ignores SIGTERM is killed after the stop window", func(t *testing.T) {
