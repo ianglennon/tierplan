@@ -14,9 +14,11 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/tierplan/ingress/internal/config"
 	"github.com/ianglennon/tierplan/ingress/internal/version"
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
 
 // testEnv is the smallest environment the supervisor starts with.
@@ -109,6 +111,96 @@ func TestHealthcheckExitCodes(t *testing.T) {
 				t.Fatalf("healthcheck touched the node: nnp=%d serve=%d", h.nnpCalls, h.serveCalls)
 			}
 		})
+	}
+}
+
+func TestProbeSubcommand(t *testing.T) {
+	const port = "7483"
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+		closed  bool
+		env     string
+		setEnv  bool
+		want    int
+	}{
+		{"ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, false, port, true, 0},
+		{"not ready", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }, false, port, true, 1},
+		{"closed port", nil, true, port, true, 1},
+		{"slower than the timeout", func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-time.After(5 * time.Second):
+			case <-r.Context().Done():
+			}
+		}, false, port, true, 1},
+		{"no port", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, false, "", false, 2},
+		{"port is not a number", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, false, "x", true, 2},
+		{"port 0", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, false, "0", true, 2},
+		{"port above 65535", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }, false, "65536", true, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := tc.handler
+			if handler == nil {
+				handler = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+			}
+			ts := httptest.NewServer(handler)
+			url := ts.URL + "/readyz"
+			if tc.closed {
+				ts.Close()
+			} else {
+				defer ts.Close()
+			}
+			var h harness
+			d := h.deps("probe")
+			d.readyURL = url
+			d.getenv = func(k string) string {
+				if k == ingressbundle.EnvVIPProbePort && tc.setEnv {
+					return tc.env
+				}
+				return testEnv(k)
+			}
+			start := time.Now()
+			got := run(d)
+			if got != tc.want {
+				t.Fatalf("run = %d, want %d (stderr %q)", got, tc.want, h.stderr.String())
+			}
+			if took := time.Since(start); took > time.Second {
+				t.Fatalf("probe took %s, want under the one-second vrrp_script timeout", took)
+			}
+			if tc.want == 0 && (h.stdout.Len() != 0 || h.stderr.Len() != 0) {
+				t.Fatalf("a ready probe printed stdout %q stderr %q", h.stdout.String(), h.stderr.String())
+			}
+			if h.stdout.Len() != 0 {
+				t.Fatalf("probe wrote to stdout: %q", h.stdout.String())
+			}
+			if h.nnpCalls != 0 || h.serveCalls != 0 {
+				t.Fatalf("probe touched the node: nnp=%d serve=%d", h.nnpCalls, h.serveCalls)
+			}
+		})
+	}
+}
+
+func TestProbeUsesThePublishedPortOnLoopback(t *testing.T) {
+	// With no readyURL override the probe builds the URL from the port; a closed port on loopback is a 1,
+	// and that the connection was to 127.0.0.1 is pinned by ready.PublishedReadyURL's own test.
+	var h harness
+	d := h.deps("probe")
+	d.getenv = func(k string) string {
+		if k == ingressbundle.EnvVIPProbePort {
+			return "1"
+		}
+		return testEnv(k)
+	}
+	if got := run(d); got != 1 {
+		t.Fatalf("run = %d, want 1 (stderr %q)", got, h.stderr.String())
+	}
+}
+
+func TestProbeWithAnArgumentIsUnknown(t *testing.T) {
+	var h harness
+	if got := run(h.deps("probe", "extra")); got != 2 {
+		t.Fatalf("run = %d, want 2", got)
 	}
 }
 
