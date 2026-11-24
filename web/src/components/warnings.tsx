@@ -758,6 +758,109 @@ function IngressEntry({ w }: { w: Warning }) {
   );
 }
 
+// The reasons a move of the virtual IP can carry, each with a sentence of its own in bell.json. A reason this
+// build does not know gets the "couldn't tell why" sentence.
+const VIP_MOVE_REASONS = ["holder_failed", "probe_failing", "drain_handoff", "unknown"] as const;
+
+// A sentence with a fact left out reads cleanly: no run of spaces and no space before a full stop.
+const tidy = (text: string) =>
+  text
+    .replace(/\s+([.,])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+// The title and body of one virtual IP item (Phase 26, UI-SPEC S4), or null for an id that is not one. The
+// server sends facts, never sentences; a fact it does not have (no sender, no offset, no node on a move) picks
+// the wording that does not need it, so nothing reads blank. Every value is plain text, and the item carries
+// no link (there is no ingress page until Phase 27) and nothing to dismiss: it ends when its cause does.
+function vipItemCopy(
+  w: EnvWarning,
+  t: Translate,
+  now: number,
+): { title: string; body: string } | null {
+  const v = w.vip;
+  const env = w.envName ?? "";
+  const address = v?.address ?? "";
+  const time = w.since ? formatRelative(w.since, new Date(now), t) : "";
+  switch (w.id) {
+    case "vip_no_holder":
+      return {
+        title: t("bell.vip.noHolder.title", { env }),
+        body: tidy(t("bell.vip.noHolder.body", { address, time })),
+      };
+    case "vip_multiple_holders":
+      return {
+        title: t("bell.vip.multipleHolders.title", { env }),
+        body: t("bell.vip.multipleHolders.body", { count: w.count ?? 0, address }),
+      };
+    case "vip_moved": {
+      const count = w.count ?? 1;
+      const noNode = t("bell.vip.moved.noNode");
+      const reason = VIP_MOVE_REASONS.find((r) => r === v?.moveReason) ?? "unknown";
+      const params = {
+        count,
+        env,
+        from: v?.from || noNode,
+        to: v?.to || noNode,
+        time,
+        reason: t(`bell.vip.moved.reason.${reason}`),
+      };
+      return {
+        title:
+          count > 1 ? t("bell.vip.moved.titleMany", params) : t("bell.vip.moved.title", params),
+        body: tidy(
+          count > 1 ? t("bell.vip.moved.bodyMany", params) : t("bell.vip.moved.body", params),
+        ),
+      };
+    }
+    case "vip_foreign_router": {
+      const params = { routerId: v?.routerId ?? "", sender: v?.sender ?? "" };
+      return {
+        title: t("bell.vip.foreignRouter.title", { env }),
+        body: t(
+          v?.sender ? "bell.vip.foreignRouter.bodySender" : "bell.vip.foreignRouter.body",
+          params,
+        ),
+      };
+    }
+    case "vip_clock_skew": {
+      const node = w.node ?? "";
+      const known = w.offsetSeconds !== undefined;
+      return {
+        title: t("bell.vip.clock.title", { node }),
+        body: t(known ? "bell.vip.clock.body" : "bell.vip.clock.bodyNoOffset", {
+          node,
+          env,
+          offset: `${Math.abs(Math.trunc(w.offsetSeconds ?? 0))} s`,
+          window: `${v?.windowSeconds ?? 30} s`,
+        }),
+      };
+    }
+    case "vip_privileged_lost": {
+      const count = w.count ?? 1;
+      return {
+        title: t("bell.vip.privilegedLost.title", { env }),
+        body: t("bell.vip.privilegedLost.body", { count, node: w.node ?? "" }),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+// One virtual IP item: words only, no link, nothing to dismiss.
+function VipEntry({ w }: { w: EnvWarning }) {
+  const t = useT();
+  const now = useNow();
+  const copy = vipItemCopy(w, t, now);
+  if (!copy) return null;
+  return (
+    <BellItem id={w.id} title={copy.title}>
+      <ItemDescription className="line-clamp-none wrap-anywhere">{copy.body}</ItemDescription>
+    </BellItem>
+  );
+}
+
 // Agents that were installed after the backup this TierPlan was restored from keep
 // trying and are refused (D-31). The server derives it from what agents tried in the
 // last 24 hours, so there is nothing to dismiss: it ends when they are reinstalled.
@@ -1228,6 +1331,13 @@ function EnvEntry({ w, close, finishSetup, canFinishSetup }: { w: EnvWarning } &
           </Link>
         </BellItem>
       );
+    case "vip_no_holder":
+    case "vip_multiple_holders":
+    case "vip_moved":
+    case "vip_foreign_router":
+    case "vip_clock_skew":
+    case "vip_privileged_lost":
+      return <VipEntry w={w} />;
     default:
       // A problem this build has no wording for says nothing rather than something wrong.
       return null;
