@@ -5,8 +5,11 @@
 package ingressdeploy_test
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"os"
@@ -16,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
@@ -406,4 +410,384 @@ func TestVIPHelperElectsAndReports(t *testing.T) {
 		}
 		t.Logf("S3 helper-reports: engine=%s node=%s lines=%d iface=%s last=%s", r.sw.Engine, n.Hostname, len(events), iface, vhLastState(events))
 	}
+}
+
+// The bounds of the failover cases. vhMoved is VIP-02's "within seconds" (S3 measured 3.0 to 3.8 s for a failing probe), the
+// others are failure deadlines for what the helper does on its own schedule: the statistics are read every 12 s and a
+// foreign router is cleared by three quiet reads.
+const (
+	vhMoved        = 10 * time.Second
+	vhKillMoved    = 30 * time.Second
+	vhCleared      = 90 * time.Second
+	vhForeignRaise = 60 * time.Second
+	vhForeignClear = 90 * time.Second
+	// vhHold is how long a case that must not change is watched.
+	vhHold = 20 * time.Second
+)
+
+// vhFind returns the first event pred accepts.
+func vhFind(events []ingressbundle.VIPEvent, pred func(ingressbundle.VIPEvent) bool) (ingressbundle.VIPEvent, bool) {
+	i := slices.IndexFunc(events, pred)
+	if i < 0 {
+		return ingressbundle.VIPEvent{}, false
+	}
+	return events[i], true
+}
+
+// vhState is the predicate for a state line, with reason when it is not empty.
+func vhState(state, reason string) func(ingressbundle.VIPEvent) bool {
+	return func(e ingressbundle.VIPEvent) bool {
+		return e.Event == ingressbundle.VIPEventState && e.State == state && (reason == "" || e.Reason == reason)
+	}
+}
+
+// vhWatch polls violation every half second for window and returns the first violation, "" when there was none. It is for a
+// case that must keep holding for a stretch of time, which the waits (they fail when the window ends) cannot express.
+func vhWatch(window time.Duration, violation func() string) string {
+	expired := time.NewTimer(window) // wall-clock: a bounded observation window of a case that must not change; it can only false-pass, never fail a correct run
+	defer expired.Stop()
+	tick := time.NewTicker(500 * time.Millisecond) // wall-clock: the pace of that observation
+	defer tick.Stop()
+	for {
+		if v := violation(); v != "" {
+			return v
+		}
+		select {
+		case <-expired.C:
+			return violation()
+		case <-tick.C:
+		}
+	}
+}
+
+// setReady puts the readiness stand-in back on the node (its label) or takes it away, which fails the node's probe.
+func (r *vipHelperRig) setReady(n *dockertest.Node, ready bool) {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	flag := "--label-rm"
+	label := vhReadyLabel
+	if ready {
+		flag, label = "--label-add", vhReadyLabel+"=yes"
+	}
+	if out, err := r.sw.Managers[0].Exec(ctx, "docker", "node", "update", flag, label, n.Hostname); err != nil {
+		r.t.Fatalf("set %s ready=%v: %v\n%s", n.Hostname, ready, err, out)
+	}
+}
+
+// kill sends SIGKILL to the container, which is what a crashed holder looks like: no goodbye advert, no cleanup.
+func (r *vipHelperRig) kill(n *dockertest.Node, id string) {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if out, err := n.Exec(ctx, "docker", "kill", "-s", "KILL", id); err != nil {
+		r.t.Fatalf("kill %s on %s: %v\n%s", id, n.Hostname, err, out)
+	}
+}
+
+// replacement waits until the node runs a container of the service other than old: swarm's replacement of a killed task.
+func (r *vipHelperRig) replacement(n *dockertest.Node, svc, old string) string {
+	r.t.Helper()
+	var repl string
+	dockertest.Wait(r.t, vhSettle, "a replacement keepalived task on "+n.Hostname, func() (bool, string) {
+		repl = r.runningContainer(n, svc)
+		return repl != "" && repl != old, "container " + repl
+	})
+	return repl
+}
+
+// TestVIPHelperFailover is D-29 and VIP-02 through the production spec. Removing the holder's readiness stand-in moves the
+// address within vhMoved and the holder's log says FAULT with the reason probe_failing; the node that recovers stays BACKUP
+// (nopreempt); a SIGKILL of the new holder's container moves the address again, and the node swarm replaces comes back as a
+// BACKUP and stays one for a watch.
+func TestVIPHelperFailover(t *testing.T) {
+	r := newVIPHelperRig(t)
+	svc := r.start(ingress.ServiceNameKeepalived, r.vip, vhRouterID)
+	r.tasks(svc)
+	addr := r.vip.Addr()
+
+	a, _ := r.waitOneHolder(addr, vhFirstHolder, nil)
+	aCtr := r.runningContainer(a, svc.name)
+
+	// A failing probe on the holder.
+	r.setReady(a, false)
+	b, secs := r.waitOneHolder(addr, vhMoved, a)
+	t.Logf("S3 helper-failing-probe: engine=%s seconds=%.1f from=%s to=%s", r.sw.Engine, secs, a.Hostname, b.Hostname)
+	dockertest.Wait(t, vhLogBound, a.Hostname+" to say FAULT probe_failing and to drop the address", func() (bool, string) {
+		_, said := vhFind(r.containerLog(a, aCtr), vhState(ingressbundle.VIPStateFault, ingressbundle.VIPReasonProbeFailing))
+		return said && !r.has(a, addr), fmt.Sprintf("said=%v listed=%v", said, r.has(a, addr))
+	})
+
+	// The probe passes again: the node comes back as a BACKUP and does not take the address back.
+	r.setReady(a, true)
+	dockertest.WaitRunningTasks(t, r.sw.Managers[0], r.readyID, len(r.sw.Nodes()), vhSettle)
+	dockertest.Wait(t, vhLogBound, a.Hostname+" to leave FAULT for BACKUP", func() (bool, string) {
+		ev := r.containerLog(a, aCtr)
+		return vhLastState(ev) == ingressbundle.VIPStateBackup, "last state " + vhLastState(ev)
+	})
+	if v := vhWatch(vhHold, func() string {
+		switch {
+		case r.has(a, addr):
+			return a.Hostname + " took the address back"
+		case !r.has(b, addr):
+			return b.Hostname + " lost the address"
+		}
+		return ""
+	}); v != "" {
+		t.Fatalf("S3 helper-nopreempt: engine=%s violated: %s", r.sw.Engine, v)
+	}
+	t.Logf("S3 helper-nopreempt: engine=%s held", r.sw.Engine)
+
+	// A crashed holder.
+	bCtr := r.runningContainer(b, svc.name)
+	r.kill(b, bCtr)
+	c, secs := r.waitOneHolder(addr, vhKillMoved, b)
+	t.Logf("S3 helper-killed-holder: engine=%s seconds=%.1f from=%s to=%s", r.sw.Engine, secs, b.Hostname, c.Hostname)
+
+	// The killed node's replacement clears what the kill left (keepalived does, A-02), is a BACKUP and stays one.
+	repl := r.replacement(b, svc.name, bCtr)
+	dockertest.Wait(t, vhCleared, b.Hostname+" to lose the address its killed task left and "+c.Hostname+" to hold it alone", func() (bool, string) {
+		got := r.holders(addr)
+		return len(got) == 1 && got[0] == c, "holders " + vhNames(got)
+	})
+	dockertest.Wait(t, vhCleared, "the replacement on "+b.Hostname+" to report BACKUP", func() (bool, string) {
+		ev := r.containerLog(b, repl)
+		return vhLastState(ev) == ingressbundle.VIPStateBackup, "last state " + vhLastState(ev)
+	})
+	if v := vhWatch(vhHold, func() string {
+		switch {
+		case r.has(b, addr):
+			return b.Hostname + " took the address back"
+		case !r.has(c, addr):
+			return c.Hostname + " lost the address"
+		}
+		return ""
+	}); v != "" {
+		t.Fatalf("S3 helper-nopreempt-after-kill: engine=%s violated: %s", r.sw.Engine, v)
+	}
+	if _, master := vhFind(r.containerLog(b, repl), vhState(ingressbundle.VIPStateMaster, "")); master {
+		t.Fatalf("the replacement on %s became MASTER", b.Hostname)
+	}
+	t.Logf("S3 helper-nopreempt-after-kill: engine=%s held", r.sw.Engine)
+}
+
+// vhForeignConf is keepalived's configuration for the foreign router: the same router ID, its own key and another address,
+// and no check (a check would fail there and keep the router in FAULT, silent).
+func vhForeignConf(addr netip.Prefix, keyPath string, routerID int) string {
+	return fmt.Sprintf(`vrrp_instance FOREIGN {
+    state BACKUP
+    interface eth0
+    virtual_router_id %d
+    priority 100
+    advert_int 1
+    auth_hmac {
+        key 1 file:%s
+        active_key 1
+        mode enforce
+    }
+    virtual_ipaddress {
+        %s dev eth0
+    }
+}
+`, routerID, keyPath, addr)
+}
+
+// startForeign runs a second keepalived in a plain container on the nodes' bridge: the router ID of the swarm's service,
+// another 32-byte key and another address. The configuration and key are put in with CopyToContainer before the start. The
+// container is removed at cleanup. It returns the container ID and the address it was given on the bridge, which is what the
+// holder's report should name as the sender.
+func (r *vipHelperRig) startForeign(addr netip.Prefix, routerID int) (string, netip.Addr) {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		r.t.Fatalf("make the foreign key: %v", err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, f := range []struct {
+		name string
+		mode int64
+		data string
+	}{
+		{"etc/keepalived/foreign.key", 0o400, "hex:" + hex.EncodeToString(raw)},
+		{"etc/keepalived/keepalived.conf", 0o444, vhForeignConf(addr, "/etc/keepalived/foreign.key", routerID)},
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: f.mode, Size: int64(len(f.data)), Typeflag: tar.TypeReg}); err != nil {
+			r.t.Fatalf("tar %s: %v", f.name, err)
+		}
+		if _, err := tw.Write([]byte(f.data)); err != nil {
+			r.t.Fatalf("tar %s: %v", f.name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		r.t.Fatalf("close the tar: %v", err)
+	}
+	res, err := r.host.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Name: "vh-foreign-" + hex.EncodeToString(raw[:4]),
+		Config: &container.Config{
+			Image:      vhImage,
+			Entrypoint: []string{"/usr/sbin/keepalived"},
+			Cmd:        []string{"--dont-fork", "--log-console", "--log-detail", "--use-file", "/etc/keepalived/keepalived.conf"},
+			Tty:        true,
+		},
+		HostConfig:       &container.HostConfig{NetworkMode: container.NetworkMode(r.sw.Network), CapDrop: []string{"ALL"}, CapAdd: []string{"NET_ADMIN", "NET_RAW"}},
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{r.sw.Network: {}}},
+	})
+	if err != nil {
+		r.t.Fatalf("create the foreign router: %v", err)
+	}
+	id := res.ID
+	r.removeAtCleanup(id)
+	if _, err := r.host.CopyToContainer(ctx, id, client.CopyToContainerOptions{DestinationPath: "/", Content: &buf}); err != nil {
+		r.t.Fatalf("put the foreign configuration in: %v", err)
+	}
+	if _, err := r.host.ContainerStart(ctx, id, client.ContainerStartOptions{}); err != nil {
+		r.t.Fatalf("start the foreign router: %v", err)
+	}
+	insp, err := r.host.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		r.t.Fatalf("inspect the foreign router: %v", err)
+	}
+	ep := insp.Container.NetworkSettings.Networks[r.sw.Network]
+	if ep == nil || !ep.IPAddress.IsValid() {
+		r.t.Fatalf("the foreign router has no address on %s: %+v", r.sw.Network, insp.Container.NetworkSettings.Networks)
+	}
+	return id, ep.IPAddress
+}
+
+// removeAtCleanup removes a container of this machine's engine when the test ends, whatever state it is in.
+func (r *vipHelperRig) removeAtCleanup(id string) {
+	r.t.Cleanup(func() { r.removeContainer(id) })
+}
+
+// removeContainer force-removes a container of this machine's engine.
+func (r *vipHelperRig) removeContainer(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, _ = r.host.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true})
+}
+
+// TestVIPHelperForeignRouter is A-04 through the production spec: a keepalived on the nodes' bridge with another key and the
+// same router ID makes the holder's helper write foreign_router active true, naming the counter and the sender; removing it
+// makes the helper write active false again.
+func TestVIPHelperForeignRouter(t *testing.T) {
+	r := newVIPHelperRig(t)
+	svc := r.start(ingress.ServiceNameKeepalived, r.vip, vhRouterID)
+	r.tasks(svc)
+	holder, _ := r.waitOneHolder(r.vip.Addr(), vhFirstHolder, nil)
+	ctr := r.runningContainer(holder, svc.name)
+	if _, quiet := vhFind(r.containerLog(holder, ctr), func(e ingressbundle.VIPEvent) bool { return e.Event == ingressbundle.VIPEventForeignRouter }); quiet {
+		t.Fatalf("%s reported a foreign router before there was one", holder.Hostname)
+	}
+
+	a := r.vip.Addr().As4()
+	a[3] = 249
+	foreignID, foreignIP := r.startForeign(netip.PrefixFrom(netip.AddrFrom4(a), r.vip.Bits()), vhRouterID)
+	t.Logf("the foreign router %.12s runs at %s with router ID %d and its own key", foreignID, foreignIP, vhRouterID)
+
+	var raised ingressbundle.VIPEvent
+	start := time.Now()
+	dockertest.Wait(t, vhForeignRaise, holder.Hostname+" to write foreign_router active", func() (bool, string) {
+		ev, ok := vhFind(r.containerLog(holder, ctr), func(e ingressbundle.VIPEvent) bool {
+			return e.Event == ingressbundle.VIPEventForeignRouter && e.Active
+		})
+		raised = ev
+		return ok, "no active foreign_router line yet"
+	})
+	secs := time.Since(start).Seconds() // wall-clock: a measurement printed for people, nothing is asserted on it
+	if raised.Counter != ingressbundle.VIPCounterInvalidHMAC {
+		t.Errorf("the foreign router was reported with counter %q, want %q", raised.Counter, ingressbundle.VIPCounterInvalidHMAC)
+	}
+	sender := "ok"
+	if raised.Addr != foreignIP.String() {
+		sender = "absent"
+		if raised.Addr != "" {
+			t.Errorf("the foreign router was reported at %q, want %s", raised.Addr, foreignIP)
+		}
+	}
+	t.Logf("S3 helper-foreign-router: engine=%s active seconds=%.1f counter=%s sender=%s", r.sw.Engine, secs, raised.Counter, sender)
+	if !r.has(holder, r.vip.Addr()) {
+		t.Errorf("%s lost the address to a foreign router", holder.Hostname)
+	}
+
+	r.removeContainer(foreignID)
+	start = time.Now()
+	dockertest.Wait(t, vhForeignClear, holder.Hostname+" to write foreign_router cleared", func() (bool, string) {
+		_, ok := vhFind(r.containerLog(holder, ctr), func(e ingressbundle.VIPEvent) bool {
+			return e.Event == ingressbundle.VIPEventForeignRouter && !e.Active && e.Seq > raised.Seq
+		})
+		return ok, "no cleared foreign_router line yet"
+	})
+	secs = time.Since(start).Seconds() // wall-clock: a measurement printed for people, nothing is asserted on it
+	t.Logf("S3 helper-foreign-router: engine=%s cleared seconds=%.1f", r.sw.Engine, secs)
+}
+
+// taskCount is how many tasks the service has, running or not: a task that exited and was replaced is one more.
+func (r *vipHelperRig) taskCount(svc *vhService) int {
+	r.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	filters := make(client.Filters)
+	filters.Add("service", svc.id)
+	res, err := r.mgr.TaskList(ctx, client.TaskListOptions{Filters: filters})
+	if err != nil {
+		r.t.Fatalf("list the tasks of %s: %v", svc.name, err)
+	}
+	return len(res.Items)
+}
+
+// TestVIPHelperDiscoveryFault is D-09 through the production spec: a service whose address is outside every node's interfaces
+// keeps its tasks running, and each writes one fault no_interface line and no MASTER state; the service beside it, whose
+// address is on the nodes' network, is not disturbed.
+func TestVIPHelperDiscoveryFault(t *testing.T) {
+	r := newVIPHelperRig(t)
+	good := r.start(ingress.ServiceNameKeepalived, r.vip, vhRouterID)
+	lost := netip.MustParsePrefix("192.0.2.10/24")
+	odd := r.start("tierplan-keepalived-nowhere", lost, vhRouterID+1)
+	r.tasks(good)
+	r.tasks(odd)
+	r.waitOneHolder(r.vip.Addr(), vhFirstHolder, nil)
+
+	for _, n := range r.sw.Nodes() {
+		dockertest.Wait(t, vhLogBound, n.Hostname+" to write fault no_interface", func() (bool, string) {
+			_, ok := vhFind(r.taskLog(n, odd.name), func(e ingressbundle.VIPEvent) bool {
+				return e.Event == ingressbundle.VIPEventFault && e.Reason == ingressbundle.VIPReasonNoInterface && e.Active
+			})
+			return ok, "no fault line yet"
+		})
+	}
+	// The helper looks again every ten seconds: watch past one look, and then count the lines.
+	if v := vhWatch(15*time.Second, func() string { // wall-clock: a window that must be longer than the helper's rescan, so a repeated line can show
+		if got := len(r.holders(lost.Addr())); got != 0 {
+			return fmt.Sprintf("%d nodes list %s", got, lost.Addr())
+		}
+		return ""
+	}); v != "" {
+		t.Fatalf("S3 helper-discovery-fault: engine=%s violated: %s", r.sw.Engine, v)
+	}
+	for _, n := range r.sw.Nodes() {
+		faults := 0
+		for _, e := range r.taskLog(n, odd.name) {
+			switch {
+			case e.Event == ingressbundle.VIPEventFault:
+				faults++
+				if e.Reason != ingressbundle.VIPReasonNoInterface || !e.Active {
+					t.Errorf("%s wrote fault %q active=%v, want only no_interface active", n.Hostname, e.Reason, e.Active)
+				}
+			case e.Event == ingressbundle.VIPEventState:
+				t.Errorf("%s wrote state %s with no interface to hold the address on", n.Hostname, e.State)
+			case e.Event == ingressbundle.VIPEventStart:
+				t.Errorf("%s wrote a start line with no interface", n.Hostname)
+			}
+		}
+		if faults != 1 {
+			t.Errorf("%s wrote %d fault lines, want exactly one", n.Hostname, faults)
+		}
+	}
+	if got, want := r.taskCount(odd), len(r.sw.Nodes()); got != want {
+		t.Errorf("the service with no interface has %d tasks, want %d: a task exited and was replaced", got, want)
+	}
+	t.Logf("S3 helper-discovery-fault: engine=%s tasks=%d fault=no_interface", r.sw.Engine, len(r.sw.Nodes()))
 }
