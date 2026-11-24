@@ -299,6 +299,8 @@ type authFixture struct {
 	settingsAgents api.SettingsAgents
 	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
 	envWarningsNow func() time.Time
+	// envWarningsVIP reads the virtual IP facts of the same route; nil lists none.
+	envWarningsVIP api.VIPFactsReader
 	// inviteTTL is TIERPLAN_INVITE_TTL as the access service sees it; zero is the 72 hour
 	// default. inviteLimiter throttles the public invite routes per address and
 	// inviteAudit records their refusals; nil means a generous limiter and the writer
@@ -502,7 +504,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	if f.envSvc != nil {
 		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
-			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Updates: updateSvc, Now: f.envWarningsNow, Log: log,
+			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Updates: updateSvc, Now: f.envWarningsNow, VIP: f.envWarningsVIP, Log: log,
 			Agents: api.AgentsDeps{
 				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
 				Updater: f.updater, ServerVersion: f.serverVersion,

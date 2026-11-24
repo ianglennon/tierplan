@@ -294,7 +294,13 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterEnvironments(r, d.Environments)
 	api.RegisterAgents(r, d.Agents)
 	api.RegisterUnknownAgents(r, d.UnknownAgents)
-	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Repo: &stackops.Repo{Store: d.Stacks.Store, Vault: d.Stacks.Vault}, Agents: d.Agents, Updates: d.Updates.Updates, Log: d.Environments.Log})
+	// The virtual IP's bell items come from the ingress deployer; a nil one (a server built without it) lists none, and a nil
+	// pointer is never put inside the interface.
+	var vipFacts api.VIPFactsReader
+	if d.IngressDeploy.Service != nil {
+		vipFacts = d.IngressDeploy.Service
+	}
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Repo: &stackops.Repo{Store: d.Stacks.Store, Vault: d.Stacks.Vault}, Agents: d.Agents, Updates: d.Updates.Updates, VIP: vipFacts, Log: d.Environments.Log})
 	api.RegisterDashboard(r, d.Dashboard)
 	api.RegisterFleet(r, d.Fleet)
 	api.RegisterContainers(r, d.Containers)

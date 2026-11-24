@@ -79,6 +79,8 @@ type EnvWarning struct {
 	// TierPlan host's node, and for a manual_update_needed item that counts that agent (D-19,
 	// D-22): TierPlan reaches the node through the Docker socket, and the agent only stands by.
 	Standby bool
+	// VIP holds the facts of a virtual IP item (vip_*) that the fields above have no place for. Nil for every other item.
+	VIP *VIPWarningFacts
 }
 
 // AgentState is what the warnings need to know of one agent.

@@ -39,15 +39,35 @@ type EnvWarningsDeps struct {
 	Agents AgentsDeps
 	// Updates holds the failed image updates the bell lists (IMG-07, D-14). Nil lists none.
 	Updates *updates.Service
+	// VIP reads the facts of an environment's virtual IP for the bell (Phase 26, A-07). Nil lists none.
+	VIP VIPFactsReader
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
 
+// VIPFactsReader reads what the bell needs to know of an environment's virtual IP: *ingressdeploy.Service has this method. The
+// second result is false when the environment has no virtual IP.
+type VIPFactsReader interface {
+	VIPFacts(ctx context.Context, envID string) (envs.VIPFacts, bool, error)
+}
+
+// VIPWarningBody is the extra facts of a virtual IP bell item. None is a key, a token or a secret, and the web draws every one
+// as text.
+type VIPWarningBody struct {
+	Address       string `json:"address,omitempty" doc:"The virtual address with its prefix length, for example 192.168.1.250/24"`
+	RouterID      int    `json:"routerId,omitempty" doc:"For vip_foreign_router: the VRRP router ID the other router uses"`
+	From          string `json:"from,omitempty" doc:"For vip_moved: the host name of the node that held the address before its latest move, at most 64 characters; absent when no node did"`
+	To            string `json:"to,omitempty" doc:"For vip_moved: the host name of the node that holds the address after its latest move, at most 64 characters; absent when no node does"`
+	MoveReason    string `json:"moveReason,omitempty" enum:"holder_failed,probe_failing,drain_handoff,unknown" doc:"For vip_moved: why the latest move happened"`
+	Sender        string `json:"sender,omitempty" doc:"For vip_foreign_router: the address the other router sends from, only when it is a valid IP address"`
+	WindowSeconds int    `json:"windowSeconds,omitempty" doc:"For vip_clock_skew: the time window of the virtual IP's authentication, in seconds"`
+}
+
 // EnvWarningBody is one environment problem in the header bell.
 type EnvWarningBody struct {
-	ID            string `json:"id" enum:"env_offline,cert_not_renewing,manual_update_needed,clock_skew,pending_long,cluster_changed,fold_offered,restart_loop,restart_loop_container,git_sync_error,git_autodeploy_skipped,git_autodeploy_reverted,git_autodeploy_paused,update_rolled_back,update_rollback_failed" doc:"Which problem this is"`
+	ID            string `json:"id" enum:"env_offline,cert_not_renewing,manual_update_needed,clock_skew,pending_long,cluster_changed,fold_offered,restart_loop,restart_loop_container,git_sync_error,git_autodeploy_skipped,git_autodeploy_reverted,git_autodeploy_paused,update_rolled_back,update_rollback_failed,vip_no_holder,vip_multiple_holders,vip_moved,vip_foreign_router,vip_clock_skew,vip_privileged_lost" doc:"Which problem this is. The vip_ items are for callers who hold ingress.manage on the environment: vip_no_holder (an error: no node has held the virtual IP for more than 10 seconds, with address and since), vip_multiple_holders (count, address), vip_moved (the address moved in the last hour; one item with count, from, to, moveReason and since for the latest move), vip_foreign_router (another router uses this router ID and fails authentication; routerId and, when valid, sender), vip_clock_skew (one item per node, with node, windowSeconds and, when known, offsetSeconds) and vip_privileged_lost (a manager's agent stopped allowing privileged services; count and, for one manager, node)"`
 	Severity      string `json:"severity" enum:"error,warning" doc:"error: an environment is out of reach or a certificate has expired. warning: something needs attention"`
 	EnvID         string `json:"envId,omitempty" doc:"The environment the problem is about. Absent for manual_update_needed when it spans more than one environment"`
 	EnvName       string `json:"envName,omitempty" doc:"That environment's name, at most 64 characters. For fold_offered, the swarm environment"`
@@ -81,6 +101,8 @@ type EnvWarningBody struct {
 	Revision int64  `json:"revision,omitempty" doc:"For git_autodeploy_reverted: the number of the revision that put the changes back. For git_autodeploy_paused with reasonCode rollback: the revision rolled back to"`
 	Owner    string `json:"owner,omitempty" doc:"For git_autodeploy_paused: the name of the user the automation runs for, at most 64 characters; absent when it has no owner any more"`
 	Digest   string `json:"digest,omitempty" doc:"For update_rolled_back and update_rollback_failed: the digest the update failed with, without its algorithm and cut to 12 characters; absent on an item that stands for several updates"`
+
+	VIP *VIPWarningBody `json:"vip,omitempty" doc:"For the vip_ items: the facts of the virtual IP the item is about"`
 }
 
 // EnvWarningsBody lists the environment warnings that apply now.
@@ -96,6 +118,13 @@ type EnvWarningsOutput struct {
 
 // envWarningBody turns a derived warning into its API shape.
 func envWarningBody(w envs.EnvWarning) EnvWarningBody {
+	var vip *VIPWarningBody
+	if w.VIP != nil {
+		vip = &VIPWarningBody{
+			Address: w.VIP.Address, RouterID: w.VIP.RouterID, From: w.VIP.From, To: w.VIP.To, MoveReason: w.VIP.MoveReason,
+			Sender: w.VIP.Sender, WindowSeconds: w.VIP.WindowSeconds,
+		}
+	}
 	return EnvWarningBody{
 		ID: w.ID, Severity: w.Severity, EnvID: w.EnvID, EnvName: w.EnvName, Node: w.Node, AgentID: w.AgentID, Reason: w.Reason,
 		Since: rfc3339(w.Since), ExpiresAt: rfc3339(w.ExpiresAt), Days: w.Days, Count: w.Count,
@@ -103,7 +132,7 @@ func envWarningBody(w envs.EnvWarning) EnvWarningBody {
 		Service: w.Service, ServiceID: w.ServiceID, WindowMinutes: w.WindowMinutes, LatestError: w.LatestError,
 		Container: w.Container, ContainerID: w.ContainerID, NodeID: w.NodeID, LastExitCode: w.LastExitCode,
 		StackID: w.StackID, StackName: w.StackName, ReasonCode: w.ReasonCode, ReasonDetail: w.ReasonDetail,
-		Commit: w.Commit, Example: w.Example, Revision: w.Revision, Owner: w.Owner, Digest: w.Digest,
+		Commit: w.Commit, Example: w.Example, Revision: w.Revision, Owner: w.Owner, Digest: w.Digest, VIP: vip,
 	}
 }
 
@@ -138,7 +167,9 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 			"These three go to the user the automation runs for and to callers who hold git.manage on the environment, and to no one else. " +
 			"An image update that failed is told too: one that was put back (update_rolled_back, with service or container, digest, reason and since) and one whose rollback failed as well, so the workload may be partly updated " +
 			"(update_rollback_failed, an error). They go while the tag still points at the digest that failed, which a newer digest or a good update ends, and are told only to callers who hold services.read (a service) or containers.read (a container) on the environment. " +
-			"More than five put-back updates of one environment are told as one item with count. Only environments the caller holds environments.read for are considered, " +
+			"More than five put-back updates of one environment are told as one item with count. " +
+			"The virtual IP's conditions are told as well, only to callers who hold ingress.manage on the environment and only while the virtual IP is on: nobody has held it for more than 10 seconds (vip_no_holder, an error), more than one node holds it (vip_multiple_holders), it moved in the last hour (vip_moved), another router uses its router ID (vip_foreign_router), a node's clock is out of step (vip_clock_skew, one item per node) and a manager stopped allowing privileged services (vip_privileged_lost); each carries a vip object with its facts. " +
+			"Only environments the caller holds environments.read for are considered, " +
 			"so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. " +
 			"Errors come first, then the newest. Names are at most 64 characters.",
 		Tags: []string{"environments"},
@@ -214,6 +245,7 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 		}
 		warnings = append(warnings, autoWarnings...)
 		warnings = append(warnings, updateRollbackWarnings(ctx, d, perEnv, visible)...)
+		warnings = append(warnings, vipWarnings(ctx, d, perEnv, visible, states, at)...)
 		envs.SortWarnings(warnings)
 		items := make([]EnvWarningBody, 0, len(warnings))
 		for _, w := range warnings {
@@ -221,6 +253,31 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 		}
 		return &EnvWarningsOutput{CacheControl: "no-store", Body: EnvWarningsBody{Items: items}}, nil
 	})
+}
+
+// vipWarnings are the virtual IP items of the environments the caller manages the ingress of, derived from the live facts of
+// each (A-07): nothing is stored, so an item goes with its cause. An environment whose facts cannot be read is logged and says
+// nothing, as a restart loop that cannot be read does; it does not fail the bell.
+func vipWarnings(ctx context.Context, d EnvWarningsDeps, perEnv map[string][]rbac.Perm, visible []envs.Environment, states map[string][]envs.AgentState, at time.Time) []envs.EnvWarning {
+	if d.VIP == nil {
+		return nil
+	}
+	var out []envs.EnvWarning
+	for _, e := range visible {
+		if !canIn(perEnv, e.ID, rbac.PermIngressManage) {
+			continue
+		}
+		facts, ok, err := d.VIP.VIPFacts(ctx, e.ID)
+		if err != nil {
+			d.Log.Warn("environment warnings: the virtual IP facts were not read", "environment", e.ID, "error", err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		out = append(out, envs.VIPWarnings(e.ID, e.Name, facts, states[e.ID], at)...)
+	}
+	return out
 }
 
 // canReadServices reports whether the grants listed for each environment include reading its
