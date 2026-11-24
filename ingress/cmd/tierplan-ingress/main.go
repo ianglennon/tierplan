@@ -3,12 +3,13 @@
 
 // Command tierplan-ingress is the supervisor of a TierPlan ingress node and PID 1 of the ingress image. It
 // runs Traefik as a child, keeps the node's bundle cache on its volume, and holds the channel to TierPlan
-// that delivers new bundles (D-13, D-20). It has four forms:
+// that delivers new bundles (D-13, D-20). It has five forms:
 //
-//	tierplan-ingress               run the node
-//	tierplan-ingress healthcheck   exit 0 when the readiness endpoint answers 200, else 1 (D-18)
-//	tierplan-ingress probe         exit 0 when the proxy on this node is ready, else 1 (D-12)
-//	tierplan-ingress --version     print the version
+//	tierplan-ingress                 run the node
+//	tierplan-ingress healthcheck     exit 0 when the readiness endpoint answers 200, else 1 (D-18)
+//	tierplan-ingress probe           exit 0 when the proxy on this node is ready, else 1 (D-12)
+//	tierplan-ingress vip-entrypoint  PID 1 of the keepalived image: run keepalived, report its states (D-15)
+//	tierplan-ingress --version       print the version
 //
 // Logs are JSON on standard output. A configuration error is one line on standard error and exit status 2.
 package main
@@ -32,10 +33,11 @@ import (
 	"github.com/ianglennon/tierplan/ingress/internal/supervisor"
 	"github.com/ianglennon/tierplan/ingress/internal/traefikproc"
 	"github.com/ianglennon/tierplan/ingress/internal/version"
+	"github.com/ianglennon/tierplan/ingress/internal/vip"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
 
-const usage = "usage: tierplan-ingress [healthcheck | probe | --version]"
+const usage = "usage: tierplan-ingress [healthcheck | probe | vip-entrypoint | --version]"
 
 // deps are the process-level effects run uses, so a test can drive it without a volume, a signal or a
 // server.
@@ -51,6 +53,8 @@ type deps struct {
 	readyURL string
 	// serve runs the node until ctx ends.
 	serve func(ctx context.Context, cfg config.Config, log *slog.Logger) error
+	// vipRun runs the keepalived image's entrypoint until ctx ends and returns its exit status (D-15).
+	vipRun func(ctx context.Context, d vip.RunDeps) int
 }
 
 func run(d deps) int {
@@ -67,6 +71,9 @@ func run(d deps) int {
 		}
 		if d.args[0] == "probe" && len(d.args) == 1 {
 			return probe(d)
+		}
+		if d.args[0] == "vip-entrypoint" && len(d.args) == 1 {
+			return vipEntrypoint(d)
 		}
 		_, _ = fmt.Fprintln(d.stderr, "tierplan-ingress: unknown argument", fmt.Sprintf("%q", d.args[0]))
 		_, _ = fmt.Fprintln(d.stderr, usage)
@@ -139,6 +146,18 @@ func probe(d deps) int {
 	return 0
 }
 
+// vipEntrypoint is PID 1 of the keepalived image (D-15). It does not touch the node's own state: no
+// no-new-privileges, because keepalived needs the capabilities the service adds and would lose them to the flag,
+// and no ingress configuration, because the image holds no TierPlan credential and opens no channel to it
+// (PROH-26-02). Its report is the JSON lines on standard output; its own faults are one line on standard error.
+func vipEntrypoint(d deps) int {
+	// PID 1 ignores a signal it has no handler for, so without this a `docker stop` would wait out its grace
+	// period and kill keepalived instead of letting it release the address.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	return d.vipRun(ctx, vip.RunDeps{Getenv: d.getenv, Stdout: d.stdout, Stderr: d.stderr})
+}
+
 // serve builds the real node over the volume at ingressbundle.NodeRoot and runs it.
 func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	fsys := fsx.OS()
@@ -162,5 +181,6 @@ func main() {
 		stderr: os.Stderr,
 		nnp:    traefikproc.SetNoNewPrivs,
 		serve:  serve,
+		vipRun: vip.Run,
 	}))
 }
