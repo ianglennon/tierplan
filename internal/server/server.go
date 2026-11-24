@@ -1363,7 +1363,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
-		Nodes:         api.NodesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Agents: agentSvc, Live: tunnelHub, SelfContainerID: selfID, Log: log},
+		Nodes:         api.NodesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Agents: agentSvc, Live: tunnelHub, SelfContainerID: selfID, VIP: ingressDeploy, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},

@@ -282,6 +282,8 @@ type authFixture struct {
 	// a real session.
 	agentSvc   *agents.Service
 	liveAgents api.AgentSessions
+	// nodeVIP, when set, is the virtual IP hook of the node routes.
+	nodeVIP api.VIPHandoffs
 	// clusters is the cluster reader of a swarm fixture; nil elsewhere.
 	clusters *envs.Clusters
 	// hostRouteFile is the route file mounted into TierPlan's own container, as the subnet check
@@ -595,7 +597,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterConfigs(r, api.ConfigsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Store: f.st, Log: log})
 		api.RegisterNodes(r, api.NodesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, Agents: agentSvc, Live: f.liveAgents,
-			SelfContainerID: f.envSvc.SelfContainerID(), Log: log,
+			SelfContainerID: f.envSvc.SelfContainerID(), VIP: f.nodeVIP, Log: log,
 		})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
 		api.RegisterImages(r, api.ImagesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
