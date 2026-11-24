@@ -260,15 +260,15 @@ func (s *Service) Enable(ctx context.Context, actor audit.Actor, owner, envID st
 	for _, id := range enableItems {
 		specs = append(specs, jobs.ItemSpec{ID: id, Label: itemLabels[id], Kind: "step"})
 	}
-	return s.startEnable(ctx, owner, info, req, s.preflight, specs, func(jctx context.Context, r *jobs.Reporter, release func()) {
+	return s.startEnable(ctx, JobKindEnable, owner, info, req, s.preflight, specs, func(jctx context.Context, r *jobs.Reporter, release func()) {
 		s.runEnable(jctx, r, release, actor, info.ID, req)
 	})
 }
 
 // startEnable is the part of an enable the two kinds of environment share: the operation lock, the preflight and the
-// job. The job starts only after the lock names it, so the holder a refused operation is told about is always the whole
+// job of the given kind. The job starts only after the lock names it, so the holder a refused operation is told about is always the whole
 // of it. run is the job's body; it is handed release, which frees the lock and is safe to repeat.
-func (s *Service) startEnable(ctx context.Context, owner string, info EnvInfo, req EnableRequest,
+func (s *Service) startEnable(ctx context.Context, kind, owner string, info EnvInfo, req EnableRequest,
 	pre func(context.Context, EnvInfo, EnableRequest) ([]Finding, error), items []jobs.ItemSpec,
 	run func(ctx context.Context, r *jobs.Reporter, release func())) (string, error) {
 	envID := info.ID
@@ -292,7 +292,7 @@ func (s *Service) startEnable(ctx context.Context, owner string, info EnvInfo, r
 		return "", &PreflightError{Findings: findings}
 	}
 	attached := make(chan struct{})
-	job, err := s.d.Jobs.Start(jobs.Spec{Kind: JobKindEnable, EnvID: envID, Owner: owner, Items: items},
+	job, err := s.d.Jobs.Start(jobs.Spec{Kind: kind, EnvID: envID, Owner: owner, Items: items},
 		func(jctx context.Context, r *jobs.Reporter) {
 			defer release()
 			select {

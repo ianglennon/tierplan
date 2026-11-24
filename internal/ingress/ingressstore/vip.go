@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // ErrVIPNotFound is an environment with no virtual IP row.
@@ -112,20 +113,56 @@ func vipMoveOf(r sqlc.IngressVipMove) VIPMove {
 // (EnsureAt, EnsureError) is the ensure loop's and is kept; CreatedAt of an existing row is kept.
 // cfg.KeySealed must already be sealed.
 func (s *Store) PutVIP(ctx context.Context, cfg VIPConfig) error {
+	err := s.st.Q.PutVIP(ctx, s.putVIPParams(cfg))
+	if err != nil {
+		return fmt.Errorf("ingressstore: write the virtual IP of environment %q: %w", cfg.EnvID, err)
+	}
+	return nil
+}
+
+// PutVIPWithHook is PutVIP with hook run in the same transaction, after the row is written: an error of
+// the hook rolls the row back. The enable writes its audit row here, so the virtual IP never exists without
+// it. A nil hook is PutVIP.
+func (s *Store) PutVIPWithHook(ctx context.Context, cfg VIPConfig, hook DeployHook) error {
+	return s.writeQuiet(ctx, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		if err := q.PutVIP(ctx, s.putVIPParams(cfg)); err != nil {
+			return false, fmt.Errorf("ingressstore: write the virtual IP of environment %q: %w", cfg.EnvID, err)
+		}
+		if hook != nil {
+			if err := hook(ctx, tx); err != nil {
+				return false, err
+			}
+		}
+		return true, nil
+	})
+}
+
+// putVIPParams is the row PutVIP writes: updated_at is now and created_at is cfg's, or now when it is zero.
+func (s *Store) putVIPParams(cfg VIPConfig) sqlc.PutVIPParams {
 	now := s.now().UTC()
 	created := cfg.CreatedAt
 	if created.IsZero() {
 		created = now
 	}
-	err := s.st.Q.PutVIP(ctx, sqlc.PutVIPParams{
+	return sqlc.PutVIPParams{
 		EnvID: cfg.EnvID, Address: cfg.Address.String(), PrefixLen: int64(cfg.PrefixLen), RouterID: int64(cfg.RouterID),
 		RouterDerived: boolInt(cfg.RouterDerived), KeySealed: cfg.KeySealed, KeyGeneration: int64(cfg.KeyGeneration),
 		Enabled: boolInt(cfg.Enabled), CreatedAt: toNanos(created), UpdatedAt: toNanos(now),
-	})
-	if err != nil {
-		return fmt.Errorf("ingressstore: write the virtual IP of environment %q: %w", cfg.EnvID, err)
 	}
-	return nil
+}
+
+// SealVIPKey seals a VRRP key of the environment for VIPConfig.KeySealed, under the context the column is
+// registered with (vault.ContextIngressVIPKey plus the environment ID), so a re-wrap opens it again. It is the
+// one way the key is sealed; the store never opens it.
+func (s *Store) SealVIPKey(envID string, raw []byte) (string, error) {
+	if s.v == nil {
+		return "", errors.New("ingressstore: no vault to seal the virtual IP key with")
+	}
+	sealed, err := s.v.Seal(vault.ContextIngressVIPKey+envID, raw)
+	if err != nil {
+		return "", fmt.Errorf("ingressstore: seal the virtual IP key of environment %q: %w", envID, err)
+	}
+	return sealed, nil
 }
 
 // GetVIP reads an environment's virtual IP. An environment with none is ErrVIPNotFound.

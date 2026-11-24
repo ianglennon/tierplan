@@ -5,10 +5,13 @@ package ingressstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // vipFixture is a virtual IP configuration for one environment.
@@ -307,5 +310,46 @@ func TestVIPRowsCascade(t *testing.T) {
 	}
 	if err := s.PutVIP(ctx, vipFixture("env-gone")); err == nil {
 		t.Fatal("a virtual IP for an environment that does not exist was stored")
+	}
+}
+
+// TestPutVIPWithHookRollsBack: the row and the hook are one transaction, so a hook that fails leaves no row, and a hook that
+// succeeds leaves the row.
+func TestPutVIPWithHookRollsBack(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+
+	boom := errors.New("the audit row failed")
+	if err := s.PutVIPWithHook(ctx, vipFixture("env-a"), func(context.Context, *sql.Tx) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("PutVIPWithHook with a failing hook = %v, want the hook's error", err)
+	}
+	if _, err := s.GetVIP(ctx, "env-a"); !errors.Is(err, ErrVIPNotFound) {
+		t.Fatalf("GetVIP after a rolled-back put = %v, want ErrVIPNotFound", err)
+	}
+
+	var ran bool
+	if err := s.PutVIPWithHook(ctx, vipFixture("env-a"), func(context.Context, *sql.Tx) error { ran = true; return nil }); err != nil {
+		t.Fatalf("PutVIPWithHook: %v", err)
+	}
+	if _, err := s.GetVIP(ctx, "env-a"); err != nil || !ran {
+		t.Fatalf("GetVIP = %v, hook ran %v; want the row and the hook", err, ran)
+	}
+}
+
+// TestSealVIPKeyOpensUnderItsContext: the sealed key opens with the context the column is registered under and with no
+// other, so a re-wrap of the column finds it.
+func TestSealVIPKeyOpensUnderItsContext(t *testing.T) {
+	s, _, v := newTestStore(t)
+	raw := []byte("0123456789abcdef0123456789abcdef")
+	sealed, err := s.SealVIPKey("env-a", raw)
+	if err != nil {
+		t.Fatalf("SealVIPKey: %v", err)
+	}
+	if got, err := v.Open(vault.ContextIngressVIPKey+"env-a", sealed); err != nil || string(got) != string(raw) {
+		t.Fatalf("Open under the column's context = %q, %v; want the key", got, err)
+	}
+	if _, err := v.Open(vault.ContextIngressVIPKey+"env-b", sealed); err == nil {
+		t.Fatal("the sealed key opened under another environment's context")
 	}
 }
