@@ -448,9 +448,9 @@ func rotateObject(ctx context.Context, d ServicesDeps, k rotateKind, p *rbac.Pri
 	return rotateBody(res), nil
 }
 
-// ingressOwnsRotated says whether the object a rotate is asked about is a proxy join token's secret,
-// from a fresh inspect through a manager: the component label and the reserved name prefix together
-// (D-41). The proxy is the only service that mounts it, and every write to the proxy is refused, so a
+// ingressOwnsRotated says whether the object a rotate is asked about is one of TierPlan's own ingress secrets,
+// a proxy join token or the virtual IP's keepalived key, from a fresh inspect through a manager: the
+// component label and that component's reserved name prefix together (D-41, D-14). The proxy is the only service that mounts it, and every write to the proxy is refused, so a
 // rotate of it would only break what the ensure loop keeps in step; swarmops.Rotate itself is unchanged
 // because no rotate of any other secret or config can name the proxy as a user. A config is never
 // TierPlan's. An object that is not there is not owned: the rotate says it is gone.
@@ -468,7 +468,7 @@ func ingressOwnsRotated(ctx context.Context, d ServicesDeps, k rotateKind, envID
 	})
 	switch {
 	case err == nil:
-		return ingress.OwnsSecret(row.Name, row.Labels), nil
+		return ingress.OwnsAnySecret(row.Name, row.Labels), nil
 	case errors.Is(err, dockerx.ErrObjectNotFound):
 		return false, nil
 	}

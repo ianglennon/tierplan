@@ -322,7 +322,7 @@ func secretItem(row dockerx.SecretRow, used int, known stackIDs) SecretItem {
 	return SecretItem{
 		ID: row.ID, Name: row.Name, Labels: row.Labels, CreatedAt: rfc3339(row.CreatedAt), UpdatedAt: rfc3339(row.UpdatedAt),
 		UsedBy: used, Owner: owner, OwnerKind: kind, TierPlanStackID: known.confirmObject(owner, row.Labels[stacks.LabelStackID]),
-		Ingress: ingress.OwnsSecret(row.Name, row.Labels),
+		Ingress: ingress.OwnsAnySecret(row.Name, row.Labels),
 	}
 }
 
@@ -608,7 +608,7 @@ func deleteSecret(ctx context.Context, d SecretsDeps, p *rbac.Principal, envID s
 		id, name = row.ID, row.Name
 		// A join token's secret is removed by switching ingress off, never by hand (D-46); this comes before
 		// the typed name, which would not lift it.
-		if ingress.OwnsSecret(row.Name, row.Labels) {
+		if ingress.OwnsAnySecret(row.Name, row.Labels) {
 			return &secretRefusal{code: problemIngressOwned, problem: ingressOwnedError()}
 		}
 		if in.Confirm != row.Name {
