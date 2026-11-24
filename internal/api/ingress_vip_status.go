@@ -5,13 +5,18 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
@@ -24,6 +29,12 @@ const (
 	problemVIPNotEnabled = "vip_not_enabled"
 
 	vipNotEnabledText = "This environment has no virtual IP."
+
+	// vipMovesDefaultLimit and vipMovesMaxLimit are the page size of the move history when none is asked for and its largest.
+	vipMovesDefaultLimit = 50
+	vipMovesMaxLimit     = 100
+
+	problemVIPBadCursor = "vip_bad_cursor"
 )
 
 // IngressVIPHolderBody says which nodes hold the address.
@@ -160,4 +171,106 @@ func RegisterIngressVIP(r *httpx.Router, d IngressDeployDeps) {
 		}
 		return &IngressVIPOutput{CacheControl: "no-store", Body: ingressVIPBody(st)}, nil
 	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listIngressVIPMoves",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/ingress/vip/moves",
+		Summary:     "List the moves of a swarm's virtual IP",
+		Description: "Pages the history of the address moving from one node to another, newest first by time and, for moves at the same instant, newest recorded first. " +
+			"limit is 1 to 100 (50 by default); before is the next of the previous page, an opaque cursor, and a value that is not one is 422 vip_bad_cursor. " +
+			"next is absent on the last page. A swarm with no moves answers an empty list. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressVIPMovesInput) (*IngressVIPMovesOutput, error) {
+		if httpx.PrincipalFrom(ctx) == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Service == nil {
+			return nil, unavailable()
+		}
+		var before *ingressstore.VIPMoveCursor
+		if in.Before != "" {
+			c, ok := decodeVIPMoveCursor(in.Before)
+			if !ok {
+				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemVIPBadCursor, "before is not a cursor this server gave.")
+			}
+			before = &c
+		}
+		limit := in.Limit
+		if limit < 1 {
+			limit = vipMovesDefaultLimit
+		}
+		limit = min(limit, vipMovesMaxLimit)
+		moves, next, err := d.Service.VIPMoves(ctx, in.EnvID, before, limit)
+		if err != nil {
+			return nil, fail("list the virtual IP moves", err)
+		}
+		body := IngressVIPMovesBody{Items: make([]IngressVIPMoveBody, 0, len(moves))}
+		for _, m := range moves {
+			body.Items = append(body.Items, IngressVIPMoveBody{
+				At: rfc3339(m.At), FromNodeID: m.FromNodeID, FromNode: m.FromNodeName, ToNodeID: m.ToNodeID, ToNode: m.ToNodeName, Reason: m.Reason,
+			})
+		}
+		if next != nil {
+			body.Next = encodeVIPMoveCursor(*next)
+		}
+		return &IngressVIPMovesOutput{CacheControl: "no-store", Body: body}, nil
+	})
+}
+
+// IngressVIPMovesInput is the path and the paging of the move history.
+type IngressVIPMovesInput struct {
+	EnvironmentPathInput
+	Before string `query:"before" maxLength:"64" doc:"The next of the previous page; leave it out for the newest moves"`
+	Limit  int    `query:"limit" minimum:"1" maximum:"100" default:"50" doc:"Moves per page, 1 to 100; 50 by default"`
+}
+
+// IngressVIPMoveBody is one move of the address from one node to another.
+type IngressVIPMoveBody struct {
+	At         string `json:"at" format:"date-time" doc:"When the move happened, as the new holder's log says"`
+	FromNodeID string `json:"fromNodeId" doc:"The swarm node ID of the previous holder; empty when the address had no holder before"`
+	FromNode   string `json:"fromNode" doc:"The previous holder's host name; empty when the address had no holder before"`
+	ToNodeID   string `json:"toNodeId" doc:"The swarm node ID of the new holder; empty when the address has no holder after"`
+	ToNode     string `json:"toNode" doc:"The new holder's host name; empty when the address has no holder after"`
+	Reason     string `json:"reason" enum:"holder_failed,probe_failing,drain_handoff,disabled,unknown" doc:"Why it moved. holder_failed: the previous holder went silent or its task is gone. probe_failing: its proxy was not ready. drain_handoff: TierPlan handed the address over before draining the node. disabled: the virtual IP was switched off. unknown: none of these explains it"`
+}
+
+// IngressVIPMovesBody is one page of the move history.
+type IngressVIPMovesBody struct {
+	Items []IngressVIPMoveBody `json:"items" doc:"The moves of this page, newest first; never null"`
+	Next  string               `json:"next,omitempty" doc:"Pass this as before to read the next, older page; absent on the last page"`
+}
+
+// IngressVIPMovesOutput wraps IngressVIPMovesBody for huma.
+type IngressVIPMovesOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         IngressVIPMovesBody
+}
+
+// encodeVIPMoveCursor is the opaque form of a cursor: the base64url, unpadded, of "<at-nanos>.<id>".
+func encodeVIPMoveCursor(c ingressstore.VIPMoveCursor) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(c.At.UnixNano(), 10) + "." + strconv.FormatInt(c.ID, 10)))
+}
+
+// decodeVIPMoveCursor reads a cursor strictly: unpadded base64url, then two canonical decimal integers around one dot, the
+// instant above zero and the id not below it. Anything else, including a number that has a sign, a leading zero or a space, is
+// refused, so the one form a cursor has is the one encodeVIPMoveCursor writes.
+func decodeVIPMoveCursor(s string) (ingressstore.VIPMoveCursor, bool) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(s)
+	if err != nil {
+		return ingressstore.VIPMoveCursor{}, false
+	}
+	at, id, ok := strings.Cut(string(raw), ".")
+	if !ok {
+		return ingressstore.VIPMoveCursor{}, false
+	}
+	nanos, err := strconv.ParseInt(at, 10, 64)
+	if err != nil || nanos <= 0 || strconv.FormatInt(nanos, 10) != at {
+		return ingressstore.VIPMoveCursor{}, false
+	}
+	n, err := strconv.ParseInt(id, 10, 64)
+	if err != nil || n < 0 || strconv.FormatInt(n, 10) != id {
+		return ingressstore.VIPMoveCursor{}, false
+	}
+	return ingressstore.VIPMoveCursor{At: time.Unix(0, nanos).UTC(), ID: n}, true
 }

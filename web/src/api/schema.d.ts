@@ -1888,6 +1888,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/vip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the virtual IP status of a swarm
+         * @description Says which address the swarm's ingress answers on and which node holds it (none, one or many), when it last lost its holder, how each node that can hold it stands (its VRRP state, whether its proxy is ready, its keepalived task, its last fault and when TierPlan last heard from it), whether each manager allows privileged services, whether another router uses the router ID, which nodes have clock trouble, the authentication window in seconds and the last pass that kept the service as wanted. A swarm with no virtual IP answers 404 vip_not_enabled. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["getIngressVIP"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/vip/moves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the moves of a swarm's virtual IP
+         * @description Pages the history of the address moving from one node to another, newest first by time and, for moves at the same instant, newest recorded first. limit is 1 to 100 (50 by default); before is the next of the previous page, an opaque cursor, and a value that is not one is 422 vip_bad_cursor. next is absent on the last page. A swarm with no moves answers an empty list. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["listIngressVIPMoves"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/janitor": {
         parameters: {
             query?: never;
@@ -10952,6 +10992,133 @@ export interface components {
             service: boolean;
             /** @description True when the certificate cache volume exists on a standalone host; always false on a swarm, whose volumes are on its nodes */
             volume: boolean;
+        };
+        IngressVIPBody: {
+            /** @description The virtual address with the prefix length of its network, for example 192.168.10.250/24 */
+            address: string;
+            /**
+             * Format: int64
+             * @description How far, in seconds, an advert's authentication may differ from a node's clock before the node refuses it
+             */
+            authWindowSeconds: number;
+            /** @description The nodes that run a keepalived task or have reported a state, ordered by host name then node ID */
+            candidates: components["schemas"]["IngressVIPCandidateBody"][] | null;
+            /** @description The swarm node IDs of the nodes whose clock is too far from the others for the authentication window */
+            clockSkewNodes: string[] | null;
+            /** @description True while the virtual IP is switched on */
+            enabled: boolean;
+            /** @description The warning that another router on the network uses this router ID */
+            foreignRouter: components["schemas"]["IngressVIPForeignRouterBody"];
+            /** @description Which nodes hold the address */
+            holder: components["schemas"]["IngressVIPHolderBody"];
+            /**
+             * Format: date-time
+             * @description When the address last lost its holder; absent while it is held, or before TierPlan has read the environment
+             */
+            holderlessSince?: string;
+            /**
+             * Format: int64
+             * @description How many times the VRRP key has been made; the key itself is never shown
+             */
+            keyGeneration: number;
+            /** @description The last pass that keeps the keepalived service as wanted */
+            lastEnsure: components["schemas"]["IngressVIPEnsureBody"];
+            /** @description The privileged-services opt-in of every manager */
+            managers: components["schemas"]["IngressVIPManagerBody"][] | null;
+            /** @description False when the managers could not be read, which leaves managers empty */
+            managersReadable: boolean;
+            /** @description True when TierPlan chose the router ID, false when an Admin did */
+            routerDerived: boolean;
+            /**
+             * Format: int64
+             * @description The VRRP router ID
+             */
+            routerId: number;
+        };
+        IngressVIPCandidateBody: {
+            /** @description The node's host name, empty when it is not known */
+            hostname: string;
+            /** @description Why the node's keepalived last reported a fault, empty when it has not */
+            lastFault: string;
+            /**
+             * Format: date-time
+             * @description When TierPlan last read the node's keepalived log without a failure; absent when it never has
+             */
+            lastHeard?: string;
+            /** @description The swarm node ID */
+            nodeId: string;
+            /** @description True when the node's proxy is enrolled, healthy and on the current bundle */
+            proxyReady: boolean;
+            /** @description The state of the node's newest keepalived task in the swarm, empty when it has none or the task list could not be read */
+            taskState: string;
+            /**
+             * @description The state the node's keepalived last reported; empty when it has not reported any
+             * @enum {string}
+             */
+            vrrpState: "MASTER" | "BACKUP" | "FAULT" | "STOP" | "";
+        };
+        IngressVIPEnsureBody: {
+            /**
+             * Format: date-time
+             * @description When the last pass ended; absent when none has run
+             */
+            at?: string;
+            /** @description The class of its failure; absent when it succeeded */
+            error?: string;
+        };
+        IngressVIPForeignRouterBody: {
+            /** @description True when any node reports another router using the router ID on the network */
+            detected: boolean;
+            /** @description The address that router sent from, when one was reported */
+            sender?: string;
+        };
+        IngressVIPHolderBody: {
+            /** @description The swarm node IDs of the nodes reporting MASTER, ordered by host name then ID; empty for none */
+            nodes: string[] | null;
+            /**
+             * @description none: no node reports MASTER. one: exactly one does, the healthy case. many: more than one does, which is a problem
+             * @enum {string}
+             */
+            state: "none" | "one" | "many";
+        };
+        IngressVIPManagerBody: {
+            /** @description The host name the swarm lists for the manager */
+            hostname: string;
+            /** @description True for a manager reached only through TierPlan's own Docker socket, which counts as allowing */
+            localSocket: boolean;
+            /** @description The manager's swarm node ID */
+            nodeId: string;
+            /**
+             * @description allows: the manager lets services run privileged. refuses: it does not, so keepalived cannot run on it. unknown: its agent did not answer
+             * @enum {string}
+             */
+            state: "allows" | "refuses" | "unknown";
+        };
+        IngressVIPMoveBody: {
+            /**
+             * Format: date-time
+             * @description When the move happened, as the new holder's log says
+             */
+            at: string;
+            /** @description The previous holder's host name; empty when the address had no holder before */
+            fromNode: string;
+            /** @description The swarm node ID of the previous holder; empty when the address had no holder before */
+            fromNodeId: string;
+            /**
+             * @description Why it moved. holder_failed: the previous holder went silent or its task is gone. probe_failing: its proxy was not ready. drain_handoff: TierPlan handed the address over before draining the node. disabled: the virtual IP was switched off. unknown: none of these explains it
+             * @enum {string}
+             */
+            reason: "holder_failed" | "probe_failing" | "drain_handoff" | "disabled" | "unknown";
+            /** @description The new holder's host name; empty when the address has no holder after */
+            toNode: string;
+            /** @description The swarm node ID of the new holder; empty when the address has no holder after */
+            toNodeId: string;
+        };
+        IngressVIPMovesBody: {
+            /** @description The moves of this page, newest first; never null */
+            items: components["schemas"]["IngressVIPMoveBody"][] | null;
+            /** @description Pass this as before to read the next, older page; absent on the last page */
+            next?: string;
         };
         InstallBody: {
             /** @description The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
@@ -21938,6 +22105,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngressStatusBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listIngressVIPMoves: {
+        parameters: {
+            query?: {
+                /** @description The next of the previous page; leave it out for the newest moves */
+                before?: string;
+                /** @description Moves per page, 1 to 100; 50 by default */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPMovesBody"];
                 };
             };
             /** @description Error */

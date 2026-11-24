@@ -11359,6 +11359,318 @@
         ],
         "type": "object"
       },
+      "IngressVIPBody": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "description": "The virtual address with the prefix length of its network, for example 192.168.10.250/24",
+            "type": "string"
+          },
+          "authWindowSeconds": {
+            "description": "How far, in seconds, an advert's authentication may differ from a node's clock before the node refuses it",
+            "format": "int64",
+            "type": "integer"
+          },
+          "candidates": {
+            "description": "The nodes that run a keepalived task or have reported a state, ordered by host name then node ID",
+            "items": {
+              "$ref": "#/components/schemas/IngressVIPCandidateBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "clockSkewNodes": {
+            "description": "The swarm node IDs of the nodes whose clock is too far from the others for the authentication window",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "enabled": {
+            "description": "True while the virtual IP is switched on",
+            "type": "boolean"
+          },
+          "foreignRouter": {
+            "$ref": "#/components/schemas/IngressVIPForeignRouterBody",
+            "description": "The warning that another router on the network uses this router ID"
+          },
+          "holder": {
+            "$ref": "#/components/schemas/IngressVIPHolderBody",
+            "description": "Which nodes hold the address"
+          },
+          "holderlessSince": {
+            "description": "When the address last lost its holder; absent while it is held, or before TierPlan has read the environment",
+            "format": "date-time",
+            "type": "string"
+          },
+          "keyGeneration": {
+            "description": "How many times the VRRP key has been made; the key itself is never shown",
+            "format": "int64",
+            "type": "integer"
+          },
+          "lastEnsure": {
+            "$ref": "#/components/schemas/IngressVIPEnsureBody",
+            "description": "The last pass that keeps the keepalived service as wanted"
+          },
+          "managers": {
+            "description": "The privileged-services opt-in of every manager",
+            "items": {
+              "$ref": "#/components/schemas/IngressVIPManagerBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "managersReadable": {
+            "description": "False when the managers could not be read, which leaves managers empty",
+            "type": "boolean"
+          },
+          "routerDerived": {
+            "description": "True when TierPlan chose the router ID, false when an Admin did",
+            "type": "boolean"
+          },
+          "routerId": {
+            "description": "The VRRP router ID",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "address",
+          "routerId",
+          "routerDerived",
+          "keyGeneration",
+          "enabled",
+          "holder",
+          "candidates",
+          "managers",
+          "managersReadable",
+          "foreignRouter",
+          "clockSkewNodes",
+          "authWindowSeconds",
+          "lastEnsure"
+        ],
+        "type": "object"
+      },
+      "IngressVIPCandidateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "hostname": {
+            "description": "The node's host name, empty when it is not known",
+            "type": "string"
+          },
+          "lastFault": {
+            "description": "Why the node's keepalived last reported a fault, empty when it has not",
+            "type": "string"
+          },
+          "lastHeard": {
+            "description": "When TierPlan last read the node's keepalived log without a failure; absent when it never has",
+            "format": "date-time",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The swarm node ID",
+            "type": "string"
+          },
+          "proxyReady": {
+            "description": "True when the node's proxy is enrolled, healthy and on the current bundle",
+            "type": "boolean"
+          },
+          "taskState": {
+            "description": "The state of the node's newest keepalived task in the swarm, empty when it has none or the task list could not be read",
+            "type": "string"
+          },
+          "vrrpState": {
+            "description": "The state the node's keepalived last reported; empty when it has not reported any",
+            "enum": [
+              "MASTER",
+              "BACKUP",
+              "FAULT",
+              "STOP",
+              ""
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "hostname",
+          "vrrpState",
+          "proxyReady",
+          "taskState",
+          "lastFault"
+        ],
+        "type": "object"
+      },
+      "IngressVIPEnsureBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When the last pass ended; absent when none has run",
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "description": "The class of its failure; absent when it succeeded",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IngressVIPForeignRouterBody": {
+        "additionalProperties": false,
+        "properties": {
+          "detected": {
+            "description": "True when any node reports another router using the router ID on the network",
+            "type": "boolean"
+          },
+          "sender": {
+            "description": "The address that router sent from, when one was reported",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detected"
+        ],
+        "type": "object"
+      },
+      "IngressVIPHolderBody": {
+        "additionalProperties": false,
+        "properties": {
+          "nodes": {
+            "description": "The swarm node IDs of the nodes reporting MASTER, ordered by host name then ID; empty for none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "none: no node reports MASTER. one: exactly one does, the healthy case. many: more than one does, which is a problem",
+            "enum": [
+              "none",
+              "one",
+              "many"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "nodes"
+        ],
+        "type": "object"
+      },
+      "IngressVIPManagerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "hostname": {
+            "description": "The host name the swarm lists for the manager",
+            "type": "string"
+          },
+          "localSocket": {
+            "description": "True for a manager reached only through TierPlan's own Docker socket, which counts as allowing",
+            "type": "boolean"
+          },
+          "nodeId": {
+            "description": "The manager's swarm node ID",
+            "type": "string"
+          },
+          "state": {
+            "description": "allows: the manager lets services run privileged. refuses: it does not, so keepalived cannot run on it. unknown: its agent did not answer",
+            "enum": [
+              "allows",
+              "refuses",
+              "unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "nodeId",
+          "hostname",
+          "state",
+          "localSocket"
+        ],
+        "type": "object"
+      },
+      "IngressVIPMoveBody": {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "description": "When the move happened, as the new holder's log says",
+            "format": "date-time",
+            "type": "string"
+          },
+          "fromNode": {
+            "description": "The previous holder's host name; empty when the address had no holder before",
+            "type": "string"
+          },
+          "fromNodeId": {
+            "description": "The swarm node ID of the previous holder; empty when the address had no holder before",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it moved. holder_failed: the previous holder went silent or its task is gone. probe_failing: its proxy was not ready. drain_handoff: TierPlan handed the address over before draining the node. disabled: the virtual IP was switched off. unknown: none of these explains it",
+            "enum": [
+              "holder_failed",
+              "probe_failing",
+              "drain_handoff",
+              "disabled",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "toNode": {
+            "description": "The new holder's host name; empty when the address has no holder after",
+            "type": "string"
+          },
+          "toNodeId": {
+            "description": "The swarm node ID of the new holder; empty when the address has no holder after",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "fromNodeId",
+          "fromNode",
+          "toNodeId",
+          "toNode",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "IngressVIPMovesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The moves of this page, newest first; never null",
+            "items": {
+              "$ref": "#/components/schemas/IngressVIPMoveBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "next": {
+            "description": "Pass this as before to read the next, older page; absent on the last page",
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "InstallBody": {
         "additionalProperties": false,
         "properties": {
@@ -35332,6 +35644,133 @@
           }
         },
         "summary": "Read the ingress status of a swarm or standalone environment",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/vip": {
+      "get": {
+        "description": "Says which address the swarm's ingress answers on and which node holds it (none, one or many), when it last lost its holder, how each node that can hold it stands (its VRRP state, whether its proxy is ready, its keepalived task, its last fault and when TierPlan last heard from it), whether each manager allows privileged services, whether another router uses the router ID, which nodes have clock trouble, the authentication window in seconds and the last pass that kept the service as wanted. A swarm with no virtual IP answers 404 vip_not_enabled. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "getIngressVIP",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressVIPBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read the virtual IP status of a swarm",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/vip/moves": {
+      "get": {
+        "description": "Pages the history of the address moving from one node to another, newest first by time and, for moves at the same instant, newest recorded first. limit is 1 to 100 (50 by default); before is the next of the previous page, an opaque cursor, and a value that is not one is 422 vip_bad_cursor. next is absent on the last page. A swarm with no moves answers an empty list. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "operationId": "listIngressVIPMoves",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The next of the previous page; leave it out for the newest moves",
+            "explode": false,
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "description": "The next of the previous page; leave it out for the newest moves",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Moves per page, 1 to 100; 50 by default",
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 50,
+              "description": "Moves per page, 1 to 100; 50 by default",
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressVIPMovesBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the moves of a swarm's virtual IP",
         "tags": [
           "ingress"
         ]

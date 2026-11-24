@@ -5,6 +5,8 @@ package api_test
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -271,5 +273,157 @@ func TestGetIngressVIP(t *testing.T) {
 
 	if rec := v.credCall(t, v.operatorA, http.MethodGet, path, ""); rec.Code != http.StatusForbidden {
 		t.Errorf("an Operator reading the status: %d, want 403", rec.Code)
+	}
+}
+
+// TestGetIngressVIPNotEnabled: a swarm with no virtual IP answers 404 vip_not_enabled and never an empty status, and a status
+// in which no node is MASTER has holder state none, no nodes, and the instant the address lost its holder.
+func TestGetIngressVIPNotEnabled(t *testing.T) {
+	t.Parallel()
+	none := newVIPFix(t, true, "running", "running")
+	path := "/api/env/" + none.envA + "/ingress/vip"
+	rec := none.credCall(t, none.adminA, http.MethodGet, path, "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("no virtual IP: %d %s, want 404", rec.Code, rec.Body)
+	}
+	if typ, detail := deployProblem(t, rec.Body.Bytes()); typ != "vip_not_enabled" || detail != "This environment has no virtual IP." {
+		t.Errorf("problem = %q %q, want vip_not_enabled and its sentence", typ, detail)
+	}
+
+	v := newVIPFix(t, false, "running", "running")
+	v.play(t, vipState(1, ingressbundle.VIPStateBackup))
+	rec = v.credCall(t, v.adminA, http.MethodGet, "/api/env/"+v.envA+"/ingress/vip", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"nodes":[]`) || !strings.Contains(rec.Body.String(), `"clockSkewNodes":[]`) {
+		t.Errorf("empty lists must be [] and not null: %s", rec.Body)
+	}
+	st := decodeBody[vipStatusResp](t, rec)
+	if st.Holder.State != "none" || len(st.Holder.Nodes) != 0 {
+		t.Errorf("holder = %+v, want none", st.Holder)
+	}
+	if st.HolderlessSince != vipNow.Format(time.RFC3339) {
+		t.Errorf("holderlessSince = %q, want %q", st.HolderlessSince, vipNow.Format(time.RFC3339))
+	}
+	if st.Candidates[0].VRRPState != "BACKUP" {
+		t.Errorf("candidate A = %+v, want BACKUP", st.Candidates[0])
+	}
+}
+
+// vipMovesResp is the shape of one page of the move history.
+type vipMovesResp struct {
+	Items []struct {
+		At         string `json:"at"`
+		FromNodeID string `json:"fromNodeId"`
+		FromNode   string `json:"fromNode"`
+		ToNodeID   string `json:"toNodeId"`
+		ToNode     string `json:"toNode"`
+		Reason     string `json:"reason"`
+	} `json:"items"`
+	Next string `json:"next"`
+}
+
+// TestListIngressVIPMoves: three moves at one instant and two later come back newest first with ties by insertion order
+// descending, a page of two walks all five with a next cursor until the last page, an environment with no moves answers an
+// empty list and no cursor, a limit outside 1 to 100 or a cursor that is not ours is 422, and an Operator is refused.
+func TestListIngressVIPMoves(t *testing.T) {
+	t.Parallel()
+	v := newVIPFix(t, false, "running", "running")
+	path := "/api/env/" + v.envA + "/ingress/vip/moves"
+
+	rec := v.credCall(t, v.adminA, http.MethodGet, path, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an empty history: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `"items":[]`) || strings.Contains(rec.Body.String(), `"next"`) {
+		t.Errorf("an empty history must be items [] and no next: %s", rec.Body)
+	}
+
+	early, late := vipNow.Add(-time.Hour), vipNow.Add(-time.Minute)
+	moves := []struct {
+		at           time.Time
+		from, to     string
+		reason       string
+		fromID, toID string
+	}{
+		{early, "", "manager-1", ingressdeploy.VIPMoveUnknown, "", vipNodeA},
+		{early, "manager-1", "manager-2", ingressdeploy.VIPMoveHolderFailed, vipNodeA, vipNodeB},
+		{early, "manager-2", "manager-1", ingressdeploy.VIPMoveProbeFailing, vipNodeB, vipNodeA},
+		{late, "manager-1", "manager-2", ingressdeploy.VIPMoveDrainHandoff, vipNodeA, vipNodeB},
+		{late, "manager-2", "", ingressdeploy.VIPMoveDisabled, vipNodeB, ""},
+	}
+	for _, m := range moves {
+		err := v.ingressStore.InsertVIPMove(testsupport.Context(t), ingressstore.VIPMove{
+			EnvID: v.envA, At: m.at, FromNodeID: m.fromID, FromNodeName: m.from, ToNodeID: m.toID, ToNodeName: m.to, Reason: m.reason,
+		})
+		if err != nil {
+			t.Fatalf("InsertVIPMove: %v", err)
+		}
+	}
+	wantReasons := []string{"disabled", "drain_handoff", "probe_failing", "holder_failed", "unknown"}
+
+	var got []string
+	var pages int
+	next := ""
+	for {
+		q := "?limit=2"
+		if next != "" {
+			q += "&before=" + next
+		}
+		rec := v.credCall(t, v.adminA, http.MethodGet, path+q, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("page %d: %d %s", pages+1, rec.Code, rec.Body)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", cc)
+		}
+		page := decodeBody[vipMovesResp](t, rec)
+		pages++
+		for _, it := range page.Items {
+			got = append(got, it.Reason)
+		}
+		if page.Next == "" {
+			if len(page.Items) != 1 {
+				t.Errorf("the last page holds %d moves, want 1", len(page.Items))
+			}
+			break
+		}
+		if len(page.Items) != 2 {
+			t.Errorf("page %d holds %d moves, want 2", pages, len(page.Items))
+		}
+		next = page.Next
+		if pages > 5 {
+			t.Fatal("the cursor never ends")
+		}
+	}
+	if pages != 3 || strings.Join(got, ",") != strings.Join(wantReasons, ",") {
+		t.Errorf("walked %d pages with reasons %v, want 3 pages and %v", pages, got, wantReasons)
+	}
+
+	// The default page holds all five, newest first, with the instants and node names as stored.
+	first := decodeBody[vipMovesResp](t, v.credCall(t, v.adminA, http.MethodGet, path, ""))
+	if len(first.Items) != 5 || first.Next != "" {
+		t.Fatalf("default page = %d items, next %q, want 5 and none", len(first.Items), first.Next)
+	}
+	top := first.Items[0]
+	if top.At != late.Format(time.RFC3339) || top.FromNodeID != vipNodeB || top.FromNode != "manager-2" || top.ToNodeID != "" || top.ToNode != "" || top.Reason != "disabled" {
+		t.Errorf("newest move = %+v", top)
+	}
+
+	for _, q := range []string{"?limit=0", "?limit=101", "?limit=-1", "?before=%25%25", "?before=" + base64.RawURLEncoding.EncodeToString([]byte("x.y")),
+		"?before=" + base64.RawURLEncoding.EncodeToString([]byte("1.2.3")), "?before=" + base64.RawURLEncoding.EncodeToString([]byte("+1.2")),
+		"?before=" + base64.RawURLEncoding.EncodeToString([]byte("1.-2")), "?before=" + base64.URLEncoding.EncodeToString([]byte("1.22"))} {
+		if rec := v.credCall(t, v.adminA, http.MethodGet, path+q, ""); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("GET %s: %d %s, want 422", q, rec.Code, rec.Body)
+		}
+	}
+	for _, q := range []string{"?limit=1", "?limit=100", "?before=" + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("%d.%d", late.UnixNano(), 1<<40)))} {
+		if rec := v.credCall(t, v.adminA, http.MethodGet, path+q, ""); rec.Code != http.StatusOK {
+			t.Errorf("GET %s: %d %s, want 200", q, rec.Code, rec.Body)
+		}
+	}
+	if rec := v.credCall(t, v.operatorA, http.MethodGet, path, ""); rec.Code != http.StatusForbidden {
+		t.Errorf("an Operator reading the history: %d, want 403", rec.Code)
 	}
 }
