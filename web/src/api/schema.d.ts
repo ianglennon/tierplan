@@ -4293,7 +4293,7 @@ export interface paths {
         };
         /**
          * List the environment problems that need attention
-         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again) and the automatic deploys of git stacks: a commit that was held back (git_autodeploy_skipped, with commit and reasonDetail; it goes when a deploy ends the wait), a deploy that put changes made outside the stack back (git_autodeploy_reverted, with count, example and revision; it goes with the next deploy of the stack) and an automation that is paused (git_autodeploy_paused, with reasonCode owner or rollback, revision and owner; it goes when it is resumed or turned off). These three go to the user the automation runs for and to callers who hold git.manage on the environment, and to no one else. An image update that failed is told too: one that was put back (update_rolled_back, with service or container, digest, reason and since) and one whose rollback failed as well, so the workload may be partly updated (update_rollback_failed, an error). They go while the tag still points at the digest that failed, which a newer digest or a good update ends, and are told only to callers who hold services.read (a service) or containers.read (a container) on the environment. More than five put-back updates of one environment are told as one item with count. Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again) and the automatic deploys of git stacks: a commit that was held back (git_autodeploy_skipped, with commit and reasonDetail; it goes when a deploy ends the wait), a deploy that put changes made outside the stack back (git_autodeploy_reverted, with count, example and revision; it goes with the next deploy of the stack) and an automation that is paused (git_autodeploy_paused, with reasonCode owner or rollback, revision and owner; it goes when it is resumed or turned off). These three go to the user the automation runs for and to callers who hold git.manage on the environment, and to no one else. An image update that failed is told too: one that was put back (update_rolled_back, with service or container, digest, reason and since) and one whose rollback failed as well, so the workload may be partly updated (update_rollback_failed, an error). They go while the tag still points at the digest that failed, which a newer digest or a good update ends, and are told only to callers who hold services.read (a service) or containers.read (a container) on the environment. More than five put-back updates of one environment are told as one item with count. The virtual IP's conditions are told as well, only to callers who hold ingress.manage on the environment and only while the virtual IP is on: nobody has held it for more than 10 seconds (vip_no_holder, an error), more than one node holds it (vip_multiple_holders), it moved in the last hour (vip_moved), another router uses its router ID (vip_foreign_router), a node's clock is out of step (vip_clock_skew, one item per node) and a manager stopped allowing privileged services (vip_privileged_lost); each carries a vip object with its facts. Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
          */
         get: operations["listEnvironmentWarnings"];
         put?: never;
@@ -8015,7 +8015,7 @@ export interface components {
             value?: string;
         };
         EnvWarningBody: {
-            /** @description For cert_not_renewing and clock_skew: the agent */
+            /** @description For cert_not_renewing, clock_skew and vip_clock_skew when an agent's clock gave the item: the agent */
             agentId?: string;
             /** @description For git_autodeploy_skipped: the short commit that is waiting for a fix or a manual review */
             commit?: string;
@@ -8025,7 +8025,7 @@ export interface components {
             containerId?: string;
             /**
              * Format: int64
-             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window. For update_rolled_back: on an item that stands for more than five updates, how many; absent on an item for one update
+             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window. For update_rolled_back: on an item that stands for more than five updates, how many; absent on an item for one update. For vip_multiple_holders: how many nodes hold the virtual IP. For vip_moved: how many moves of the last hour. For vip_privileged_lost: how many managers refuse
              */
             count?: number;
             /**
@@ -8047,21 +8047,21 @@ export interface components {
              */
             expiresAt?: string;
             /**
-             * @description Which problem this is
+             * @description Which problem this is. The vip_ items are for callers who hold ingress.manage on the environment: vip_no_holder (an error: no node has held the virtual IP for more than 10 seconds, with address and since), vip_multiple_holders (count, address), vip_moved (the address moved in the last hour; one item with count, from, to, moveReason and since for the latest move), vip_foreign_router (another router uses this router ID and fails authentication; routerId and, when valid, sender), vip_clock_skew (one item per node, with node, windowSeconds and, when known, offsetSeconds) and vip_privileged_lost (a manager's agent stopped allowing privileged services; count and, for one manager, node)
              * @enum {string}
              */
-            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container" | "git_sync_error" | "git_autodeploy_skipped" | "git_autodeploy_reverted" | "git_autodeploy_paused" | "update_rolled_back" | "update_rollback_failed";
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container" | "git_sync_error" | "git_autodeploy_skipped" | "git_autodeploy_reverted" | "git_autodeploy_paused" | "update_rolled_back" | "update_rollback_failed" | "vip_no_holder" | "vip_multiple_holders" | "vip_moved" | "vip_foreign_router" | "vip_clock_skew" | "vip_privileged_lost";
             /** @description For restart_loop_container: the exit code of the container's newest death */
             lastExitCode?: string;
             /** @description For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none */
             latestError?: string;
-            /** @description For cert_not_renewing and clock_skew: the node's host name, at most 64 characters */
+            /** @description For cert_not_renewing, clock_skew and vip_clock_skew: the node's host name, at most 64 characters. For vip_privileged_lost: the manager's host name, only when it is one manager */
             node?: string;
             /** @description For restart_loop_container: the node the container is on, as the container routes take it */
             nodeId?: string;
             /**
              * Format: int64
-             * @description For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind
+             * @description For clock_skew and vip_clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind. Absent on a vip_clock_skew item that only the keepalived helper reported
              */
             offsetSeconds?: number;
             /** @description For git_autodeploy_paused: the name of the user the automation runs for, at most 64 characters; absent when it has no owner any more */
@@ -8097,6 +8097,8 @@ export interface components {
             stackName?: string;
             /** @description For cert_not_renewing and clock_skew: the agent is the standby agent on the node of this TierPlan host, which TierPlan reaches through the Docker socket (D-19). For manual_update_needed: the standby agent is among the agents counted (D-22) */
             standby?: boolean;
+            /** @description For the vip_ items: the facts of the virtual IP the item is about */
+            vip?: components["schemas"]["VIPWarningBody"];
             /**
              * Format: int64
              * @description For restart_loop and restart_loop_container: the window the count is over, in minutes
@@ -17866,6 +17868,31 @@ export interface components {
              * @enum {string}
              */
             outcome: "moved" | "no_candidate" | "agent_unreachable" | "timeout";
+        };
+        VIPWarningBody: {
+            /** @description The virtual address with its prefix length, for example 192.168.1.250/24 */
+            address?: string;
+            /** @description For vip_moved: the host name of the node that held the address before its latest move, at most 64 characters; absent when no node did */
+            from?: string;
+            /**
+             * @description For vip_moved: why the latest move happened
+             * @enum {string}
+             */
+            moveReason?: "holder_failed" | "probe_failing" | "drain_handoff" | "unknown";
+            /**
+             * Format: int64
+             * @description For vip_foreign_router: the VRRP router ID the other router uses
+             */
+            routerId?: number;
+            /** @description For vip_foreign_router: the address the other router sends from, only when it is a valid IP address */
+            sender?: string;
+            /** @description For vip_moved: the host name of the node that holds the address after its latest move, at most 64 characters; absent when no node does */
+            to?: string;
+            /**
+             * Format: int64
+             * @description For vip_clock_skew: the time window of the virtual IP's authentication, in seconds
+             */
+            windowSeconds?: number;
         };
         VerifySetupTokenInputBody: {
             /** @description The setup token printed in the container log */

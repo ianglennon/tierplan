@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -140,5 +141,129 @@ func TestVIPNoHolderBell(t *testing.T) {
 	fake.set(env.ID, facts)
 	if got := f.vipItems(t, f.cookie, f.csrf); len(got) != 0 {
 		t.Fatalf("holder lost just now: %+v, want nothing yet", got)
+	}
+}
+
+// bellKeys is every JSON object key in a body, so a test can check that no fact is named like a secret.
+func bellKeys(v any, into map[string]bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			into[k] = true
+			bellKeys(val, into)
+		}
+	case []any:
+		for _, val := range x {
+			bellKeys(val, into)
+		}
+	}
+}
+
+// bellRaw is the raw answer of the route to a caller, with the virtual IP items decoded and every key it holds.
+func (f *agentFix) bellRaw(t *testing.T, cookie, csrf string) ([]vipBellItem, map[string]bool) {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/environments/warnings", cookie: cookie, csrf: csrf})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/environments/warnings = %d: %s", rec.Code, rec.Body)
+	}
+	var any1 any
+	if err := json.Unmarshal(rec.Body.Bytes(), &any1); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	keys := map[string]bool{}
+	bellKeys(any1, keys)
+	return f.vipItems(t, cookie, csrf), keys
+}
+
+// TestVIPBellWireShape pins how each virtual IP item serialises (UI-SPEC S4): its facts under the agreed names, no fact named
+// like a key, a secret or a token, and nothing for a caller who does not manage the environment's ingress (T-26-48).
+func TestVIPBellWireShape(t *testing.T) {
+	t.Parallel()
+	f, fake := vipBellFix(t)
+	env := f.srv.NewEnvironment(t, "Home swarm")
+	now := f.tclk.Now()
+	movedAt := now.Add(-4 * time.Minute)
+	facts := envs.VIPFacts{
+		Enabled: true, Address: "192.168.10.250/24", RouterID: 51, AuthWindow: 30 * time.Second,
+		Holders: []envs.VIPHolderFact{{NodeID: "n1", Host: "node-a"}, {NodeID: "n2", Host: "node-b"}},
+		Moves: []envs.VIPMoveFact{
+			{At: now.Add(-40 * time.Minute), From: "node-a", To: "node-b", Reason: "holder_failed"},
+			{At: movedAt, From: "node-b", To: "node-a", Reason: "probe_failing"},
+		},
+		ForeignRouter: true, ForeignSender: "192.168.10.77",
+		ClockNodes:     []envs.VIPClockFact{{NodeID: "n2", Host: "node-b"}},
+		PrivilegedLost: []string{"node-a"},
+	}
+	fake.set(env.ID, facts)
+
+	items, keys := f.bellRaw(t, f.cookie, f.csrf)
+	by := map[string]vipBellItem{}
+	for _, it := range items {
+		by[it.ID] = it
+		if it.EnvID != env.ID || it.EnvName != "Home swarm" || it.Severity != "warning" || it.VIP == nil || it.VIP.Address != "192.168.10.250/24" {
+			t.Fatalf("item = %+v (vip %+v), want a warning for Home swarm that carries the address", it, it.VIP)
+		}
+	}
+	if len(items) != 5 {
+		t.Fatalf("items = %+v, want one each of five ids", items)
+	}
+	if it := by["vip_multiple_holders"]; it.Count != 2 {
+		t.Fatalf("vip_multiple_holders = %+v, want count 2", it)
+	}
+	if it := by["vip_moved"]; it.Count != 2 || it.Since != utc(movedAt) || it.VIP.From != "node-b" || it.VIP.To != "node-a" || it.VIP.MoveReason != "probe_failing" {
+		t.Fatalf("vip_moved = %+v (vip %+v), want count 2 and the latest move node-b to node-a, probe_failing, at %s", it, it.VIP, utc(movedAt))
+	}
+	if it := by["vip_foreign_router"]; it.VIP.RouterID != 51 || it.VIP.Sender != "192.168.10.77" {
+		t.Fatalf("vip_foreign_router = %+v (vip %+v), want router ID 51 and the sender", it, it.VIP)
+	}
+	if it := by["vip_clock_skew"]; it.Node != "node-b" || it.VIP.WindowSeconds != 30 {
+		t.Fatalf("vip_clock_skew = %+v (vip %+v), want node-b and a window of 30 s", it, it.VIP)
+	}
+	if it := by["vip_privileged_lost"]; it.Count != 1 || it.Node != "node-a" {
+		t.Fatalf("vip_privileged_lost = %+v, want count 1 and node-a", it)
+	}
+
+	// The sixth: nobody holds the address.
+	facts.Holders, facts.NoHolderSince = nil, now.Add(-time.Minute)
+	fake.set(env.ID, facts)
+	items, more := f.bellRaw(t, f.cookie, f.csrf)
+	for k := range more {
+		keys[k] = true
+	}
+	var seen bool
+	for _, it := range items {
+		seen = seen || (it.ID == "vip_no_holder" && it.Severity == "error" && it.Since == utc(facts.NoHolderSince))
+	}
+	if !seen {
+		t.Fatalf("items = %+v, want vip_no_holder as an error", items)
+	}
+
+	for _, want := range []string{"vip", "address", "routerId", "from", "to", "moveReason", "sender", "windowSeconds", "count", "since", "node"} {
+		if !keys[want] {
+			t.Errorf("no key %q in any item: %v", want, keys)
+		}
+	}
+	for k := range keys {
+		low := strings.ToLower(k)
+		if strings.Contains(low, "key") || strings.Contains(low, "secret") || strings.Contains(low, "token") {
+			t.Errorf("a key named %q is on the bell: no virtual IP fact is a key, a secret or a token", k)
+		}
+	}
+
+	// A member who reads the environment but does not manage its ingress is told none of it, and the facts are not even read.
+	f.addUser(t, "viola", false)
+	f.grantRead(t, "viola", env.ID)
+	cookie, csrf := f.signIn(t, "viola", false)
+	fake.mu.Lock()
+	before := len(fake.asked)
+	fake.mu.Unlock()
+	if got := f.vipItems(t, cookie, csrf); len(got) != 0 {
+		t.Fatalf("a viewer is shown %+v, want no virtual IP item", got)
+	}
+	fake.mu.Lock()
+	after := len(fake.asked)
+	fake.mu.Unlock()
+	if after != before {
+		t.Fatalf("the facts were read %d times for a caller who may not see them", after-before)
 	}
 }

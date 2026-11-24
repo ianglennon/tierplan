@@ -71,14 +71,14 @@ type EnvWarningBody struct {
 	Severity      string `json:"severity" enum:"error,warning" doc:"error: an environment is out of reach or a certificate has expired. warning: something needs attention"`
 	EnvID         string `json:"envId,omitempty" doc:"The environment the problem is about. Absent for manual_update_needed when it spans more than one environment"`
 	EnvName       string `json:"envName,omitempty" doc:"That environment's name, at most 64 characters. For fold_offered, the swarm environment"`
-	Node          string `json:"node,omitempty" doc:"For cert_not_renewing and clock_skew: the node's host name, at most 64 characters"`
-	AgentID       string `json:"agentId,omitempty" doc:"For cert_not_renewing and clock_skew: the agent"`
+	Node          string `json:"node,omitempty" doc:"For cert_not_renewing, clock_skew and vip_clock_skew: the node's host name, at most 64 characters. For vip_privileged_lost: the manager's host name, only when it is one manager"`
+	AgentID       string `json:"agentId,omitempty" doc:"For cert_not_renewing, clock_skew and vip_clock_skew when an agent's clock gave the item: the agent"`
 	Reason        string `json:"reason,omitempty" doc:"For env_offline and cluster_changed: the environment's reason code, as in its status. For update_rolled_back and update_rollback_failed: why the update failed (pull_failed means the image could not be pulled and nothing was changed, so nothing was rolled back); absent on an item that stands for several updates"`
 	Since         string `json:"since,omitempty" format:"date-time" doc:"When the problem began, where that is known. Items are shown newest first"`
 	ExpiresAt     string `json:"expiresAt,omitempty" format:"date-time" doc:"For cert_not_renewing: when the certificate expires"`
 	Days          int    `json:"days,omitempty" doc:"For pending_long: whole days since the environment was added"`
-	Count         int    `json:"count,omitempty" doc:"For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window. For update_rolled_back: on an item that stands for more than five updates, how many; absent on an item for one update"`
-	OffsetSeconds int    `json:"offsetSeconds,omitempty" doc:"For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind"`
+	Count         int    `json:"count,omitempty" doc:"For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window. For update_rolled_back: on an item that stands for more than five updates, how many; absent on an item for one update. For vip_multiple_holders: how many nodes hold the virtual IP. For vip_moved: how many moves of the last hour. For vip_privileged_lost: how many managers refuse"`
+	OffsetSeconds int    `json:"offsetSeconds,omitempty" doc:"For clock_skew and vip_clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind. Absent on a vip_clock_skew item that only the keepalived helper reported"`
 	Standby       bool   `json:"standby,omitempty" doc:"For cert_not_renewing and clock_skew: the agent is the standby agent on the node of this TierPlan host, which TierPlan reaches through the Docker socket (D-19). For manual_update_needed: the standby agent is among the agents counted (D-22)"`
 
 	Service       string `json:"service,omitempty" doc:"For restart_loop and, when the update was of a service, update_rolled_back and update_rollback_failed: the service's name, at most 64 characters"`
