@@ -37,12 +37,17 @@ export function appliesTo(verb: Verb, row: Pick<ContainerRow, "state">): boolean
 }
 
 // ownKind says whether a container is one TierPlan itself depends on: the server
-// it runs in, an agent, or a task of its ingress proxy. Acting on one asks for its
+// it runs in, an agent, or a task of its ingress proxy or its virtual IP service. Acting on one asks for its
 // name to be typed, one at a time (D-11, D-46), and a bulk never includes one (D-12).
 export function ownKind(
   row: Pick<ContainerRow, "selfKind" | "isSelf">,
-): "server" | "agent" | "ingress" | "" {
-  if (row.selfKind === "server" || row.selfKind === "agent" || row.selfKind === "ingress") {
+): "server" | "agent" | "ingress" | "ingress_vip" | "" {
+  if (
+    row.selfKind === "server" ||
+    row.selfKind === "agent" ||
+    row.selfKind === "ingress" ||
+    row.selfKind === "ingress_vip"
+  ) {
     return row.selfKind;
   }
   return row.isSelf ? "server" : "";

@@ -492,7 +492,10 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
             >
               <TruncatedText>{c.name}</TruncatedText>
             </Link>
-            {kind === "server" || kind === "agent" || kind === "ingress" ? (
+            {kind === "server" ||
+            kind === "agent" ||
+            kind === "ingress" ||
+            kind === "ingress_vip" ? (
               <SelfContainerBadge kind={kind} />
             ) : null}
             {c.restartLoop ? <RestartLoopBadge loop={c.restartLoop} kind="container" /> : null}
