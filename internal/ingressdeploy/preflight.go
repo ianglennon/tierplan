@@ -56,8 +56,24 @@ const (
 // challengeHTTP01 is the name of the challenge that needs port 80 (acme.ChallengeHTTP01).
 const challengeHTTP01 = "http-01"
 
-// The ports the proxy takes on every node.
-var proxyPorts = []uint32{80, 443}
+// The host ports the swarm proxy takes on every node: HTTP, HTTPS and the readiness endpoint (D-13).
+var swarmProxyPorts = []uint32{HTTPPublished, HTTPSPublished, ReadyPublished}
+
+// The host ports the standalone proxy takes: HTTP and HTTPS only. The readiness endpoint is a swarm-only
+// concern (A-06), so a standalone host may use that port.
+var standaloneProxyPorts = []uint32{HTTPPublished, HTTPSPublished}
+
+// portsSentence writes the ports as the preflight messages name them: "80 and 443", "80, 443 and 7483".
+func portsSentence(ports []uint32) string {
+	parts := make([]string, len(ports))
+	for i, p := range ports {
+		parts[i] = strconv.FormatUint(uint64(p), 10)
+	}
+	if len(parts) < 2 {
+		return strings.Join(parts, "")
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+}
 
 // The severities of a Finding.
 const (
@@ -206,8 +222,8 @@ func checkManager(_ context.Context, _ *Service, in checkInput) ([]Finding, erro
 	}}, nil
 }
 
-// checkServicePorts refuses a swarm where a service, of a stack or of none, publishes TCP port 80 or 443 in either
-// mode: the proxy publishes both on every node (D-07). The proxy's own service never counts, and a UDP port does not
+// checkServicePorts refuses a swarm where a service, of a stack or of none, publishes TCP port 80, 443 or 7483 in either
+// mode: the proxy publishes all three on every node (D-07, D-13). The proxy's own service never counts, and a UDP port does not
 // clash with it (D-43).
 func checkServicePorts(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
 	if !in.Info.ManagerConnected {
@@ -222,7 +238,7 @@ func checkServicePorts(ctx context.Context, s *Service, in checkInput) ([]Findin
 			continue
 		}
 		for _, p := range row.Ports {
-			if p.Protocol == "tcp" && slices.Contains(proxyPorts, p.Published) {
+			if p.Protocol == "tcp" && slices.Contains(swarmProxyPorts, p.Published) {
 				items = append(items, fmt.Sprintf("%s publishes %d (%s mode)", row.Name, p.Published, p.Mode))
 			}
 		}
@@ -233,7 +249,7 @@ func checkServicePorts(ctx context.Context, s *Service, in checkInput) ([]Findin
 	slices.Sort(items)
 	return []Finding{{
 		Code:     CodePortInUse,
-		Message:  "Ports 80 and 443 must be free on every node. These publish them:",
+		Message:  "Ports " + portsSentence(swarmProxyPorts) + " must be free on every node. These publish them:",
 		Items:    slices.Compact(items),
 		Severity: SeverityError,
 	}}, nil
@@ -273,14 +289,14 @@ func tcpHostPorts(row dockerx.ContainerRow) []uint32 {
 			continue
 		}
 		n, err := strconv.ParseUint(left[i+1:], 10, 32)
-		if err == nil && slices.Contains(proxyPorts, uint32(n)) {
+		if err == nil && slices.Contains(swarmProxyPorts, uint32(n)) {
 			out = append(out, uint32(n))
 		}
 	}
 	return out
 }
 
-// checkContainerPorts refuses a node where a plain container publishes TCP 80 or 443 on the host (D-07, D-43). The proxy's
+// checkContainerPorts refuses a node where a plain container publishes TCP 80, 443 or the readiness port on the host (D-07, D-43). The proxy's
 // own tasks and the tasks of other swarm services never count here: the service check names those. A node whose agent
 // cannot be reached is a warning and never a refusal (PROH-24-06).
 func checkContainerPorts(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
@@ -317,7 +333,7 @@ func checkContainerPorts(ctx context.Context, s *Service, in checkInput) ([]Find
 		slices.Sort(items)
 		out = append(out, Finding{
 			Code:     CodePortInUse,
-			Message:  "Ports 80 and 443 must be free on every node. These containers publish them:",
+			Message:  "Ports " + portsSentence(swarmProxyPorts) + " must be free on every node. These containers publish them:",
 			Items:    slices.Compact(items),
 			Severity: SeverityError,
 		})
@@ -326,7 +342,7 @@ func checkContainerPorts(ctx context.Context, s *Service, in checkInput) ([]Find
 		slices.Sort(unchecked)
 		out = append(out, Finding{
 			Code:     CodeNodesNotChecked,
-			Message:  "These nodes could not be checked for something on ports 80 and 443. Enabling ingress goes on without them; if one of them already uses a port, its proxy will not start:",
+			Message:  "These nodes could not be checked for something on ports " + portsSentence(swarmProxyPorts) + ". Enabling ingress goes on without them; if one of them already uses a port, its proxy will not start:",
 			Items:    unchecked,
 			Severity: SeverityWarning,
 		})

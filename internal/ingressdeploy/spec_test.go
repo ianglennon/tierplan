@@ -304,21 +304,38 @@ func TestNoHostAccess(t *testing.T) {
 			t.Errorf("the spec contains %q", bad)
 		}
 	}
-	// The ports are host mode and their targets differ (S2).
-	ports := spec.EndpointSpec.Ports
-	if len(ports) != 2 || ports[0].TargetPort == ports[1].TargetPort {
-		t.Fatalf("ports = %+v, want two with distinct targets", ports)
+	if spec.Mode.Global == nil || spec.Mode.Replicated != nil {
+		t.Errorf("mode = %+v, want global", spec.Mode)
 	}
+}
+
+// TestProxySpecPublishesTheReadinessPort is the tracer of the readiness port (D-13, A-06): the spec always publishes three
+// host-mode TCP ports, 80 to 8080, 443 to 8443 and the readiness 7483 to 8083, whether or not a virtual IP is on, so the
+// virtual IP never rolls the proxies. The three target ports are distinct, because published ports that share one target
+// collapse into one mapping (S2).
+func TestProxySpecPublishesTheReadinessPort(t *testing.T) {
+	ports := proxySpec(vectorInput()).EndpointSpec.Ports
+	if len(ports) != 3 {
+		t.Fatalf("ports = %+v, want three", ports)
+	}
+	targets := map[uint32]bool{}
 	for _, p := range ports {
+		targets[p.TargetPort] = true
 		if p.PublishMode != swarm.PortConfigPublishModeHost || p.Protocol != "tcp" {
 			t.Errorf("port %+v is not host-mode tcp", p)
 		}
 	}
-	if ports[0].PublishedPort != 80 || ports[0].TargetPort != 8080 || ports[1].PublishedPort != 443 || ports[1].TargetPort != 8443 {
-		t.Errorf("ports = %+v, want 80 to 8080 and 443 to 8443", ports)
+	if len(targets) != 3 {
+		t.Errorf("ports = %+v, want three distinct targets", ports)
 	}
-	if spec.Mode.Global == nil || spec.Mode.Replicated != nil {
-		t.Errorf("mode = %+v, want global", spec.Mode)
+	if ingressdeploy.ReadyPublished != ingressbundle.ReadyPublishedPort || ingressdeploy.ReadyTarget != ingressbundle.ReadyPort {
+		t.Errorf("ReadyPublished, ReadyTarget = %d, %d, want the ingressbundle constants", ingressdeploy.ReadyPublished, ingressdeploy.ReadyTarget)
+	}
+	want := [][2]uint32{{80, 8080}, {443, 8443}, {7483, 8083}}
+	for i, p := range ports {
+		if p.PublishedPort != want[i][0] || p.TargetPort != want[i][1] {
+			t.Errorf("port %d = %d to %d, want %d to %d", i, p.PublishedPort, p.TargetPort, want[i][0], want[i][1])
+		}
 	}
 }
 

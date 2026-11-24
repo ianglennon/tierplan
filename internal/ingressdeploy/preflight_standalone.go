@@ -44,7 +44,7 @@ func (v *hostView) load(ctx context.Context, s *Service, info EnvInfo) error {
 	}
 	v.read = true
 	v.err = s.d.Engine.OnNode(ctx, info.ID, info.Nodes[0].AgentID, func(c *dockerx.Client) (err error) {
-		if v.published, err = c.ContainersPublishing(ctx, proxyPorts...); err != nil {
+		if v.published, err = c.ContainersPublishing(ctx, standaloneProxyPorts...); err != nil {
 			return err
 		}
 		if v.networks, err = c.Networks(ctx); err != nil {
@@ -93,7 +93,7 @@ func checkStandalonePorts(ctx context.Context, s *Service, in checkInput) ([]Fin
 	slices.Sort(items)
 	return []Finding{{
 		Code:     CodePortInUse,
-		Message:  "Ports 80 and 443 must be free on this host. These containers publish them, stopped ones included, because a container with a restart policy takes its port back when the host restarts:",
+		Message:  "Ports " + portsSentence(standaloneProxyPorts) + " must be free on this host. These containers publish them, stopped ones included, because a container with a restart policy takes its port back when the host restarts:",
 		Items:    slices.Compact(items),
 		Severity: SeverityError,
 	}}, nil

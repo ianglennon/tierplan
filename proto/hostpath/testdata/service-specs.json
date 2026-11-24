@@ -651,7 +651,8 @@
       "EndpointSpec": {
         "Ports": [
           {"Protocol": "tcp", "TargetPort": 8080, "PublishedPort": 80, "PublishMode": "host"},
-          {"Protocol": "tcp", "TargetPort": 8443, "PublishedPort": 443, "PublishMode": "host"}
+          {"Protocol": "tcp", "TargetPort": 8443, "PublishedPort": 443, "PublishMode": "host"},
+          {"Protocol": "tcp", "TargetPort": 8083, "PublishedPort": 7483, "PublishMode": "host"}
         ]
       }
     }
