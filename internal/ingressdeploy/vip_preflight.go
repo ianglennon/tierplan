@@ -5,10 +5,14 @@ package ingressdeploy
 
 import (
 	"context"
+	"errors"
 	"net/netip"
+	"slices"
+	"strings"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 )
 
@@ -22,12 +26,16 @@ const (
 	// CodeVIPAlreadyEnabled is the refusal of an enable on an environment that has a virtual IP row already. A change or a
 	// switch-off is the way on from there.
 	CodeVIPAlreadyEnabled = "vip_already_enabled"
+	// CodeVIPNameTaken is the refusal of a swarm that holds a service named tierplan-keepalived, or a secret under the key
+	// secrets' prefix, that is not TierPlan's. It is never taken over (A-08).
+	CodeVIPNameTaken = "vip_name_taken"
 )
 
 // The sentences of those codes. The first two are UI-SPEC S5's; none is built from a value.
 const (
 	vipSwarmOnlyText      = "A virtual IP is for swarms. A single host's own address already reaches its proxy."
 	vipIngressOffText     = "Switch ingress on for this environment first. The virtual IP points at the proxies."
+	vipNameTakenText      = "The swarm already has an object under a name the virtual IP reserves, and it isn't TierPlan's. Remove or rename it, then try again."
 	vipAlreadyEnabledText = "This environment already has a virtual IP. Change it or switch it off instead of enabling it again."
 	// vipManagersUnreadText is added to the gate's sentence when the managers' opt-in could not be read at all.
 	vipManagersUnreadText = " The managers could not be read just now, so none can be counted as allowing."
@@ -62,8 +70,11 @@ type VIPPreview struct {
 
 // vipView is what the checks read of the swarm, through one manager.
 type vipView struct {
-	nodes []dockerx.NodeRow
-	nets  []dockerx.NetworkRow
+	nodes   []dockerx.NodeRow
+	nets    []dockerx.NetworkRow
+	secrets []dockerx.SecretRow
+	// service is the keepalived service by its reserved name, nil when the swarm has none.
+	service *dockerx.ServiceDetail
 }
 
 // vipPreflight runs every check of the virtual IP enable and writes nothing. The preview shows its findings and the enable
@@ -133,6 +144,8 @@ func (s *Service) vipPreflight(ctx context.Context, info EnvInfo, req VIPRequest
 		}
 	}
 
+	findings = append(findings, checkVIPNames(view)...)
+
 	rows, err := s.vipManagerRows(ctx, info.ID)
 	pv.Managers = rows
 	if ok, gf := EvaluateManagerGate(rows); !ok {
@@ -159,15 +172,28 @@ func (s *Service) vipManagerRows(ctx context.Context, envID string) ([]envs.Mana
 	return rows, nil
 }
 
-// readVIPView reads the nodes and the networks of the swarm through one manager.
+// readVIPView reads the nodes, the networks, the secrets and the keepalived service of the swarm through one manager.
 func (s *Service) readVIPView(ctx context.Context, envID string) (vipView, error) {
 	var v vipView
 	err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
 		if v.nodes, err = c.SwarmNodes(ctx); err != nil {
 			return err
 		}
-		v.nets, err = c.Networks(ctx)
-		return err
+		if v.nets, err = c.Networks(ctx); err != nil {
+			return err
+		}
+		if v.secrets, err = c.SecretList(ctx); err != nil {
+			return err
+		}
+		svc, _, err := c.ServiceInspect(ctx, ingress.ServiceNameKeepalived)
+		switch {
+		case err == nil:
+			v.service = &svc
+		case errors.Is(err, dockerx.ErrServiceNotFound):
+		default:
+			return err
+		}
+		return nil
 	})
 	return v, err
 }
@@ -237,4 +263,25 @@ func (s *Service) vipAllocation(ctx context.Context, envID string, view vipView)
 		pools = append(pools, p.Base)
 	}
 	return allocated, append(pools, in.Avoid...), nil
+}
+
+// checkVIPNames refuses a swarm that holds a service named tierplan-keepalived, or a secret under the key secrets' prefix,
+// without the keepalived label: the object is not TierPlan's and is never taken over (A-08). A labelled one is TierPlan's own,
+// the leftover of an enable that failed, and the job reuses it. The names are cut for the finding, which is never built from
+// anything else the engine said.
+func checkVIPNames(view vipView) []Finding {
+	var items []string
+	if view.service != nil && !ingress.OwnsKeepalivedService(view.service.Name, view.service.Labels) {
+		items = append(items, "service "+vipName(view.service.Name))
+	}
+	for _, row := range view.secrets {
+		if strings.HasPrefix(row.Name, ingress.SecretPrefixKeepalived) && !ingress.OwnsKeepalivedSecret(row.Name, row.Labels) {
+			items = append(items, "secret "+vipName(row.Name))
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	slices.Sort(items)
+	return []Finding{{Code: CodeVIPNameTaken, Message: vipNameTakenText, Items: slices.Compact(items), Severity: SeverityError}}
 }

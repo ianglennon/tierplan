@@ -5,6 +5,7 @@ package ingressdeploy_test
 
 import (
 	"context"
+	"net/netip"
 	"sync"
 	"testing"
 
@@ -98,3 +99,9 @@ func (v *vipEnableRig) enableVIP(req ingressdeploy.VIPRequest) jobs.Job {
 	}
 	return v.wait(id)
 }
+
+// intp is a pointer to n, for an optional router ID.
+func intp(n int) *int { return &n }
+
+// mustAddr parses an address that a test knows is one.
+func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
