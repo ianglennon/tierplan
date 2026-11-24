@@ -171,7 +171,7 @@ test-int: agent-image ingress-image keepalived-image
 	if [ -z "$$pkgs" ]; then echo "test-int: no package has integration-tagged tests" >&2; exit 1; fi; \
 	echo "test-int: $$pkgs"; \
 	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/integration.json; \
-	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/integration.json -- -tags=integration -race -count=1 -shuffle=on -timeout 30m $$pkgs
+	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/integration.json -- -tags=integration -race -count=1 -shuffle=on -timeout 45m $$pkgs
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
 # of 3 managers and 1 worker, for the engine TIERPLAN_TEST_ENGINE names (default

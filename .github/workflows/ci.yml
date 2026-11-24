@@ -289,8 +289,10 @@ jobs:
   integration:
     runs-on: [self-hosted, linux, x64]
     # Two legs can share a 4-core runner VM under -race, which roughly doubles the
-    # hosted runner's 11-13 minutes; go test itself allows 30 (make test-int).
-    timeout-minutes: 45
+    # hosted runner's 11-13 minutes. The virtual IP's real-engine tests (Phase 26) put the
+    # internal/ingressdeploy package at about 30 minutes on the dev host under -race, so go
+    # test itself allows 45 (make test-int) and the job 60.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
