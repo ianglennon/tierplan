@@ -309,7 +309,9 @@
         "quorum_at_risk": "Only {{reachable, number}} of {{total, number}} managers are reachable. Demoting this one could leave the swarm without a majority, and it would stop accepting changes.",
         "runs_tierplan": "TierPlan runs on {{name}}. {{doing}} it can cut TierPlan off from this swarm.",
         "only_manager_agent": "{{name}} has the only manager agent connected to TierPlan. {{doing}} it leaves TierPlan unable to change this swarm until another manager's agent connects.",
-        "facts_unreadable": "TierPlan couldn't check the managers' state, so it can't tell whether this is safe."
+        "facts_unreadable": "TierPlan couldn't check the managers' state, so it can't tell whether this is safe.",
+        "holds_vip": "{{name}} holds the virtual IP. TierPlan moves it to another ready node first, and the address may go unanswered for a few seconds.",
+        "holds_vip_alone": "{{name}} holds the virtual IP and no other node is ready to take it. Draining it leaves the address unanswered until a proxy is ready on another node."
       },
       "refusal": {
         "last_manager": "You can't demote the last manager. Promote another node first.",

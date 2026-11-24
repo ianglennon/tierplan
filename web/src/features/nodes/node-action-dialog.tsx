@@ -311,6 +311,9 @@ function Impact({ t, mode, name, impact }: ImpactProps) {
         return t(`nodes.action.warning.${code}`, { name, doing });
       case "facts_unreadable":
         return t("nodes.action.warning.facts_unreadable");
+      case "holds_vip":
+      case "holds_vip_alone":
+        return t(`nodes.action.warning.${code}`, { name });
     }
     return null;
   };
