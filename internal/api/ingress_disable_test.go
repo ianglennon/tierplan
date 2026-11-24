@@ -123,14 +123,20 @@ func TestDisableRoute(t *testing.T) {
 		t.Errorf("stream: %d %s", rec.Code, rec.Body)
 	}
 
-	// A standalone environment has no ingress to switch off.
+	// A standalone environment whose host is not connected answers the standalone rules: the preview 200 with the host
+	// finding, the switch-off 409 with the same code, and nothing is started.
 	sf := newDeployFix(t, true)
-	for _, path := range []string{"/api/env/" + sf.envA + "/ingress/disable/preview", "/api/env/" + sf.envA + "/ingress/disable"} {
-		rec := sf.credCall(t, sf.adminA, http.MethodPost, path, ``)
-		typ, _ := deployProblem(t, rec.Body.Bytes())
-		if rec.Code != http.StatusConflict || typ != "ingress_standalone_unavailable" {
-			t.Errorf("standalone POST %s: %d type %q", path, rec.Code, typ)
-		}
+	sbase := "/api/env/" + sf.envA + "/ingress/disable"
+	rec = sf.credCall(t, sf.adminA, http.MethodPost, sbase+"/preview", ``)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), ingressdeploy.CodeHostUnreachable) {
+		t.Errorf("standalone preview: %d %s, want 200 with the host-unreachable finding", rec.Code, rec.Body)
+	}
+	rec = sf.credCall(t, sf.adminA, http.MethodPost, sbase, ``)
+	if typ, _ := deployProblem(t, rec.Body.Bytes()); rec.Code != http.StatusConflict || typ != ingressdeploy.CodeHostUnreachable {
+		t.Errorf("standalone disable: %d type %q, want 409 %s", rec.Code, typ, ingressdeploy.CodeHostUnreachable)
+	}
+	if list := sf.hub.List(func(jobs.Job) bool { return true }); len(list) != 0 {
+		t.Errorf("a refused standalone switch-off started %d jobs", len(list))
 	}
 }
 

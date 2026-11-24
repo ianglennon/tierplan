@@ -77,6 +77,7 @@ var disableMessages = map[string]string{
 	CodeDisableSecretFailed:  "The join token secrets could not be removed.",
 	CodeDisableTokenFailed:   "The join token could not be disabled.",
 	CodeDisableNodesFailed:   "The proxy nodes could not be removed.",
+	CodeDisableProxyFailed:   "The proxy container could not be removed.",
 	CodeNotRun:               "Not run because an earlier step failed.",
 }
 
@@ -90,10 +91,12 @@ type DisableRemoves struct {
 	// Service and Network are the names of the proxy service and the ingress network; empty when the swarm was read and does
 	// not hold them.
 	Service, Network string
+	// Container is the name of the proxy container of a standalone host, empty when the host does not hold it and for a swarm.
+	Container string
 	// Secrets are the names of the join token secrets the swarm holds.
 	Secrets []string
-	// Volumes are the nodes whose certificate cache volume is wiped: every node of the swarm. A node no agent covers has an
-	// empty ID.
+	// Volumes are the nodes whose certificate cache volume is wiped: every node of the swarm, the one host of a standalone
+	// environment. A node no agent covers has an empty ID.
 	Volumes []NodeName
 }
 
@@ -122,10 +125,16 @@ func (e *DisableRefusedError) Error() string {
 	return "ingress was not switched off: " + strings.Join(codes, ", ")
 }
 
-// checkDisable is the refusals of a switch-off: a paused environment (D-42), then live routes (D-25). The holder of each
-// route is worded by ingress.DescribeHolder with the caller's canView, the same redaction the policy's clash messages use
-// (Phase 18 D-20, PROH-24-13); a nil canView sees nothing.
+// checkDisable is the refusals of a switch-off: a paused environment (D-42), then live routes (D-25).
 func (s *Service) checkDisable(ctx context.Context, info EnvInfo, canView func(envID string) bool) ([]Finding, error) {
+	if f, err := s.disablePaused(ctx, info); err != nil || f != nil {
+		return f, err
+	}
+	return s.disableRoutesLive(ctx, info, canView)
+}
+
+// disablePaused is the refusal of a switch-off while a restore has the environment's ingress paused (D-42).
+func (s *Service) disablePaused(ctx context.Context, info EnvInfo) ([]Finding, error) {
 	state, err := s.d.Store.DeployState(ctx, info.ID)
 	if err != nil {
 		return nil, err
@@ -136,6 +145,13 @@ func (s *Service) checkDisable(ctx context.Context, info EnvInfo, canView func(e
 			Message: "Ingress cannot be switched off while a restore has it paused. Resume it first.",
 		}}, nil
 	}
+	return nil, nil
+}
+
+// disableRoutesLive is the refusal of a switch-off while a claim with routes exists (D-25). The holder of each route is
+// worded by ingress.DescribeHolder with the caller's canView, the same redaction the policy's clash messages use
+// (Phase 18 D-20, PROH-24-13); a nil canView sees nothing.
+func (s *Service) disableRoutesLive(ctx context.Context, info EnvInfo, canView func(envID string) bool) ([]Finding, error) {
 	routes, err := s.d.Store.LiveRoutes(ctx, info.ID)
 	if err != nil {
 		return nil, err
@@ -214,14 +230,15 @@ func (s *Service) wipeTargets(ctx context.Context, envID string, info EnvInfo) (
 }
 
 // PreviewDisable says what a switch-off would remove and what would stop it, and writes nothing. A standalone environment is
-// ErrStandaloneUnavailable. The swarm is read when a manager is connected; otherwise the preview lists the names it would try.
+// previewed by previewDisableStandalone. The swarm is read when a manager is connected; otherwise the preview lists the names
+// it would try.
 func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func(envID string) bool) (DisablePreview, error) {
 	info, err := s.d.Envs.Info(ctx, envID)
 	if err != nil {
 		return DisablePreview{}, err
 	}
 	if !info.Swarm {
-		return DisablePreview{}, ErrStandaloneUnavailable
+		return s.previewDisableStandalone(ctx, info, canView)
 	}
 	findings, err := s.checkDisable(ctx, info, canView)
 	if err != nil {
@@ -274,17 +291,26 @@ func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func
 // environment is paused or any claim with routes exists, and starts a job that stops delivery, removes the proxy service,
 // wipes the certificate cache volume on every node it can reach, removes the network and the join token secrets, disables
 // the join token and removes the node rows. A node it could not reach is queued, named in the job's result and wiped when its
-// agent connects (D-27). It returns the job's ID. A standalone environment is ErrStandaloneUnavailable, a held lock a
-// *LockedError and a refusal a *DisableRefusedError; in each case nothing was written. Claims and certificates are not
-// touched (D-26). Every step is idempotent, so a job that failed part-way is run again by calling Disable again.
+// agent connects (D-27). It returns the job's ID. A standalone environment runs the job of disableStandalone instead. A held
+// lock is a *LockedError and a refusal a *DisableRefusedError; in each case nothing was written. Claims and certificates are
+// not touched (D-26). Every step is idempotent, so a job that failed part-way is run again by calling Disable again.
 func (s *Service) Disable(ctx context.Context, actor audit.Actor, owner, envID string, canView func(envID string) bool) (string, error) {
 	info, err := s.d.Envs.Info(ctx, envID)
 	if err != nil {
 		return "", err
 	}
 	if !info.Swarm {
-		return "", ErrStandaloneUnavailable
+		return s.disableStandalone(ctx, actor, owner, info, canView)
 	}
+	return s.startDisable(ctx, actor, owner, info, canView, disableItems, disableLabels, s.checkDisable)
+}
+
+// startDisable is the lock, the refusals and the job start of a switch-off, the one pattern the swarm's and the standalone
+// host's share: items and labels are the job's and check its refusals, which run under the lock.
+func (s *Service) startDisable(ctx context.Context, actor audit.Actor, owner string, info EnvInfo, canView func(envID string) bool,
+	items []string, labels map[string]string,
+	check func(context.Context, EnvInfo, func(string) bool) ([]Finding, error)) (string, error) {
+	envID := info.ID
 	release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
 		Kind: stackops.HolderKindIngress, By: owner, Workload: "ingress", Started: s.d.Clock.Now(),
 	})
@@ -297,16 +323,16 @@ func (s *Service) Disable(ctx context.Context, actor audit.Actor, owner, envID s
 			release()
 		}
 	}()
-	findings, err := s.checkDisable(ctx, info, canView)
+	findings, err := check(ctx, info, canView)
 	if err != nil {
 		return "", err
 	}
 	if len(findings) > 0 {
 		return "", &DisableRefusedError{Findings: findings}
 	}
-	specs := make([]jobs.ItemSpec, 0, len(disableItems))
-	for _, id := range disableItems {
-		specs = append(specs, jobs.ItemSpec{ID: id, Label: disableLabels[id], Kind: "step"})
+	specs := make([]jobs.ItemSpec, 0, len(items))
+	for _, id := range items {
+		specs = append(specs, jobs.ItemSpec{ID: id, Label: labels[id], Kind: "step"})
 	}
 	attached := make(chan struct{})
 	job, err := s.d.Jobs.Start(jobs.Spec{Kind: JobKindDisable, EnvID: envID, Owner: owner, Items: specs},
@@ -333,6 +359,8 @@ type disableRun struct {
 	actor audit.Actor
 	envID string
 	r     *jobs.Reporter
+	// items are the items of the job this run is of, in order: disableItems or standaloneDisableItems.
+	items []string
 	// release frees the environment's operation lock before the item that ends the job is finished, so a reader that sees the
 	// job done finds the lock free; freeing is safe to repeat.
 	release func()
@@ -341,10 +369,14 @@ type disableRun struct {
 // runDisable runs the steps one at a time. The first failure ends its item with a code and the items after it as not run;
 // nothing is retried and nothing is rolled back.
 func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, info EnvInfo) {
-	run := &disableRun{s: s, actor: actor, envID: info.ID, r: r, release: release}
+	run := &disableRun{s: s, actor: actor, envID: info.ID, r: r, release: release, items: disableItems}
 	steps := []func(context.Context) error{run.switchOff, run.service, run.volumes, run.network, run.secret, run.token, run.nodes}
+	if !info.Swarm {
+		run.items = standaloneDisableItems
+		steps = []func(context.Context) error{run.switchOff, run.proxy, run.networkStandalone, run.volumeStandalone, run.token, run.nodes}
+	}
 	for i, do := range steps {
-		item := disableItems[i]
+		item := run.items[i]
 		if ctx.Err() != nil {
 			run.stop(item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
@@ -385,7 +417,7 @@ func (e *disableRun) stop(item, state, code, detail string) {
 
 // skipFrom ends the items from index i on without running them.
 func (e *disableRun) skipFrom(i int, state, code string) {
-	for _, id := range disableItems[i:] {
+	for _, id := range e.items[i:] {
 		e.r.Finish(id, state, code, disableMessages[code], nil)
 	}
 }

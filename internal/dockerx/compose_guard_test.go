@@ -258,7 +258,8 @@ var sdkCalls = []struct {
 
 func TestGuardForwardsTheMethodsTheSDKNeeds(t *testing.T) {
 	t.Parallel()
-	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
+	// The guard reads a network before a connect to it, so the network the calls name exists.
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Networks: []dockertest.FakeNetwork{{ID: "n1", Name: "n1", Driver: "bridge", Scope: "local"}}})
 	c, err := New(fake)
 	if err != nil {
 		t.Fatal(err)

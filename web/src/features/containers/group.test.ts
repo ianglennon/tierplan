@@ -18,6 +18,7 @@ function row(name: string, extra: Partial<ContainerRow> = {}): ContainerRow {
     created: "2026-10-01T10:00:00Z",
     ports: [],
     isSelf: false,
+    ingressOwned: false,
     project: "",
     stack: "",
     tierplanStackId: "",

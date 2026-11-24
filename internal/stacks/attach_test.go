@@ -83,19 +83,6 @@ func TestAttachRoutedServicesOnly(t *testing.T) {
 	if _, ok := plain.Project.Networks[ingress.NetworkName]; ok {
 		t.Error("without Ingress the project declares the ingress network")
 	}
-
-	// A standalone target is never attached, whatever the input says. Its routes sit under labels.
-	const standalone = `services:
-  web:
-    image: nginx:1.27
-    labels:
-      tierplan.ingress.host: app.example.com
-      tierplan.ingress.port: "80"
-`
-	st := deployableWith(t, standalone, stacks.TargetStandalone, true)
-	if st.Ingress != nil || !reflect.DeepEqual(networkKeys(st, "web"), []string{"default"}) {
-		t.Errorf("standalone: Loaded.Ingress = %+v, web networks = %v, want nothing injected", st.Ingress, networkKeys(st, "web"))
-	}
 }
 
 func TestAttachIsIdempotent(t *testing.T) {
@@ -163,7 +150,7 @@ func TestAttachKeepsDefaultNetwork(t *testing.T) {
 	svc.Networks = map[string]*types.ServiceNetworkConfig{}
 	loaded.Project.Services["web"] = svc
 
-	inj := stacks.AttachIngressForTest(loaded.Project, []string{"web"}, ingress.NetworkName)
+	inj := stacks.AttachIngressForTest(loaded.Project, stacks.TargetSwarm, []string{"web"}, ingress.NetworkName)
 	if got := networkKeys(loaded, "web"); !reflect.DeepEqual(got, []string{"default", ingress.NetworkName}) {
 		t.Errorf("web networks = %v, want the default kept next to the ingress network", got)
 	}
@@ -443,6 +430,79 @@ networks:
 	// The name is reserved for every target, not only the swarm one.
 	if got := reserved(cases[0].compose, stacks.TargetStandalone); len(got) != 1 {
 		t.Errorf("standalone: %d reserved-name problems, want one", len(got))
+	}
+}
+
+// The proxy's certificate cache volume is TierPlan's (CR-C1): a stack may neither declare nor mount it, even as
+// an external volume, on either target.
+func TestIngressVolumeNameIsReserved(t *testing.T) {
+	t.Parallel()
+	reserved := func(compose string, target stacks.Target) []stacks.Problem {
+		in := stacks.CheckInput{Name: "shop", Target: target, Copy: copyOf(compose)}
+		var out []stacks.Problem
+		for _, p := range stacks.Check(context.Background(), in).Problems {
+			if p.Code == stacks.CodeIngressVolumeReserved {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	cases := []struct {
+		name, compose string
+		want          int
+		key           string
+	}{
+		{"external volume of the reserved name under another key", `services:
+  x:
+    image: alpine:3.20
+    volumes: ["c:/c"]
+volumes:
+  c:
+    external: true
+    name: tierplan-ingress-cache
+`, 1, "volumes.c"},
+		{"own volume under the reserved key", `services:
+  x:
+    image: alpine:3.20
+    volumes: ["tierplan-ingress-cache:/c"]
+volumes:
+  tierplan-ingress-cache: {}
+`, 1, "volumes.tierplan-ingress-cache"},
+		{"own volume under another key with the reserved name", `services:
+  x:
+    image: alpine:3.20
+    volumes: ["c:/c"]
+volumes:
+  c:
+    name: tierplan-ingress-cache
+`, 1, "volumes.c"},
+		{"external volume under the reserved key", `services:
+  x:
+    image: alpine:3.20
+    volumes: ["tierplan-ingress-cache:/c"]
+volumes:
+  tierplan-ingress-cache:
+    external: true
+`, 1, "volumes.tierplan-ingress-cache"},
+		{"a volume of another name", `services:
+  x:
+    image: alpine:3.20
+    volumes: ["data:/c"]
+volumes:
+  data: {}
+`, 0, ""},
+	}
+	for _, c := range cases {
+		for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+			got := reserved(c.compose, target)
+			if len(got) != c.want {
+				t.Errorf("%s (%s): %d reserved-volume problems (%+v), want %d", c.name, target, len(got), got, c.want)
+				continue
+			}
+			if c.want == 1 && (got[0].Severity != stacks.SeverityError || got[0].Key != c.key || got[0].Line == 0 || !strings.Contains(got[0].Message, ingress.VolumeName)) {
+				t.Errorf("%s (%s): problem = %+v, want an error located at %s", c.name, target, got[0], c.key)
+			}
+		}
 	}
 }
 

@@ -433,6 +433,36 @@ describe("ConnectDialog from a container", () => {
   });
 });
 
+describe("ConnectDialog and TierPlan's ingress network", () => {
+  it("does not offer the ingress network to a container, which the server would refuse", async () => {
+    networks = page([
+      network("ing0", "tierplan-ingress", { ingress: true }),
+      network("back0", "back-net"),
+    ]);
+    mountContainer();
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() =>
+      expect(within(dialog).getByRole("combobox", { name: "Network" })).toBeTruthy(),
+    );
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Network" }));
+    const names = (await screen.findAllByRole("option")).map((o) => o.textContent ?? "");
+    expect(names.some((o) => o.startsWith("back-net"))).toBe(true);
+    expect(names.some((o) => o.startsWith("tierplan-ingress"))).toBe(false);
+  });
+
+  it("words an ingress_owned refusal as TierPlan ingress's, not as the proxy's", async () => {
+    answer = () => problem(409, "ingress_owned");
+    mountNetwork();
+    const dialog = await screen.findByRole("dialog");
+    await choose(dialog, "Container", "web");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Connect container" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toBe(
+      "This is managed by TierPlan ingress. Switch ingress off to remove it. Nothing was changed.",
+    );
+  });
+});
+
 describe("ConnectDialog for TierPlan's own containers", () => {
   it("needs the name of an own container typed before it connects, from the container's page", async () => {
     mountContainer("server");

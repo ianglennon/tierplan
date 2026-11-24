@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v5/pkg/api"
@@ -358,6 +359,18 @@ func TestComposeUpForcesTheRecreateOfTheServicesItIsGiven(t *testing.T) {
 			t.Errorf("%s: orphans removed %v quiet pull %v wait %v project %v, want the 07-20 options kept",
 				name, o.Create.RemoveOrphans, o.Create.QuietPull, o.Start.Wait, o.Start.Project == p)
 		}
+	}
+}
+
+func TestComposeUpNoWaitDoesNotWait(t *testing.T) {
+	t.Parallel()
+	p := &types.Project{Name: "demo"}
+
+	if o := composeUpOptions(p, ComposeUpOptions{NoWait: true, WaitTimeout: time.Minute}); o.Start.Wait {
+		t.Errorf("with NoWait the up waits: Start.Wait is true")
+	}
+	if o := composeUpOptions(p, ComposeUpOptions{}); !o.Start.Wait {
+		t.Errorf("by default the up does not wait: Start.Wait is false")
 	}
 }
 

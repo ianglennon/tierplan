@@ -73,6 +73,9 @@ type SwarmMembership struct {
 	ClusterID string
 	// NodeID is the engine's node ID in the swarm it belongs to, for a manager and a worker alike.
 	NodeID string
+	// EngineID is the engine's own ID, which a standalone environment is compared with to tell whether it is TierPlan's own
+	// host. It is empty whenever Known is false.
+	EngineID string
 }
 
 // LocalSwarmMembership reads the swarm membership of the engine behind the server's own Docker socket, with one probe of the socket,
@@ -93,11 +96,11 @@ func (s *Service) LocalSwarmMembership(ctx context.Context) (SwarmMembership, er
 	}
 	switch res.Type {
 	case dockerx.TypeSwarmManager:
-		return SwarmMembership{Known: true, Member: true, ClusterID: res.SwarmClusterID, NodeID: res.SwarmNodeID}, nil
+		return SwarmMembership{Known: true, Member: true, ClusterID: res.SwarmClusterID, NodeID: res.SwarmNodeID, EngineID: res.EngineID}, nil
 	case dockerx.TypeSwarmWorker:
-		return SwarmMembership{Known: true, Member: true, NodeID: res.SwarmNodeID}, nil
+		return SwarmMembership{Known: true, Member: true, NodeID: res.SwarmNodeID, EngineID: res.EngineID}, nil
 	case dockerx.TypeStandalone:
-		return SwarmMembership{Known: true}, nil
+		return SwarmMembership{Known: true, EngineID: res.EngineID}, nil
 	}
 	return SwarmMembership{}, nil
 }

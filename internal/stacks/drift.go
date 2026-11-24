@@ -5,8 +5,10 @@ package stacks
 
 import (
 	"maps"
+	"reflect"
 	"slices"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
@@ -64,6 +66,94 @@ func StripIngressAttachment(spec swarm.ServiceSpec, ids ...string) swarm.Service
 	}
 	spec.TaskTemplate.Networks = kept
 	return spec
+}
+
+// StripIngressStandalone returns a copy of svc without TierPlan's attachment to the host's ingress bridge (D-16, D-20):
+// the networks entry keyed ingress.NetworkName or by any of keys (the key the project gives the shared network when the
+// file declares it under another one), and the default network when the injection wrote it for svc (inj.DefaultAdded).
+// A service the file already listed on the network (inj.AliasAdded) keeps its entry with all of the user's settings
+// and loses only the alias TierPlan put on it (ingress.Alias of project and the service). Every other network is left
+// alone, so a real change of the same service still shows.
+//
+// Comparisons that must not see the attachment (drift, and the rows of a review that revert what drift found) call it
+// on both sides, the desired service and the one rebuilt from a container; the deploy review's own diff does not, so a
+// join or a leave stays a listed change there. inj is taken in place of a flag because it is what the injection
+// recorded, and nil is allowed: with ingress off the desired side has nothing injected, and a container that was made
+// attached still has to lose the entry. The service given is not changed, and one without the attachment comes back
+// as it was.
+func StripIngressStandalone(svc types.ServiceConfig, project string, inj *InjectedIngress, keys ...string) types.ServiceConfig {
+	isShared := func(key string) bool { return key == ingress.NetworkName || slices.Contains(keys, key) }
+	aliasOnly := inj != nil && slices.Contains(inj.AliasAdded, svc.Name)
+	dropDefault := inj != nil && slices.Contains(inj.DefaultAdded, svc.Name)
+	alias := ingress.Alias(project, svc.Name)
+	touched := false
+	for key, cfg := range svc.Networks {
+		switch {
+		case isShared(key) && !aliasOnly, key == defaultNetworkKey && dropDefault:
+			touched = true
+		case isShared(key) && cfg != nil && slices.Contains(cfg.Aliases, alias):
+			touched = true
+		}
+	}
+	if !touched {
+		return svc
+	}
+	nets := make(map[string]*types.ServiceNetworkConfig, len(svc.Networks))
+	for key, cfg := range svc.Networks {
+		switch {
+		case isShared(key) && !aliasOnly, key == defaultNetworkKey && dropDefault:
+			continue
+		case isShared(key) && cfg != nil:
+			entry := *cfg
+			entry.Aliases = slices.DeleteFunc(slices.Clone(entry.Aliases), func(a string) bool { return a == alias })
+			if len(entry.Aliases) == 0 {
+				entry.Aliases = nil
+			}
+			if reflect.DeepEqual(entry, types.ServiceNetworkConfig{}) {
+				nets[key] = nil
+			} else {
+				nets[key] = &entry
+			}
+		default:
+			nets[key] = cfg
+		}
+	}
+	if len(nets) == 0 {
+		nets = nil
+	}
+	svc.Networks = nets
+	return svc
+}
+
+// StandaloneIngressStripper is StripIngressStandalone for each service of a loaded project, ready to call on both sides
+// of a comparison. inj is what the load injected (Loaded.Ingress, nil with ingress off). A service of the project that
+// lists the shared network itself, whether the file wrote it or the injection added only its alias, keeps that entry;
+// on any other service the entry goes, so a container made attached reads as the file does with ingress off.
+func StandaloneIngressStripper(p *types.Project, inj *InjectedIngress) func(types.ServiceConfig) types.ServiceConfig {
+	keys := []string{ingress.NetworkName}
+	if key, ok := sharedNetworkKey(p, ingress.NetworkName); ok {
+		keys = append(keys, key)
+	}
+	view := &InjectedIngress{Network: ingress.NetworkName}
+	if inj != nil {
+		view.DefaultAdded = inj.DefaultAdded
+	}
+	for name, svc := range p.Services {
+		declared := false
+		for _, key := range keys {
+			_, has := svc.Networks[key]
+			declared = declared || has
+		}
+		if inj != nil && slices.Contains(inj.Services, name) {
+			declared = false
+		}
+		if declared {
+			view.AliasAdded = append(view.AliasAdded, name)
+		}
+	}
+	return func(svc types.ServiceConfig) types.ServiceConfig {
+		return StripIngressStandalone(svc, p.Name, view, keys...)
+	}
 }
 
 // withoutOwnership is labels less TierPlan's own bookkeeping keys (IsOwnershipLabel), as a new map; nil stays nil.

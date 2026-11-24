@@ -66,12 +66,12 @@ afterEach(() => {
   client.clear();
 });
 
-function mount(stopped = false) {
+function mount(stopped = false, target: "swarm" | "standalone" = "swarm") {
   return render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <StackRoutes envId={ENV} stack={{ id: "s1", stopped }} />
+          <StackRoutes envId={ENV} stack={{ id: "s1", stopped, target }} />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
@@ -136,13 +136,6 @@ describe("the stack's Routes card", () => {
       "It serves once ingress is switched on and the stack is redeployed.",
       "border-status-unknown",
     ],
-    [
-      "not_served_yet",
-      {},
-      "Not served yet",
-      "Not served on this host yet. The stack keeps its hostnames.",
-      "border-status-unknown",
-    ],
   ])("draws %s with its dot, label and detail", async (state, extra, label, detail, dot) => {
     serve([route({ state, ...extra })]);
     mount();
@@ -163,6 +156,19 @@ describe("the stack's Routes card", () => {
     const c = await card();
     expect(rowOf(c, "a.example.com").querySelectorAll("p")).toHaveLength(0);
     expect(within(rowOf(c, "b.example.com")).getByText("dns_not_ready")).toBeTruthy();
+  });
+
+  it("words the pending and no-backend lines for a standalone host without nodes or tasks", async () => {
+    serve([
+      route({ hostname: "a.example.com", state: "pending", service: "api" }),
+      route({ hostname: "b.example.com", state: "backend_not_running", service: "web" }),
+    ]);
+    mount(false, "standalone");
+    const c = await card();
+    expect(within(c).getByText("The proxy has not applied it yet.")).toBeTruthy();
+    expect(within(c).getByText("web has no running container.")).toBeTruthy();
+    expect(within(c).queryByText(/node/)).toBeNull();
+    expect(within(c).queryByText(/task/)).toBeNull();
   });
 
   it("says a service with no running task is down: red, with the service named", async () => {

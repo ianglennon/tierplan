@@ -34,9 +34,6 @@ const (
 	IngressAttachLeaves = "leaves"
 )
 
-// NoteNotServedYet is the note of a route of a standalone host: it is claimed but nothing serves it there yet.
-const NoteNotServedYet = "Not served on this host yet."
-
 // The codes of the warnings a review gives for a routed service (D-13, D-23). They are warnings: they never stop a
 // deploy.
 const (
@@ -48,10 +45,12 @@ const (
 
 // The sentences of the warnings, worded as the UI contract has them. {service} is the name in the compose file.
 const (
-	messageIngressDisabled   = "Ingress is off for this environment. The routes will serve once it is switched on and the stack is redeployed."
-	messageIngressNoHealth   = " has no health check, so a starting task can get traffic before it is ready."
-	messageIngressDNSRR      = " uses endpoint_mode: dnsrr, so its name resolves to task addresses and not one stable address. The proxy can keep sending traffic to a replaced task until it reconnects."
-	messageIngressNoReplicas = " has no replicas, so its route will show Backend not running."
+	messageIngressDisabled = "Ingress is off for this environment. The routes will serve once it is switched on and the stack is redeployed."
+	messageIngressNoHealth = " has no health check, so a starting task can get traffic before it is ready."
+	// On a standalone host there are no tasks: a recreated container is what starts.
+	messageIngressNoHealthStandalone = " has no health check, so a starting container can get traffic before it is ready."
+	messageIngressDNSRR              = " uses endpoint_mode: dnsrr, so its name resolves to task addresses and not one stable address. The proxy can keep sending traffic to a replaced task until it reconnects."
+	messageIngressNoReplicas         = " has no replicas, so its route will show Backend not running."
 )
 
 // IngressRouteRow is one route of the review: Change is added, kept or released. Path is the prefix as the proxy
@@ -69,8 +68,9 @@ type IngressCertRow struct {
 	Hostname, State, Reason string
 }
 
-// IngressAttachRow is a service that joins or leaves the shared ingress network. A spec change of the service's
-// networks replaces its running tasks, which ReplacesTasks says; a service that does not exist yet has none to replace.
+// IngressAttachRow is a service that joins or leaves the shared ingress network. A change of the service's networks
+// replaces what runs: its tasks on a swarm, its containers on a standalone host (compose recreates a container whose
+// networks change). ReplacesTasks says so; a service that does not exist yet has nothing to replace.
 type IngressAttachRow struct {
 	Service, Change string
 	ReplacesTasks   bool
@@ -265,7 +265,10 @@ func shortNames(services []convert.ServicePlan) map[string]string {
 // are the ones decls name; none of them is an error. off says the environment's ingress is switched off, which one
 // warning (ingress_disabled) tells once, at the first routed service. A service the file does not hold is not judged.
 // The problems are written against compose.yaml at the service's key, for the caller to place.
-func ingressWarnings(project *types.Project, decls []ingress.Declaration, off bool) stacks.Problems {
+//
+// target and stopped carry what differs on a standalone host: endpoint_mode has no meaning there, so ingress_dnsrr is
+// never given, and a stopped stack runs no container for any routed service, so each of them has no replicas.
+func ingressWarnings(project *types.Project, decls []ingress.Declaration, off bool, target stacks.Target, stopped bool) stacks.Problems {
 	if project == nil || len(decls) == 0 {
 		return nil
 	}
@@ -282,6 +285,7 @@ func ingressWarnings(project *types.Project, decls []ingress.Declaration, off bo
 			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
 		}
 	}
+	standalone := target == stacks.TargetStandalone
 	var out stacks.Problems
 	if off {
 		out = append(out, warn(CodeIngressDisabled, routed[0], messageIngressDisabled))
@@ -292,12 +296,16 @@ func ingressWarnings(project *types.Project, decls []ingress.Declaration, off bo
 			continue
 		}
 		if svc.HealthCheck == nil || svc.HealthCheck.Disable {
-			out = append(out, warn(CodeIngressNoHealth, name, name+messageIngressNoHealth))
+			msg := messageIngressNoHealth
+			if standalone {
+				msg = messageIngressNoHealthStandalone
+			}
+			out = append(out, warn(CodeIngressNoHealth, name, name+msg))
 		}
-		if svc.Deploy != nil && svc.Deploy.EndpointMode == "dnsrr" {
+		if !standalone && svc.Deploy != nil && svc.Deploy.EndpointMode == "dnsrr" {
 			out = append(out, warn(CodeIngressDNSRR, name, name+messageIngressDNSRR))
 		}
-		if (svc.Deploy != nil && svc.Deploy.Replicas != nil && *svc.Deploy.Replicas == 0) || (svc.Scale != nil && *svc.Scale == 0) {
+		if (standalone && stopped) || (svc.Deploy != nil && svc.Deploy.Replicas != nil && *svc.Deploy.Replicas == 0) || (svc.Scale != nil && *svc.Scale == 0) {
 			out = append(out, warn(CodeIngressNoReplicas, name, name+messageIngressNoReplicas))
 		}
 	}
@@ -344,18 +352,86 @@ func (d Deps) fillIngressSwarm(ctx context.Context, in ReviewInput, rv *Review, 
 	if !sec.empty() {
 		rv.Ingress = sec
 	}
-	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, ingressWarnings(project, decls, in.IngressOff))...)
+	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, ingressWarnings(project, decls, in.IngressOff, stacks.TargetSwarm, false))...)
 }
 
-// fillIngressStandalone sets Review.Ingress of a review of a stack of a standalone host: the routes and the
-// certificates, with the note that nothing serves them on the host yet, and no network rows (the host's attachment
-// is a later phase). There are no warnings: they are about a swarm service.
+// fillIngressStandalone sets Review.Ingress and adds the ingress warnings of a review of a stack of a standalone host,
+// as fillIngressSwarm does for a swarm: the routes and the certificates, the services that join or leave the shared
+// bridge (each with the container recreate that causes) and the warnings that apply to one host. An update of images
+// changes no route, so it has no section.
 func (d Deps) fillIngressStandalone(ctx context.Context, in ReviewInput, rv *Review, project *types.Project) {
 	if in.Mode == ReviewModeUpdate || project == nil {
 		return
 	}
 	decls := stacks.IngressDeclarations(project, in.Stack.Target)
-	if sec := d.ingressSection(ctx, in, decls, NoteNotServedYet); !sec.empty() {
+	sec := d.ingressSection(ctx, in, decls, "")
+	if sec != nil {
+		sec.Network = d.standaloneAttachRows(ctx, in, project)
+	}
+	if !sec.empty() {
 		rv.Ingress = sec
 	}
+	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, ingressWarnings(project, decls, in.IngressOff, stacks.TargetStandalone, in.Stack.Stopped))...)
+}
+
+// joinsIngress reports whether a service of the prepared project lists the shared ingress network, by the name the
+// network has on the host.
+func joinsIngress(project *types.Project, svc types.ServiceConfig) bool {
+	for key := range svc.Networks {
+		name := key
+		if cfg, ok := project.Networks[key]; ok && cfg.Name != "" {
+			name = cfg.Name
+		}
+		if name == ingress.NetworkName {
+			return true
+		}
+	}
+	return false
+}
+
+// standaloneAttachRows is the services of a standalone stack that join or leave the shared ingress network: what the
+// prepared project asks for against what the stack's containers are attached to now. Compose recreates a container
+// whose networks change, so a service that has containers and changes either way replaces them; a service with none
+// joins with nothing to replace. A host that cannot be read leaves the rows out (the routes still show), because a list
+// built on a guess would call every service joining.
+func (d Deps) standaloneAttachRows(ctx context.Context, in ReviewInput, project *types.Project) []IngressAttachRow {
+	node, err := d.StandaloneNode(ctx, in.EnvID)
+	if err != nil {
+		d.log().Warn("could not find the host of a stack to review its ingress attachment", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		return nil
+	}
+	var rows []dockerx.ContainerRow
+	if err := d.Aggregator.OnNode(ctx, in.EnvID, node, func(c *dockerx.Client) error {
+		var e error
+		rows, e = c.ContainersWithLabel(ctx, stacks.LabelComposeProject, in.Stack.Name)
+		return e
+	}); err != nil {
+		d.log().Warn("could not read the containers of a stack to review its ingress attachment", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		return nil
+	}
+	has, attached := map[string]bool{}, map[string]bool{}
+	for _, r := range rows {
+		svc := r.Labels[stacks.LabelComposeService]
+		has[svc] = true
+		if slices.ContainsFunc(r.Networks, func(n dockerx.ContainerNet) bool { return n.Name == ingress.NetworkName }) {
+			attached[svc] = true
+		}
+	}
+	var out []IngressAttachRow
+	for name, svc := range project.Services {
+		want, had := joinsIngress(project, svc), attached[name]
+		switch {
+		case want && !had:
+			out = append(out, IngressAttachRow{Service: name, Change: IngressAttachJoins, ReplacesTasks: has[name]})
+		case !want && had:
+			out = append(out, IngressAttachRow{Service: name, Change: IngressAttachLeaves, ReplacesTasks: true})
+		}
+	}
+	slices.SortFunc(out, func(a, b IngressAttachRow) int {
+		if c := strings.Compare(a.Service, b.Service); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Change, b.Change)
+	})
+	return out
 }

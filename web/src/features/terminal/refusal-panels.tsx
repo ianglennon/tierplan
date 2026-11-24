@@ -14,7 +14,13 @@ import { useT } from "@/i18n/use-t";
 
 // The reasons a shell cannot be opened, each with a panel of its own in the Shell tab
 // (UI-SPEC "Shell", D-34, D-35, D-36). The tab itself never hides.
-export type Refusal = "notRunning" | "readOnly" | "ownContainer" | "noShell" | "agentTooOld";
+export type Refusal =
+  | "notRunning"
+  | "readOnly"
+  | "ownContainer"
+  | "ingressOwned"
+  | "noShell"
+  | "agentTooOld";
 
 interface RefusalPanelProps {
   kind: Refusal;
@@ -132,6 +138,16 @@ export function RefusalPanel({ kind, envId, row, onOpen, opening }: RefusalPanel
               <h2>{t("terminal.refusal.readOnly.heading")}</h2>
             </CardTitle>
             <CardDescription>{t("terminal.refusal.readOnly.body")}</CardDescription>
+          </CardHeader>
+        </Card>
+      );
+    case "ingressOwned":
+      return (
+        <Card className="max-w-[480px]">
+          <CardHeader>
+            <CardDescription className="text-foreground">
+              {t("containers.readOnlyIngress")}
+            </CardDescription>
           </CardHeader>
         </Card>
       );

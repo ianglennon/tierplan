@@ -648,7 +648,7 @@ func registerStackNameCheck(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "checkStackName", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/name-check",
 		Summary: "Whether a stack name can be used on an environment",
-		Description: "Answers available, taken (a stack of TierPlan's has it on this environment), clash (something TierPlan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. " +
+		Description: "Answers available, taken (a stack of TierPlan's has it on this environment), clash (something TierPlan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show (the name tierplan-ingress on a standalone host is invalid: it is TierPlan's own). " +
 			"The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. " +
 			"It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.",
 		Tags: []string{"stacks"},
@@ -672,6 +672,9 @@ func checkStackName(ctx context.Context, d StacksDeps, in *StackNameCheckInput) 
 	target, err := d.stackTargetOf(ctx, env.ID)
 	if err != nil {
 		return nil, err
+	}
+	if stacks.NameReserved(target, name) {
+		return answer("invalid", stacks.NameReservedText)
 	}
 	if !stacks.NameValid(target, name) {
 		return answer("invalid", stackNameInvalidMessage(target))

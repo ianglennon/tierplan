@@ -38,6 +38,7 @@ const (
 	stackTargetType = "stack"
 
 	problemStackNameInvalid    = "stack_name_invalid"
+	problemStackNameReserved   = "stack_name_reserved"
 	problemStackNameTaken      = "stack_name_taken"
 	problemStackNotFound       = "stack_not_found"
 	problemStackStartInvalid   = "stack_start_invalid"
@@ -456,7 +457,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 		Description: "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. " +
 			"The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. " +
 			"The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). " +
-			"A name that something TierPlan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's tierplan.stack.id) is 409 stack_name_clash. " +
+			"The name tierplan-ingress on a standalone host is TierPlan's own name for the ingress proxy's compose project and is 422 stack_name_reserved. A name that something TierPlan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's tierplan.stack.id) is 409 stack_name_clash. " +
 			"start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksCreate, Scope: rbac.ScopeEnvironment},
@@ -806,6 +807,9 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 	target, err := d.stackTargetOf(ctx, env.ID)
 	if err != nil {
 		return nil, err
+	}
+	if stacks.NameReserved(target, name) {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameReserved, stacks.NameReservedText)
 	}
 	if !stacks.NameValid(target, name) {
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameInvalid, stackNameInvalidMessage(target))

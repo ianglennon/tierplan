@@ -58,7 +58,7 @@ func (d Deps) standaloneProject(ctx context.Context, st Stack, store LifecycleSt
 	if err != nil {
 		return nil, masker, err
 	}
-	// ingress: unattached, the standalone attach is Phase 25
+	// ingress: unattached, Start only starts the containers a deploy made, with the networks they were made with
 	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: rev.Copy})
 	if err != nil {
 		return nil, masker, err

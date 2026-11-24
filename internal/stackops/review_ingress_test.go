@@ -494,7 +494,7 @@ func TestReviewIngressStandaloneAndRollback(t *testing.T) {
 	t.Parallel()
 	stored := "nginx:1.27@sha256:" + strings.Repeat("a", 64)
 
-	t.Run("the standalone review lists added and kept routes as not served yet, with no network rows", func(t *testing.T) {
+	t.Run("the standalone review lists added and kept routes as a swarm review does, with no network rows on a host with nothing attached", func(t *testing.T) {
 		t.Parallel()
 		r := newStandaloneRig(t)
 		r.deps.Ingress = &fakeIngress{
@@ -509,8 +509,8 @@ func TestReviewIngressStandaloneAndRollback(t *testing.T) {
 			t.Fatal("review has no ingress section")
 		}
 		want := []stackops.IngressRouteRow{
-			{Change: stackops.IngressRouteKept, Hostname: "x.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http", Note: stackops.NoteNotServedYet},
-			{Change: stackops.IngressRouteAdded, Hostname: "y.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http", Note: stackops.NoteNotServedYet},
+			{Change: stackops.IngressRouteKept, Hostname: "x.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
+			{Change: stackops.IngressRouteAdded, Hostname: "y.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
 		}
 		if !slices.Equal(rv.Ingress.Routes, want) {
 			t.Errorf("routes = %+v, want %+v", rv.Ingress.Routes, want)
@@ -522,8 +522,8 @@ func TestReviewIngressStandaloneAndRollback(t *testing.T) {
 			t.Errorf("network = %+v, want none on a standalone host", rv.Ingress.Network)
 		}
 		for _, p := range rv.Problems {
-			if strings.HasPrefix(p.Code, "ingress_") {
-				t.Errorf("problem %+v, want no swarm warning on a standalone host", p)
+			if p.Code == "ingress_dnsrr" {
+				t.Errorf("problem %+v, want no endpoint_mode warning on a standalone host", p)
 			}
 		}
 	})
@@ -561,7 +561,7 @@ func TestReviewIngressStandaloneAndRollback(t *testing.T) {
 		}
 		want := []stackops.IngressRouteRow{
 			{Change: stackops.IngressRouteReleased, Hostname: "c.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
-			{Change: stackops.IngressRouteAdded, Hostname: "x.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http", Note: stackops.NoteNotServedYet},
+			{Change: stackops.IngressRouteAdded, Hostname: "x.example.com", Path: "/", Service: "web", Port: 80, Scheme: "http"},
 		}
 		if rv.Ingress == nil || !slices.Equal(rv.Ingress.Routes, want) {
 			t.Errorf("ingress = %+v, want routes %+v", rv.Ingress, want)

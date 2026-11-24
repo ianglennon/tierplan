@@ -18,6 +18,8 @@ import (
 	"slices"
 
 	"github.com/compose-spec/compose-go/v2/loader"
+
+	"github.com/ianglennon/tierplan/internal/ingress"
 )
 
 // Target is where a stack deploys: a swarm (TierPlan's own stack deploy) or a standalone host (the
@@ -211,6 +213,21 @@ func NameValid(target Target, name string) bool {
 		return len(name) <= maxSwarmName && swarmNameRe.MatchString(name)
 	}
 	return name != "" && len(name) <= maxStandaloneName && loader.NormalizeProjectName(name) == name
+}
+
+// NameReservedText is the one sentence every path gives for a stack name that NameReserved refuses, so none of them
+// words it differently: create and git create answer 422 stack_name_reserved with it and the name check answers invalid.
+// Adopt never gets that code: the proxy's own project is not listed for adopt, so adopting by the name is
+// unmanaged_stack_not_found, and a project of that name that holds something foreign is listed as not adoptable with
+// this sentence as the reason (409 stack_not_adoptable).
+const NameReservedText = "tierplan-ingress is TierPlan's own name for the ingress proxy on this host. Choose another name."
+
+// NameReserved reports whether name is one a user stack may not take on target: on a standalone host it is the
+// compose project of TierPlan's ingress proxy (ingress.ProjectName). A user stack under that project would have
+// its next deploy remove the proxy as an orphan (D-10, Pitfall 10). On a swarm the name is free: the swarm
+// proxy is not a compose project. It is checked before NameValid on create, git create, the name check and adopt.
+func NameReserved(target Target, name string) bool {
+	return target == TargetStandalone && name == ingress.ProjectName
 }
 
 // NameRuleText describes the rule NameValid applies to target, as a phrase that completes "Use only

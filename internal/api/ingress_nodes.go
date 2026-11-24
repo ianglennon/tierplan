@@ -27,6 +27,7 @@ const (
 	problemIngressNodeAlreadyRevoked = "ingress_node_already_revoked"
 	problemIngressNoManager          = "ingress_no_manager"
 	problemIngressTokenNotStored     = "ingress_token_not_stored" //nolint:gosec // G101: a problem type, not a credential
+	problemIngressTokenNotEnrolled   = ingressdeploy.CodeTokenNotEnrolled
 
 	// The values of IngressNodeBody.Sync.
 	ingressSyncCurrent      = "current"
@@ -203,6 +204,9 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			return httpx.Problem(http.StatusConflict, problemIngressPaused, "Ingress on this environment was paused by a restore. Resume it first.")
 		case errors.Is(err, ingressdeploy.ErrNoManager):
 			return httpx.Problem(http.StatusConflict, problemIngressNoManager, "No manager node's agent is connected, so the new token cannot be stored on the swarm. Nothing was changed.")
+		case errors.Is(err, ingressdeploy.ErrTokenNotEnrolled):
+			return httpx.Problem(http.StatusConflict, problemIngressTokenNotEnrolled,
+				"The proxy on this host has not enrolled yet with the token it was given. Rotating now would stop it from enrolling, so nothing was issued. Rotate after it has enrolled.")
 		case errors.As(err, &notStored):
 			d.Log.Error("ingress node request failed", "step", what, "error", err)
 			return httpx.Problem(http.StatusBadGateway, problemIngressTokenNotStored,
@@ -223,6 +227,7 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			"their own key. On a swarm whose ingress is on, the token is also stored as the proxies' swarm secret, under the environment's operation lock, so the " +
 			"deployer adopts it and does not make another: 409 operation_locked while another operation holds the environment, 409 ingress_paused while a restore's pause stands, " +
 			"409 ingress_no_manager when no manager is connected, 502 ingress_token_not_stored when the swarm refuses the secret; in each case no token is handed out. " +
+			"On a standalone host whose ingress is on, a token is not made while the proxy has not yet enrolled with the one it has: 409 ingress_token_not_enrolled, and no token is handed out. " +
 			"404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or " +
 			"ingress.join_token_rotated with the generation, never the token.",
 		Tags: []string{"ingress"},

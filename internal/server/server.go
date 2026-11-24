@@ -1277,7 +1277,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc, Hub: ingressHub, Broker: broker,
 		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
 		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
-		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead),
+		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead, ingressHostRead(aggregator)),
 		CurrentBundle: func(envID string) (string, bool) {
 			b, ok := ingressRecon.Current(envID)
 			return b.ID, ok
@@ -1839,6 +1839,20 @@ func (a settingsAgents) PushURLs(urls, pins []string) int { return a.hub.PushURL
 func (a settingsAgents) Pins() []string                   { return a.hub.Pins() }
 
 var _ api.SettingsAgents = settingsAgents{}
+
+// ingressHostRead reads on the one node of a standalone environment, for the stacks the ingress asks to be redeployed
+// (D-16, D-18): the node is named by stackops.Deps.StandaloneNode and reached by ID through the aggregator, so a host that
+// is not connected is envs.ErrNodeUnavailable and nothing is sent.
+func ingressHostRead(agg *envs.Aggregator) api.HostReadFunc {
+	deps := stackops.Deps{Aggregator: agg}
+	return func(ctx context.Context, envID string, fn func(*dockerx.Client) error) error {
+		node, err := deps.StandaloneNode(ctx, envID)
+		if err != nil {
+			return err
+		}
+		return agg.OnNode(ctx, envID, node, fn)
+	}
+}
 
 // listenPort is the port in a listen address such as ":7480" or "0.0.0.0:7480"; 0 when it has none.
 func listenPort(addr string) int {

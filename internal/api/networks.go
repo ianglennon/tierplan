@@ -457,7 +457,15 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 	defer cancel()
 	create := func(c *dockerx.Client) error {
-		var e error
+		// A name that is the start of the ingress network's ID would carry a container onto it once the network is gone
+		// (T-25-47): it is refused on the engine the network would be made on.
+		shadow, e := c.ShadowsIngressNetwork(writeCtx, spec.Name)
+		if e != nil {
+			return e
+		}
+		if shadow {
+			return errIngressShadow
+		}
 		id, _, e = c.NetworkCreateAllocated(writeCtx, spec, d.AllocationWait)
 		return e
 	}
@@ -466,6 +474,9 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		err = d.Aggregator.WriteOnManager(writeCtx, envID, create)
 	} else {
 		err = d.Aggregator.WriteOnNode(writeCtx, envID, nodeID, create)
+	}
+	if errors.Is(err, errIngressShadow) {
+		return nil, httpx.Problem(http.StatusConflict, problemIngressOwned, ingressShadowMessage)
 	}
 	if err != nil {
 		code, problem := networkCreateProblem(d.Log, envID, body.Name, body.Subnet, err)
@@ -1253,6 +1264,12 @@ func ownContainerGate(ctx context.Context, d NetworksDeps, p *rbac.Principal, en
 		return ownedAttempt{}, code, problem
 	}
 	var attempt ownedAttempt
+	// The standalone proxy is not asked for a typed name: it is refused, before anything is written
+	// (D-09). Its network membership is the ensure loop's.
+	if isIngressStandalone(own.Labels) {
+		attempt.kind = ownIngress
+		return attempt, problemIngressOwned, ingressOwnedError()
+	}
 	switch {
 	case isSelfContainer(d.SelfContainerID, own.ID):
 		attempt.kind = ownServer
@@ -1312,6 +1329,28 @@ func connectContainer(ctx context.Context, d NetworksDeps, p *rbac.Principal, en
 	}
 	if err := d.refuseIngressNetwork(ctx, envID, row, audited); err != nil {
 		return err
+	}
+	// A network named with the start of the ingress network's ID reaches the ingress network once it is gone, for a
+	// container that has not started on it yet (T-25-47): it is refused as the ingress network is, read on the
+	// container's own engine.
+	var shadow bool
+	shadowCtx, cancel := context.WithTimeout(ctx, inspectTimeout)
+	err = d.Aggregator.OnNode(shadowCtx, envID, ct.NodeID, func(c *dockerx.Client) error {
+		var e error
+		shadow, e = c.ShadowsIngressNetwork(shadowCtx, row.Name)
+		return e
+	})
+	cancel()
+	switch {
+	case err != nil && (errors.Is(err, envs.ErrNodeUnavailable) || errors.Is(err, envs.ErrNotFound)):
+		audited(codeActionFailed)
+		return httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to TierPlan.")
+	case err != nil:
+		audited(codeActionFailed)
+		return snapshotProblem(d.Log, envID, err)
+	case shadow:
+		audited(problemIngressOwned)
+		return httpx.Problem(http.StatusConflict, problemIngressOwned, ingressShadowMessage)
 	}
 	if a, err := netip.ParseAddr(ep.IPv4); ep.IPv4 != "" && (err != nil || !a.Is4()) {
 		return refuse(http.StatusUnprocessableEntity, problemAddressInvalid, "Enter an IPv4 address like 10.20.0.5.")

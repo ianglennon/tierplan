@@ -11,10 +11,10 @@ import (
 )
 
 // The state of a route is derived on read from what is stored, what runs and what the nodes applied, and kept
-// nowhere (plan 24-25, D-24). The precedence is not_served_yet, ingress_off, backend_not_running, not_attached, waiting_certificate,
+// nowhere (plan 24-25, D-24). The precedence is ingress_off, backend_not_running, not_attached, waiting_certificate,
 // pending, serving.
 
-func TestRouteStateMatrix(t *testing.T) {
+func TestRouteStates(t *testing.T) {
 	t.Parallel()
 	web := ingress.Route{Hostname: "app.example.com", PathPrefix: "/", Service: "web"}
 	key := stackops.RouteKey{Hostname: "app.example.com", Path: "/"}
@@ -53,12 +53,12 @@ func TestRouteStateMatrix(t *testing.T) {
 		{"backend not running: the stack is stopped", func(in *stackops.RouteStateInput) { in.Stopped = true }, stackops.RouteBackendNotRunning, "", true},
 		{"not attached", func(in *stackops.RouteStateInput) { in.Attached = map[string]bool{"web": false} }, stackops.RouteNotAttached, "", false},
 		{"ingress off", func(in *stackops.RouteStateInput) { in.Enabled = false }, stackops.RouteIngressOff, "", false},
-
-		{"not served yet: a standalone stack", func(in *stackops.RouteStateInput) { in.NotServed, in.Running, in.Attached = true, nil, nil }, stackops.RouteNotServedYet, "", false},
+		// A standalone host's containers fill the same two maps a swarm's services do, so the same input serves.
+		{"serving: a standalone host's running, attached container", func(in *stackops.RouteStateInput) {
+			in.Running, in.Attached = map[string]int{"web": 1}, map[string]bool{"web": true}
+		}, stackops.RouteServing, "", false},
 
 		// Precedence.
-		{"not served yet beats ingress off", func(in *stackops.RouteStateInput) { in.NotServed, in.Enabled = true, false }, stackops.RouteNotServedYet, "", false},
-		{"not served yet beats stopped", func(in *stackops.RouteStateInput) { in.NotServed, in.Stopped = true, true }, stackops.RouteNotServedYet, "", false},
 		{"ingress off beats stopped", func(in *stackops.RouteStateInput) { in.Enabled, in.Stopped = false, true }, stackops.RouteIngressOff, "", false},
 		{"stopped beats not attached", func(in *stackops.RouteStateInput) {
 			in.Stopped = true

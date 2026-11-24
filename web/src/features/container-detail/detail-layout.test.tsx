@@ -27,6 +27,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     nodeId: "n1",
     node: "node-1",
     readOnly: false,
+    ingressOwned: false,
     id: "web-id",
     name: "web",
     image: "nginx:1.27",

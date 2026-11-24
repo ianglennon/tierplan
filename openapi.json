@@ -2187,9 +2187,10 @@
         "additionalProperties": false,
         "properties": {
           "code": {
-            "description": "Why a target failed. own_container (with result skipped): TierPlan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message",
+            "description": "Why a target failed. ingress_owned: the container is TierPlan's standalone ingress proxy, which only switching ingress off removes; with result failed for a single target and skipped in a bulk, and nothing is sent. own_container (with result skipped): TierPlan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message",
             "enum": [
               "own_container",
+              "ingress_owned",
               "node_unreachable",
               "not_found",
               "host_read_only",
@@ -2332,6 +2333,10 @@
             "description": "The ID of the image it runs",
             "type": "string"
           },
+          "ingressOwned": {
+            "description": "True for TierPlan's standalone ingress proxy container: read-only, every write is refused with ingress_owned. Switch ingress off to remove it",
+            "type": "boolean"
+          },
           "isSelf": {
             "description": "True for the container TierPlan itself runs in",
             "type": "boolean"
@@ -2430,7 +2435,7 @@
             "type": "string"
           },
           "selfKind": {
-            "description": "server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise",
+            "description": "server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), empty otherwise",
             "enum": [
               "",
               "server",
@@ -2514,6 +2519,7 @@
           "masked",
           "isSelf",
           "selfKind",
+          "ingressOwned",
           "project",
           "stack",
           "service",
@@ -2566,6 +2572,10 @@
             "description": "The image the container was created from",
             "type": "string"
           },
+          "ingressOwned": {
+            "description": "True for TierPlan's standalone ingress proxy container: read-only, every write is refused with ingress_owned. Switch ingress off to remove it",
+            "type": "boolean"
+          },
           "isSelf": {
             "description": "True for the container TierPlan itself runs in (D-27)",
             "type": "boolean"
@@ -2605,7 +2615,7 @@
             "description": "Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"
           },
           "selfKind": {
-            "description": "server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's ingress proxy (the component label and the service name tierplan-ingress), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect",
+            "description": "server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect",
             "enum": [
               "",
               "server",
@@ -2660,6 +2670,7 @@
           "isSelf",
           "health",
           "selfKind",
+          "ingressOwned",
           "readOnly",
           "project",
           "stack",
@@ -2828,6 +2839,10 @@
               "null"
             ]
           },
+          "ingress": {
+            "description": "True for TierPlan's ingress network, by its reserved name tierplan-ingress: the container's attachment to it is the ensure loop's, so a disconnect from it is refused as ingress_owned",
+            "type": "boolean"
+          },
           "ipv4": {
             "type": "string"
           },
@@ -2847,7 +2862,8 @@
         "required": [
           "networkId",
           "name",
-          "aliases"
+          "aliases",
+          "ingress"
         ],
         "type": "object"
       },
@@ -9838,9 +9854,10 @@
             "type": "boolean"
           },
           "applies": {
-            "description": "rolling: it applies as each node's proxy restarts. when_enabled: it is stored and applies when ingress is switched on. when_resumed: it is stored and applies once the environment is resumed",
+            "description": "rolling: it applies as each node's proxy restarts. recreate: it applies when the next pass recreates the standalone host's proxy container. when_enabled: it is stored and applies when ingress is switched on. when_resumed: it is stored and applies once the environment is resumed",
             "enum": [
               "rolling",
+              "recreate",
               "when_enabled",
               "when_resumed"
             ],
@@ -10436,8 +10453,12 @@
       "IngressDisableRemovesBody": {
         "additionalProperties": false,
         "properties": {
+          "container": {
+            "description": "The proxy container's name on a standalone host; empty when the host does not hold it and on a swarm",
+            "type": "string"
+          },
           "network": {
-            "description": "The ingress network's name; empty when the swarm was read and does not hold it",
+            "description": "The ingress network's name; empty when the swarm or the host was read and does not hold it",
             "type": "string"
           },
           "secrets": {
@@ -10455,7 +10476,7 @@
             "type": "string"
           },
           "volumes": {
-            "description": "The nodes whose certificate cache volume is wiped: every node of the environment",
+            "description": "The nodes whose certificate cache volume is wiped: every node of a swarm, the one host of a standalone environment",
             "items": {
               "$ref": "#/components/schemas/IngressDisableNodeBody"
             },
@@ -10468,6 +10489,7 @@
         "required": [
           "service",
           "network",
+          "container",
           "secrets",
           "volumes"
         ],
@@ -10748,7 +10770,7 @@
             "type": "string"
           },
           "items": {
-            "description": "The steps, in the order they run: token, network, service and switch for ingress_enable; switch_off, service, volumes, network, secret, token and nodes for ingress_disable",
+            "description": "The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable",
             "items": {
               "$ref": "#/components/schemas/StackJobItemBody"
             },
@@ -10758,10 +10780,11 @@
             ]
           },
           "kind": {
-            "description": "What the job does: ingress_enable or ingress_disable",
+            "description": "What the job does: ingress_enable, ingress_disable, or ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person)",
             "enum": [
               "ingress_enable",
-              "ingress_disable"
+              "ingress_disable",
+              "ingress_ensure"
             ],
             "type": "string"
           },
@@ -11028,6 +11051,10 @@
           "service": {
             "$ref": "#/components/schemas/IngressPlanService"
           },
+          "standalone": {
+            "description": "True when the plan is a standalone host's: the proxy is one container of the compose project tierplan-ingress, its network is a bridge, its join token is a file and its volume is the host's. False on a swarm",
+            "type": "boolean"
+          },
           "volume": {
             "$ref": "#/components/schemas/IngressPlanVolume"
           }
@@ -11036,7 +11063,8 @@
           "network",
           "service",
           "secret",
-          "volume"
+          "volume",
+          "standalone"
         ],
         "type": "object"
       },
@@ -11260,7 +11288,7 @@
             "type": "string"
           },
           "class": {
-            "description": "How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, enable_failed (switching ingress on failed and ingress is still off), url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes)",
+            "description": "How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, enable_failed (switching ingress on failed and ingress is still off), url_unset (TierPlan has no usable ingress address, so nothing was written), update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes), not_enrolled (the standalone proxy has run for five minutes without enrolling: check that it can reach TierPlan's address) or name_shadowed (a container on the standalone host is joined to a network by a name that is the start of the ingress network's ID, so the proxy was taken down and stays down while that network is there; once it is gone, the next pass makes it again with another ID)",
             "type": "string"
           }
         },
@@ -11299,23 +11327,33 @@
       "IngressStatusObjects": {
         "additionalProperties": false,
         "properties": {
+          "container": {
+            "description": "True when the proxy container exists on a standalone host; always false on a swarm",
+            "type": "boolean"
+          },
           "network": {
             "description": "True when the ingress network exists",
             "type": "boolean"
           },
           "secret": {
-            "description": "True when a join token secret exists",
+            "description": "True when a join token secret exists; always false on a standalone host, whose join token is a file",
             "type": "boolean"
           },
           "service": {
-            "description": "True when the proxy service exists",
+            "description": "True when the proxy service exists; always false on a standalone host, whose proxy is a container",
+            "type": "boolean"
+          },
+          "volume": {
+            "description": "True when the certificate cache volume exists on a standalone host; always false on a swarm, whose volumes are on its nodes",
             "type": "boolean"
           }
         },
         "required": [
           "network",
           "service",
-          "secret"
+          "secret",
+          "container",
+          "volume"
         ],
         "type": "object"
       },
@@ -23816,7 +23854,7 @@
             "type": "string"
           },
           "note": {
-            "description": "Left out unless set: a sentence for the row. A route of a standalone host says it is not served on that host yet",
+            "description": "Left out unless set: a sentence for the row",
             "type": "string"
           },
           "path": {
@@ -24544,15 +24582,14 @@
             "type": "string"
           },
           "state": {
-            "description": "serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. not_served_yet: the stack runs on a standalone host, which ingress does not serve yet; its routes keep their hostnames and the other states are not worked out for it. Derived when read, stored nowhere",
+            "description": "serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. Derived when read, stored nowhere",
             "enum": [
               "serving",
               "pending",
               "waiting_certificate",
               "backend_not_running",
               "not_attached",
-              "ingress_off",
-              "not_served_yet"
+              "ingress_off"
             ],
             "type": "string"
           },
@@ -31707,7 +31744,7 @@
     },
     "/api/env/{envId}/containers/{containerId}/shell": {
       "post": {
-        "description": "Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for TierPlan's own server, an agent's container or an ingress proxy task (decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).",
+        "description": "Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for TierPlan's own server, an agent's container or an ingress proxy task, and 409 ingress_owned for TierPlan's standalone ingress proxy container, even when it is stopped (each decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).",
         "operationId": "openShell",
         "parameters": [
           {
@@ -31856,7 +31893,7 @@
     },
     "/api/env/{envId}/git-stacks": {
       "post": {
-        "description": "Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. Audited as stack.created_from_git with the stack, the repository, the ref and the folder. The name follows the rules of creating a stack in TierPlan (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). 422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; 422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. When commit is sent and the ref no longer resolves to it, 409 commit_moved and nothing is created. Needs stacks.create (Admin).",
+        "description": "Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. Audited as stack.created_from_git with the stack, the repository, the ref and the folder. The name follows the rules of creating a stack in TierPlan (422 stack_name_invalid, 422 stack_name_reserved for tierplan-ingress on a standalone host, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). 422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; 422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. When commit is sent and the ref no longer resolves to it, 409 commit_moved and nothing is created. Needs stacks.create (Admin).",
         "operationId": "createGitStack",
         "parameters": [
           {
@@ -33722,7 +33759,7 @@
     },
     "/api/env/{envId}/ingress/access-logs": {
       "put": {
-        "description": "Stores whether the proxies write an access log; it is off by default. Switching it restarts each node's proxy in turn, as the proxy service is rolled with the setting changed. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). The answer says when it applies: rolling, or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. 409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).",
+        "description": "Stores whether the proxies write an access log; it is off by default. Switching it restarts each node's proxy in turn, as the proxy service is rolled with the setting changed; on a standalone host the next pass recreates the proxy container. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). The answer says when it applies: rolling, recreate (a standalone host), or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).",
         "operationId": "setIngressAccessLogs",
         "parameters": [
           {
@@ -33775,7 +33812,7 @@
             "description": "Error"
           }
         },
-        "summary": "Switch the proxy access log of a swarm environment",
+        "summary": "Switch the proxy access log of a swarm or standalone environment",
         "tags": [
           "ingress"
         ]
@@ -34120,7 +34157,7 @@
     },
     "/api/env/{envId}/ingress/disable": {
       "post": {
-        "description": "Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; 409 ingress_standalone_unavailable on a standalone environment; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).",
+        "description": "Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; On a standalone host the job removes the proxy container, the ingress network and the cache volume through the host's one node; a network another container still uses fails the job, naming it. 409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).",
         "operationId": "disableIngress",
         "parameters": [
           {
@@ -34163,7 +34200,7 @@
             "description": "Error"
           }
         },
-        "summary": "Switch ingress off for a swarm environment",
+        "summary": "Switch ingress off for a swarm or standalone environment",
         "tags": [
           "ingress"
         ]
@@ -34171,7 +34208,7 @@
     },
     "/api/env/{envId}/ingress/disable/preview": {
       "post": {
-        "description": "Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "description": "Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
         "operationId": "previewIngressDisable",
         "parameters": [
           {
@@ -34214,7 +34251,7 @@
             "description": "Error"
           }
         },
-        "summary": "Preview switching ingress off for a swarm environment",
+        "summary": "Preview switching ingress off for a swarm or standalone environment",
         "tags": [
           "ingress"
         ]
@@ -34754,7 +34791,7 @@
     },
     "/api/env/{envId}/ingress/enable": {
       "post": {
-        "description": "Runs the preflight again, then, as a job answered with 202 and its ID at once, makes the join token's swarm secret, the ingress network and the global proxy service and switches ingress on. Existing stacks are not changed: a stack must be redeployed to be attached to the ingress network. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream; enrolment and readiness of the proxy nodes are read through the ingress status and the node list. 409 ingress_standalone_unavailable on a standalone environment; 409 ingress_preflight_refused when the preflight refuses, with each finding's code and items in errors; 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin). Audited as ingress.enabled when the job switches it on.",
+        "description": "Runs the preflight again, then, as a job answered with 202 and its ID at once, makes the join token's swarm secret, the ingress network and the global proxy service and switches ingress on. Existing stacks are not changed: a stack must be redeployed to be attached to the ingress network. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream; enrolment and readiness of the proxy nodes are read through the ingress status and the node list. On a standalone host the job makes the join token, brings up the compose project tierplan-ingress (one proxy container, a bridge network and the cache volume) through the host's one node and switches ingress on. 409 ingress_preflight_refused when the preflight refuses, with each finding's code and items in errors (ingress_host_unreachable on a standalone host whose agent is not connected); 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin). Audited as ingress.enabled when the job switches it on.",
         "operationId": "enableIngress",
         "parameters": [
           {
@@ -34806,7 +34843,7 @@
             "description": "Error"
           }
         },
-        "summary": "Switch ingress on for a swarm environment",
+        "summary": "Switch ingress on for a swarm or standalone environment",
         "tags": [
           "ingress"
         ]
@@ -34814,7 +34851,7 @@
     },
     "/api/env/{envId}/ingress/enable/preview": {
       "post": {
-        "description": "Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. 409 ingress_standalone_unavailable on a standalone environment, which has no ingress yet. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "description": "Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. On a standalone host creates.standalone is true: the proxy is one container of the compose project tierplan-ingress with a bridge network and a cache volume, and the host is read only when its agent is connected. A standalone host whose agent is not connected is a finding, ingress_host_unreachable. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
         "operationId": "previewIngressEnable",
         "parameters": [
           {
@@ -34866,7 +34903,7 @@
             "description": "Error"
           }
         },
-        "summary": "Preview switching ingress on for a swarm environment",
+        "summary": "Preview switching ingress on for a swarm or standalone environment",
         "tags": [
           "ingress"
         ]
@@ -35026,7 +35063,7 @@
         ]
       },
       "post": {
-        "description": "Makes the ingress join token that lets ingress nodes enrol into this environment, or, when it has one, makes a new one and retires the current one in the same transaction. The token is in the answer, once, with Cache-Control no-store: the server keeps only its hash. A rotation stops the old token enrolling new nodes and does not affect nodes that are already enrolled, which authenticate with their own key. On a swarm whose ingress is on, the token is also stored as the proxies' swarm secret, under the environment's operation lock, so the deployer adopts it and does not make another: 409 operation_locked while another operation holds the environment, 409 ingress_paused while a restore's pause stands, 409 ingress_no_manager when no manager is connected, 502 ingress_token_not_stored when the swarm refuses the secret; in each case no token is handed out. 404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or ingress.join_token_rotated with the generation, never the token.",
+        "description": "Makes the ingress join token that lets ingress nodes enrol into this environment, or, when it has one, makes a new one and retires the current one in the same transaction. The token is in the answer, once, with Cache-Control no-store: the server keeps only its hash. A rotation stops the old token enrolling new nodes and does not affect nodes that are already enrolled, which authenticate with their own key. On a swarm whose ingress is on, the token is also stored as the proxies' swarm secret, under the environment's operation lock, so the deployer adopts it and does not make another: 409 operation_locked while another operation holds the environment, 409 ingress_paused while a restore's pause stands, 409 ingress_no_manager when no manager is connected, 502 ingress_token_not_stored when the swarm refuses the secret; in each case no token is handed out. On a standalone host whose ingress is on, a token is not made while the proxy has not yet enrolled with the one it has: 409 ingress_token_not_enrolled, and no token is handed out. 404 environment_not_found. Needs ingress.manage on the environment (its Admin). Audited as ingress.join_token_created or ingress.join_token_rotated with the generation, never the token.",
         "operationId": "issueIngressJoinToken",
         "parameters": [
           {
@@ -35198,7 +35235,7 @@
     },
     "/api/env/{envId}/ingress/resume": {
       "post": {
-        "description": "After a restore from a backup, TierPlan only observes each environment's ingress and writes nothing to its swarm until an Admin resumes it here. Resuming clears the marker and the next pass writes the ingress objects again. Resuming an environment that is not paused answers 200 with resumed false and is not audited. 409 ingress_standalone_unavailable on a standalone environment. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).",
+        "description": "After a restore from a backup, TierPlan only observes each environment's ingress and writes nothing to its swarm until an Admin resumes it here. Resuming clears the marker and the next pass writes the ingress objects again. Resuming an environment that is not paused answers 200 with resumed false and is not audited. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).",
         "operationId": "resumeIngress",
         "parameters": [
           {
@@ -35249,7 +35286,7 @@
     },
     "/api/env/{envId}/ingress/status": {
       "get": {
-        "description": "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. It carries no token and no secret. 409 ingress_standalone_unavailable on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+        "description": "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds, or on a standalone host which of the network, proxy container and cache volume it holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
         "operationId": "getIngressStatus",
         "parameters": [
           {
@@ -35292,7 +35329,7 @@
             "description": "Error"
           }
         },
-        "summary": "Read the ingress status of a swarm environment",
+        "summary": "Read the ingress status of a swarm or standalone environment",
         "tags": [
           "ingress"
         ]
@@ -39857,7 +39894,7 @@
         ]
       },
       "post": {
-        "description": "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). A name that something TierPlan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's tierplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).",
+        "description": "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). The name tierplan-ingress on a standalone host is TierPlan's own name for the ingress proxy's compose project and is 422 stack_name_reserved. A name that something TierPlan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's tierplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).",
         "operationId": "createStack",
         "parameters": [
           {
@@ -39918,7 +39955,7 @@
     },
     "/api/env/{envId}/stacks/name-check": {
       "get": {
-        "description": "Answers available, taken (a stack of TierPlan's has it on this environment), clash (something TierPlan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.",
+        "description": "Answers available, taken (a stack of TierPlan's has it on this environment), clash (something TierPlan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show (the name tierplan-ingress on a standalone host is invalid: it is TierPlan's own). The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.",
         "operationId": "checkStackName",
         "parameters": [
           {
@@ -42182,7 +42219,7 @@
     },
     "/api/env/{envId}/stacks/{stackId}/routes": {
       "get": {
-        "description": "Answers each route the stack holds with its hostname, path, service and a state: serving, pending, waiting_certificate (with the reason), backend_not_running (stopped is true when the stack is stopped), not_attached, ingress_off or not_served_yet (a stack on a standalone host). The first of these that holds is the state, in that order of the list: not served yet, ingress off, then the backend not running, then not attached, then waiting for a certificate, then pending. The state is worked out when asked from the stored claims, the services on the swarm, the proxy's current bundle and what each active node applied; nothing is stored. A stack that holds no route answers an empty list. The answer never carries a certificate, a key or a token. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
+        "description": "Answers each route the stack holds with its hostname, path, service and a state: serving, pending, waiting_certificate (with the reason), backend_not_running (stopped is true when the stack is stopped), not_attached, or ingress_off. The first of these that holds is the state, in this order: ingress off, then the backend not running, then not attached, then waiting for a certificate, then pending. The state is worked out when asked from the stored claims, the services on the swarm or the containers on the standalone host, the proxy's current bundle and what each active node applied; nothing is stored. A stack that holds no route answers an empty list. The answer never carries a certificate, a key or a token. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
         "operationId": "getStackRoutes",
         "parameters": [
           {

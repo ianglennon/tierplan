@@ -102,8 +102,7 @@ type StandaloneDeployInput struct {
 	// its job.
 	Masker stacks.Masker
 	// Ingress, when not nil, is how the deploy stores the stack's hostname claims, and puts them back when it does not
-	// end well, exactly as a swarm deploy does (D-13, D-15, D-16). A standalone stack's routes are skipped with no
-	// backend until Phase 25, but the names are held all the same. Nil writes and reverts nothing (D-17).
+	// end well, exactly as a swarm deploy does (D-13, D-15, D-16). Nil writes and reverts nothing (D-17).
 	Ingress *ClaimWrite
 	// OnDone, when set, is called once with the result before the job's last item is finished.
 	OnDone func(DeployResult)
@@ -125,91 +124,24 @@ type StandaloneDeployInput struct {
 //
 // The last item is finished only after in.OnDone returns.
 func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r *jobs.Reporter) (res DeployResult) {
-	prog := newProgress(r, in.Masker)
-	final := itemEnd{state: jobs.ItemDone}
-	var detail string
-	var events *composeEvents
-	// cleanup, once the SDK's up has begun, removes what it left behind when the deploy stops.
-	var cleanup func()
 	// claims says whether this deploy stored the stack's claims (and what the stack held before), so a deploy that does not
 	// end well puts them back.
 	var claims claimWrite
+	j := newStandaloneJob(r, in.Masker, &res)
+	prog := j.prog
+	fail, failWith, failErr := j.fail, j.failWith, j.failErr
 	defer func() {
 		// First, with the operation lock still held: a hostname only the failed revision asked for is free at once (D-16).
 		if claims.Written && !res.OK() {
 			if err := d.revertClaims(ctx, in.EnvID, in.Stack.ID, in.Ingress.Actor, in.Ingress.CanView, claims.Prior); err != nil {
-				noteClaimsRevertFailed(&res, prog, &final)
+				noteClaimsRevertFailed(&res, prog, &j.final)
 			}
 		}
 		if in.OnDone != nil {
 			in.OnDone(res)
 		}
-		r.Finish(ItemCleanup, final.state, final.code, final.message, final.result)
+		j.finishLast()
 	}()
-
-	// failWith ends the item that failed with its code and the items after it as not run. The row of the
-	// network, volume or service the failure is about ends with the engine's words; with none to name, the
-	// step does. The last item is held in final, to be finished after OnDone.
-	failWith := func(item, code, name, message string) DeployResult {
-		if message == "" {
-			message = CodeMessage(code)
-		}
-		res.Code, res.FailedService = code, name
-		state := jobs.ItemFailed
-		cancelled := code == CodeCancelled
-		if cancelled {
-			state = jobs.ItemCancelled
-			detail = ""
-		}
-		if events != nil && !cancelled {
-			events.endFailedRows()
-		}
-		matched := item != ItemCheck && item != ItemLookup && prog.failed(item, name, state, code, message, detail)
-		if !matched && detail != "" {
-			prog.detail(item, detail)
-			prog.line("Failed: " + detail)
-		}
-		later := itemEnd{state: jobs.ItemSkipped, code: CodeNotRun, message: CodeMessage(CodeNotRun)}
-		if cancelled {
-			later.state = jobs.ItemCancelled
-		}
-		for _, id := range StandaloneDeployItems() {
-			var end itemEnd
-			switch {
-			case id == item:
-				end = itemEnd{state: state, code: code, message: message}
-			case standaloneOrder(id) > standaloneOrder(item):
-				end = later
-			case id == ItemNetworks || id == ItemVolumes:
-				// A group runs through the SDK's up, which failed on something else: it ends as its
-				// children did (r.Finish changes nothing for a group that has already ended).
-				if gs := prog.groupState(id); gs == jobs.ItemDone {
-					end = itemEnd{state: gs}
-				} else {
-					end = later
-				}
-			default:
-				continue // finished before the failure
-			}
-			if id == ItemCleanup {
-				final = end
-			} else {
-				r.Finish(id, end.state, end.code, end.message, nil)
-			}
-		}
-		prog.rest(later.state, later.code, later.message)
-		// What this deploy created and never started, and the networks nothing uses, go again; nothing else
-		// is touched, no volume is removed and nothing is put back (D-14, D-20).
-		if cleanup != nil {
-			cleanup()
-		}
-		return res
-	}
-	fail := func(item, code, name string) DeployResult { return failWith(item, code, name, "") }
-	failErr := func(item, code, name string, err error) DeployResult {
-		detail = engineWords(err)
-		return fail(item, code, name)
-	}
 
 	// 1. Check: the stack again, the host-access policy for the caller, the objects, and what the host holds.
 	r.Update(ItemCheck, func(it *jobs.Item) { it.State = jobs.ItemRunning })
@@ -221,11 +153,23 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.log().Warn("a standalone host could not be written to before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
-	// ingress: unattached, the standalone attach is Phase 25
-	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy, IngressPolicy: in.IngressPolicy})
+	// The job decides the attachment itself, under the operation lock it holds, so every caller of a standalone deploy (a
+	// deploy, a git deploy, an update of the images, a roll back, a restore, the automatic roll back of a failed update)
+	// attaches a routed service alike, and a switch flipped since the request was judged is read as it is now (D-16).
+	attach, aerr := d.attachFor(ctx, in.EnvID, stacks.TargetStandalone)
+	if aerr != nil {
+		attach = nil
+	}
+	checked := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: stacks.TargetStandalone, Copy: in.Copy, IngressPolicy: in.IngressPolicy, Ingress: attach})
 	if checked.Loaded == nil || checked.Problems.Errors() > 0 {
 		d.log().Warn("a standalone stack no longer passes its check at deploy time", "environment", in.EnvID, "stack", in.Stack.Name)
 		return fail(ItemCheck, CodeStackInvalid, "")
+	}
+	// A switch that cannot be read refuses a stack with a routed service: it would be deployed off the bridge, or on a
+	// network that is not there. A stack with none does not need the answer and goes on unattached.
+	if aerr != nil && len(stacks.RoutedServices(checked.Loaded.Project, stacks.TargetStandalone)) > 0 {
+		d.log().Warn("whether ingress is on could not be read before a standalone deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", aerr)
+		return failWith(ItemCheck, CodePolicyUnavailable, "", "Whether ingress is on could not be read, so nothing was deployed.")
 	}
 	project := checked.Loaded.Project
 	files, vars := stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy)
@@ -250,7 +194,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		}
 		return fail(ItemCheck, CodePolicyUnavailable, "")
 	case pol.Refused:
-		detail = policyWords(pol)
+		j.detail = policyWords(pol)
 		return fail(ItemCheck, CodeNeedsAdmin, "")
 	}
 	live, err := d.readStandalone(ctx, in.EnvID, in.NodeID, in.Stack.Name)
@@ -378,6 +322,143 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 			return failErr(ItemLookup, codeOf(ctx, err), "", err)
 		}
 	}
+	return d.standaloneTail(ctx, j, standaloneTail{
+		EnvID: in.EnvID, NodeID: in.NodeID, Name: in.Stack.Name,
+		Project: project, Live: live, Diff: diff, Pinned: pinned, Pins: standalonePins(items, pinned),
+		Cleanup: func(created []string) {
+			d.cleanupStandalone(ctx, in.EnvID, in.NodeID, in.Stack, live.Containers, created, &res, prog)
+		},
+		AfterUp: func(upErr error) {
+			// The networks exist now, or the up stopped where it did: the blocks are no longer only a plan, and what the
+			// revision records is what the host holds, however the up ended.
+			subnets.Release()
+			d.recordStandaloneSubnets(context.WithoutCancel(ctx), in, recorded, subnets, upErr == nil)
+		},
+	})
+}
+
+// standaloneJob is the failure machinery of a standalone deploy job, shared by DeployStandalone and DeploySystem: the
+// reporter and the progress rows, the result being built, what the last item ends with (held until the caller's
+// OnDone has returned), the engine's words for the failure, the SDK's events and what to clean up when the deploy stops.
+type standaloneJob struct {
+	r    *jobs.Reporter
+	prog *progress
+	res  *DeployResult
+	// final is how the job's last item ends, held to be finished after the caller's OnDone.
+	final itemEnd
+	// detail is the engine's words for the failure being reported, already masked when shown.
+	detail string
+	events *composeEvents
+	// cleanup, once the SDK's up has begun, removes what it left behind when the deploy stops.
+	cleanup func()
+}
+
+func newStandaloneJob(r *jobs.Reporter, m stacks.Masker, res *DeployResult) *standaloneJob {
+	return &standaloneJob{r: r, prog: newProgress(r, m), res: res, final: itemEnd{state: jobs.ItemDone}}
+}
+
+// finishLast ends the job's last item, which the deploy holds back until its OnDone has run.
+func (j *standaloneJob) finishLast() {
+	j.r.Finish(ItemCleanup, j.final.state, j.final.code, j.final.message, j.final.result)
+}
+
+// failWith ends the item that failed with its code and the items after it as not run. The row of the
+// network, volume or service the failure is about ends with the engine's words; with none to name, the
+// step does. The last item is held in final, to be finished after OnDone.
+func (j *standaloneJob) failWith(item, code, name, message string) DeployResult {
+	res, r, prog := j.res, j.r, j.prog
+	if message == "" {
+		message = CodeMessage(code)
+	}
+	res.Code, res.FailedService = code, name
+	state := jobs.ItemFailed
+	cancelled := code == CodeCancelled
+	if cancelled {
+		state = jobs.ItemCancelled
+		j.detail = ""
+	}
+	if j.events != nil && !cancelled {
+		j.events.endFailedRows()
+	}
+	matched := item != ItemCheck && item != ItemLookup && prog.failed(item, name, state, code, message, j.detail)
+	if !matched && j.detail != "" {
+		prog.detail(item, j.detail)
+		prog.line("Failed: " + j.detail)
+	}
+	later := itemEnd{state: jobs.ItemSkipped, code: CodeNotRun, message: CodeMessage(CodeNotRun)}
+	if cancelled {
+		later.state = jobs.ItemCancelled
+	}
+	for _, id := range StandaloneDeployItems() {
+		var end itemEnd
+		switch {
+		case id == item:
+			end = itemEnd{state: state, code: code, message: message}
+		case standaloneOrder(id) > standaloneOrder(item):
+			end = later
+		case id == ItemNetworks || id == ItemVolumes:
+			// A group runs through the SDK's up, which failed on something else: it ends as its
+			// children did (r.Finish changes nothing for a group that has already ended).
+			if gs := prog.groupState(id); gs == jobs.ItemDone {
+				end = itemEnd{state: gs}
+			} else {
+				end = later
+			}
+		default:
+			continue // finished before the failure
+		}
+		if id == ItemCleanup {
+			j.final = end
+		} else {
+			r.Finish(id, end.state, end.code, end.message, nil)
+		}
+	}
+	prog.rest(later.state, later.code, later.message)
+	// What this deploy created and never started, and the networks nothing uses, go again; nothing else
+	// is touched, no volume is removed and nothing is put back (D-14, D-20).
+	if j.cleanup != nil {
+		j.cleanup()
+	}
+	return *res
+}
+
+func (j *standaloneJob) fail(item, code, name string) DeployResult {
+	return j.failWith(item, code, name, "")
+}
+
+func (j *standaloneJob) failErr(item, code, name string, err error) DeployResult {
+	j.detail = engineWords(err)
+	return j.fail(item, code, name)
+}
+
+// standaloneTail is what the shared tail of a standalone deploy needs, once the head (the check, and for a stack the
+// objects, the policy and the claims) has decided what to send.
+type standaloneTail struct {
+	EnvID, NodeID string
+	// Name is the Compose project, for the logs and for reading the host again.
+	Name    string
+	Project *types.Project
+	Live    standaloneLive
+	Diff    standaloneDiff
+	// Pinned is the outcome of the lookup and Pins the reference each service is prepared with.
+	Pinned PinOutcome
+	Pins   map[string]string
+	// NoWait has the up return once the containers are started, without waiting for them to run or be healthy.
+	NoWait bool
+	// Cleanup removes what the up left when it stops: the networks it created are named.
+	Cleanup func(created []string)
+	// AfterUp is called with the up's outcome as soon as it has returned, whether it worked or not.
+	AfterUp func(err error)
+	// Mask, when set, hides the project's secret values in what is logged of the up's error. The job's text is masked by
+	// its progress already.
+	Mask func(string) string
+}
+
+// standaloneTail runs the end of a standalone deploy: the rows of what will be created, the pre-pull of the
+// images, the SDK's up through WriteOnNode, cleanup when it fails, and the job's closing items.
+func (d Deps) standaloneTail(ctx context.Context, j *standaloneJob, t standaloneTail) DeployResult {
+	project, live, diff, pinned := t.Project, t.Live, t.Diff, t.Pinned
+	res, r, prog := j.res, j.r, j.prog
 	netNames, volNames := missingNetworks(project, live.Networks), missingVolumes(project, live.Volumes)
 	for _, n := range netNames {
 		prog.addNetwork(n)
@@ -409,25 +490,26 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	// 2b. Pull the images the services that will be created or recreated need and the host lacks, with the
 	// stored credential. A service whose container stays is not pulled for: its image text did not change,
 	// and a deploy never moves it (STK-09). The SDK finds the images on the host and needs no credential.
-	if err := d.prePull(ctx, in.EnvID, in.NodeID, pullPins(project, diff, standalonePins(items, pinned)), r); err != nil {
+	if err := d.prePull(ctx, t.EnvID, t.NodeID, pullPins(project, diff, t.Pins), r); err != nil {
 		var pe *prePullError
 		if !errors.As(err, &pe) {
-			return failErr(ItemPull, codeOf(ctx, err), "", err)
+			return j.failErr(ItemPull, codeOf(ctx, err), "", err)
 		}
-		return fail(ItemPull, pe.Code, pe.Service)
+		return j.fail(ItemPull, pe.Code, pe.Service)
 	}
 
 	// 3. The SDK's up creates the networks and volumes, then the services, in one call. The networks and
 	// volumes items end with it, the services as the events and the containers left say.
 	if ctx.Err() != nil {
-		return fail(ItemNetworks, CodeCancelled, "")
+		return j.fail(ItemNetworks, CodeCancelled, "")
 	}
 	r.Update(ItemNetworks, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	r.Update(ItemVolumes, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	r.Update(ItemServices, func(it *jobs.Item) {
 		it.State, it.Unit, it.Total = jobs.ItemRunning, "services", int64(len(project.Services))
 	})
-	events = newComposeEvents(prog, expected, images, orphans)
+	events := newComposeEvents(prog, expected, images, orphans)
+	j.events = events
 	for _, name := range project.ServiceNames() {
 		events.startService(name)
 	}
@@ -435,24 +517,25 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	if timeout <= 0 {
 		timeout = DefaultConvergeTimeout
 	}
-	cleanup = func() {
-		d.cleanupStandalone(ctx, in.EnvID, in.NodeID, in.Stack, live.Containers, netNames, &res, prog)
-	}
+	j.cleanup = func() { t.Cleanup(netNames) }
 	if d.subnetPlanHook != nil {
 		d.subnetPlanHook()
 	}
 	// The SDK's up may change containers as soon as it begins, so a deploy that fails once up is called may have written. A
 	// host that cannot be reached or is read-only now is refused before the callback runs: nothing was sent, nothing changed.
-	err = d.Aggregator.WriteOnNode(ctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
+	err := d.Aggregator.WriteOnNode(ctx, t.EnvID, t.NodeID, func(c *dockerx.Client) error {
 		res.Wrote = true
-		return d.up(ctx, c, project, dockerx.ComposeUpOptions{WaitTimeout: timeout, ForceRecreate: diff.Forced}, events.on)
+		return d.up(ctx, c, project, dockerx.ComposeUpOptions{WaitTimeout: timeout, ForceRecreate: diff.Forced, NoWait: t.NoWait}, events.on)
 	})
 	// The networks exist now, or the up stopped where it did: the blocks are no longer only a plan, and what the
 	// revision records is what the host holds, however the up ended.
-	subnets.Release()
-	d.recordStandaloneSubnets(context.WithoutCancel(ctx), in, recorded, subnets, err == nil)
+	t.AfterUp(err)
 	if err != nil {
-		d.log().Warn("the Compose SDK's up failed", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		var logged any = err
+		if t.Mask != nil {
+			logged = t.Mask(err.Error())
+		}
+		d.log().Warn("the Compose SDK's up failed", "environment", t.EnvID, "stack", t.Name, "error", logged)
 		kind, name := events.firstFailure()
 		item := ItemServices
 		switch kind {
@@ -464,19 +547,19 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		if name == "" || kind == dockerx.ComposeKindImage {
 			name = ""
 		}
-		return failErr(item, codeOf(ctx, err), name, err)
+		return j.failErr(item, codeOf(ctx, err), name, err)
 	}
 
-	cleanup = nil
+	j.cleanup = nil
 
 	// 4. Done: the networks and volumes exist, every service was brought to what the file says. What the
 	// SDK changed is known from the hashes read before it ran.
 	res.Networks, res.CreatedNetworks = len(netNames), netNames
 	res.Services, res.Updated = len(diff.Added), len(diff.recreated())
 	res.RemovedServices = diff.Removed
-	after, aerr := d.readStandalone(ctx, in.EnvID, in.NodeID, in.Stack.Name)
+	after, aerr := d.readStandalone(ctx, t.EnvID, t.NodeID, t.Name)
 	if aerr != nil {
-		d.log().Warn("could not read a standalone host after a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", aerr)
+		d.log().Warn("could not read a standalone host after a deploy", "environment", t.EnvID, "stack", t.Name, "error", aerr)
 	}
 	for _, n := range netNames {
 		prog.done(idNetwork+n, nil)
@@ -495,11 +578,11 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	r.Finish(ItemServices, jobs.ItemDone, "", "", map[string]string{
 		"services": strconv.Itoa(res.Services), "updated": strconv.Itoa(res.Updated),
 	})
-	final = itemEnd{state: jobs.ItemDone, result: map[string]string{
+	j.final = itemEnd{state: jobs.ItemDone, result: map[string]string{
 		"networks": strconv.Itoa(res.Networks), "volumes": strconv.Itoa(len(volNames)),
 		"removedServices": strconv.Itoa(len(diff.Removed)),
 	}}
-	return res
+	return *res
 }
 
 // recordStandaloneSubnets stores on the deploy's revision the subnets its networks have: those the plan chose and

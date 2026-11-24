@@ -343,7 +343,7 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 // of a stack the server confirmed (plan 07-30, T-07-146), empty for a stack TierPlan does not manage.
 var containerKeys = []string{
 	"node", "nodeId", "id", "name", "state", "status", "image", "created", "ports", "isSelf",
-	"project", "stack", "service", "health", "selfKind", "readOnly", "tierplanStackId",
+	"project", "stack", "service", "health", "selfKind", "ingressOwned", "readOnly", "tierplanStackId",
 }
 
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {

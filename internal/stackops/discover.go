@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -96,6 +97,9 @@ func nameClashReason(name, managed string) string {
 // stacks.NameRuleText exactly as the create refusal is, so create and adopt cannot word the rule differently
 // (D-53). It is empty when the name follows the rule.
 func NameNotAdoptableReason(target stacks.Target, name string) string {
+	if stacks.NameReserved(target, name) {
+		return stacks.NameReservedText
+	}
 	if stacks.NameValid(target, name) {
 		return ""
 	}
@@ -115,6 +119,17 @@ func PortainerMarked(labels map[string]string) bool {
 		}
 	}
 	return strings.HasPrefix(labels[stacks.LabelComposeWorkingDir], portainerComposeDir)
+}
+
+// ownsProxyOnly reports whether containers are all the standalone proxy (ingress.OwnsProxyContainer): the label,
+// the reserved project and the proxy's service. An empty group is not.
+func ownsProxyOnly(containers []dockerx.ContainerRow) bool {
+	for _, c := range containers {
+		if !ingress.OwnsProxyContainer(c.Labels) {
+			return false
+		}
+	}
+	return len(containers) > 0
 }
 
 // group is what one namespace or project holds, as Discover collects it.
@@ -167,6 +182,13 @@ func Discover(h Held, managed []Stack, target stacks.Target, self SelfMarks) []D
 
 	out := make([]Discovered, 0, len(groups))
 	for name, g := range groups {
+		// The standalone ingress proxy is TierPlan's own system project, not a stack to list or adopt; the swarm
+		// leaves its proxy service out of discovery the same way. It is hidden only when every container of the
+		// group is the proxy: the component label alone hides nothing (Phase 24 D-41), and a project of that name
+		// holding anything else stays in the list, so a person sees the clash (D-09, T-25-12).
+		if target != stacks.TargetSwarm && name == ingress.ProjectName && ownsProxyOnly(g.containers) {
+			continue
+		}
 		own := OwnershipOf(DiscoveredStack("", name, target))
 		var rows []ServiceRow
 		if target == stacks.TargetSwarm {

@@ -22,6 +22,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
@@ -76,9 +77,20 @@ func Host(t testing.TB, name, stackID, compose string, vars []stacks.Var, files 
 // already holds them from a review. A service without one runs the image as written with a made-up digest.
 func HostPinned(t testing.TB, name, stackID, compose string, vars []stacks.Var, pins map[string]string, files ...stacks.File) *Hosted {
 	t.Helper()
+	return hostPinned(t, name, stackID, compose, vars, pins, nil, files...)
+}
+
+// HostAttached is Host for a deploy made while ingress was on: the routed services of the file are on the shared ingress
+// network with their alias, as the deploy sends them, so their containers are on it and their config hash covers it.
+func HostAttached(t testing.TB, name, stackID, compose string, vars []stacks.Var, files ...stacks.File) *Hosted {
+	t.Helper()
+	return hostPinned(t, name, stackID, compose, vars, nil, &stacks.IngressAttach{Network: ingress.NetworkName}, files...)
+}
+
+func hostPinned(t testing.TB, name, stackID, compose string, vars []stacks.Var, pins map[string]string, attach *stacks.IngressAttach, files ...stacks.File) *Hosted {
+	t.Helper()
 	copy := stacks.WorkingCopy{Files: append([]stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}, files...), Vars: vars}
-	// ingress: unattached, standalone test helper
-	checked := stacks.Check(context.Background(), stacks.CheckInput{Name: name, Target: stacks.TargetStandalone, Copy: copy})
+	checked := stacks.Check(context.Background(), stacks.CheckInput{Name: name, Target: stacks.TargetStandalone, Copy: copy, Ingress: attach})
 	if checked.Loaded == nil {
 		t.Fatalf("check: %v", checked.Problems)
 	}

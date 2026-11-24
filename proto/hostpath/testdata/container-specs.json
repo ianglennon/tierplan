@@ -1466,5 +1466,83 @@
       "HostConfig.SecurityOpt[0]",
       "HostConfig.Binds[0]"
     ]
+  },
+  {
+    "name": "tierplan-ingress standalone proxy container",
+    "body": {
+      "Image": "ghcr.io/ianglennon/tierplan-ingress:edge",
+      "User": "1000:1000",
+      "Env": [
+        "TIERPLAN_INGRESS_URL=wss://tierplan.example:7480/ingress/connect",
+        "TIERPLAN_INGRESS_PIN=sha256/AAAA",
+        "TIERPLAN_INGRESS_JOIN_TOKEN_FILE=/run/secrets/tierplan-ingress-token"
+      ],
+      "Labels": {
+        "tierplan.component": "ingress",
+        "tierplan.keep": "true",
+        "tierplan.updates": "ignore",
+        "com.docker.compose.project": "tierplan-ingress",
+        "com.docker.compose.service": "proxy",
+        "com.docker.compose.oneoff": "False",
+        "com.docker.compose.container-number": "1"
+      },
+      "ExposedPorts": {
+        "8080/tcp": {},
+        "8443/tcp": {}
+      },
+      "Healthcheck": {
+        "Test": [
+          "CMD",
+          "/usr/local/bin/tierplan-ingress",
+          "healthcheck"
+        ],
+        "Interval": 30000000000,
+        "Timeout": 5000000000,
+        "Retries": 3,
+        "StartPeriod": 600000000000
+      },
+      "StopTimeout": 30,
+      "HostConfig": {
+        "PortBindings": {
+          "8080/tcp": [
+            {
+              "HostIp": "",
+              "HostPort": "80"
+            }
+          ],
+          "8443/tcp": [
+            {
+              "HostIp": "",
+              "HostPort": "443"
+            }
+          ]
+        },
+        "RestartPolicy": {
+          "Name": "unless-stopped"
+        },
+        "Binds": [
+          "tierplan-ingress-cache:/var/lib/tierplan-ingress:rw"
+        ],
+        "LogConfig": {
+          "Type": "json-file",
+          "Config": {
+            "max-size": "10m",
+            "max-file": "3"
+          }
+        },
+        "NetworkMode": "tierplan-ingress"
+      },
+      "NetworkingConfig": {
+        "EndpointsConfig": {
+          "tierplan-ingress": {}
+        }
+      }
+    },
+    "refused": [],
+    "volumes": {
+      "tierplan-ingress-cache": {
+        "driver": "local"
+      }
+    }
   }
 ]

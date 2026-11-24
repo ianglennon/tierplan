@@ -200,10 +200,15 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	// engine or any later step can see it. A service with a build and no image is a blocking error
 	// above, so what is left to deploy always names an image.
 	stripBuild(loaded.Project)
+	// An alias on the shared network is judged on the file as the user wrote it: the attachment below
+	// adds one of its own on a standalone host, and that is never the user's error (D-30, A-7).
+	aliasProblems := networkAliasProblems(loaded.Project, idx)
 	// The ingress attachment goes in after lint and stripBuild, so neither the lint problems nor the
-	// position index ever see the injected key, and before anything converts the project (D-19).
-	if in.Ingress != nil && in.Target == TargetSwarm {
-		loaded.Ingress = attachIngress(loaded.Project, RoutedServices(loaded.Project, in.Target), in.Ingress.Network)
+	// position index ever see the injected key, and before anything converts the project (D-19, D-16).
+	var routed []string
+	if in.Ingress != nil {
+		routed = RoutedServices(loaded.Project, in.Target)
+		loaded.Ingress = attachIngress(loaded.Project, in.Target, routed, in.Ingress.Network)
 	}
 	res.Loaded = loaded
 	res.Problems = append(append(res.Problems, binds...), lintProblems(found, file)...)
@@ -213,7 +218,12 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	res.Problems = append(res.Problems, ingressProblems(loaded.Project, idx, in)...)
 	res.Problems = append(res.Problems, componentLabelProblems(loaded.Project, idx)...)
 	res.Problems = append(res.Problems, networkReservedProblems(loaded.Project, idx)...)
-	res.Problems = append(res.Problems, networkAliasProblems(loaded.Project, idx)...)
+	res.Problems = append(res.Problems, volumeReservedProblems(loaded.Project, idx)...)
+	if in.Target == TargetStandalone {
+		res.Problems = append(res.Problems, networkModeProblems(loaded.Project, idx, routed)...)
+		res.Problems = append(res.Problems, containerNameProblems(loaded.Project, idx)...)
+	}
+	res.Problems = append(res.Problems, aliasProblems...)
 	res.Problems = res.Problems.Sorted()
 	return res
 }

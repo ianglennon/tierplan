@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/registry"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // ingressDeployDeps are what newIngressDeploy reads from the rest of the server.
@@ -88,6 +89,7 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Audit:         d.Audit,
 		Resolver:      d.Resolver,
 		AddressSpaces: d.AddressSpaces,
+		System:        ingressSystem(d),
 		LocalSwarm:    d.Envs.LocalSwarmMembership,
 		OwnChallenge:  d.OwnChallenge,
 		ServerVersion: buildinfo.Get().Version,
@@ -96,6 +98,12 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Clock:         d.Clock,
 		Log:           d.Log,
 	})
+}
+
+// ingressSystem is the deployer of a standalone host's proxy project: the stack pipeline's own system deploy, on the server's
+// aggregator. It has no Ingress, so the project is never attached to the ingress network or given a hostname claim.
+func ingressSystem(d ingressDeployDeps) stackops.Deps {
+	return stackops.Deps{Aggregator: d.Aggregator, AddressSpaces: d.AddressSpaces, Resolver: d.Resolver, Log: d.Log}
 }
 
 // ingressEngine reaches a swarm's engines: the writes and the node reads through the aggregator, the cluster read
@@ -141,17 +149,40 @@ func (r ingressEnvReader) Info(ctx context.Context, envID string) (ingressdeploy
 	if err != nil {
 		return ingressdeploy.EnvInfo{}, err
 	}
+	return envInfoFrom(envID, row, in), nil
+}
+
+// envInfoFrom maps an environment row and its rollup input to what the deployer decides on. A standalone environment is
+// one node: for the local socket its AgentID is the environment's own ID, which stackops.Deps.StandaloneNode routes
+// writes by, and its reachability is the local probe's; for an agent host it is the host's one agent.
+func envInfoFrom(envID string, row sqlc.Environment, in envs.RollupInput) ingressdeploy.EnvInfo {
 	info := ingressdeploy.EnvInfo{ID: envID, Name: row.Name, ClusterID: row.SwarmClusterID.String}
 	if in.Kind != envs.KindAgent {
 		// The local socket is one node, and its ID is the environment's.
-		info.Swarm = in.Local.Probe.Type == dockerx.TypeSwarmManager
-		info.ManagerConnected = info.Swarm
-		if info.Swarm {
-			info.Nodes = []ingressdeploy.NodeInfo{{SwarmNodeID: in.Local.Probe.SwarmNodeID, AgentID: envID, Name: in.Local.Probe.Hostname, Role: "manager", Connected: true}}
+		probe := in.Local.Probe
+		switch probe.Type {
+		case dockerx.TypeSwarmManager:
+			info.Swarm = true
+			info.ManagerConnected = true
+			info.Nodes = []ingressdeploy.NodeInfo{{SwarmNodeID: probe.SwarmNodeID, AgentID: envID, Name: probe.Hostname, Role: "manager", Connected: true}}
+			return info
+		case dockerx.TypeSwarmWorker:
+			// A worker is a swarm node, as envs.Clusters.IsSwarm has it: its stacks are swarm stacks, so it is not a standalone
+			// host for ingress, and the swarm path refuses it for want of a manager (WR-A4).
+			info.Swarm = true
+			info.Nodes = []ingressdeploy.NodeInfo{{SwarmNodeID: probe.SwarmNodeID, AgentID: envID, Name: probe.Hostname, Role: "worker", Connected: in.Local.State == envs.StateOnline}}
+			return info
 		}
-		return info, nil
+		info.Local = true
+		info.EngineID = probe.EngineID
+		// An engine that has not been probed yet could be a swarm node, so it is not a connected standalone host.
+		info.Nodes = []ingressdeploy.NodeInfo{{AgentID: envID, Name: probe.Hostname, Connected: probe.Type != "" && in.Local.State == envs.StateOnline}}
+		return info
 	}
 	info.Swarm = in.EnvType == "swarm"
+	if !info.Swarm {
+		info.EngineID = row.EngineID.String
+	}
 	for _, ag := range in.Agents {
 		if ag.Revoked {
 			continue
@@ -162,8 +193,11 @@ func (r ingressEnvReader) Info(ctx context.Context, envID string) (ingressdeploy
 		if ag.Role == "manager" && ag.Connected {
 			info.ManagerConnected = true
 		}
+		if !info.Swarm {
+			break // a standalone host has the one agent
+		}
 	}
-	return info, nil
+	return info
 }
 
 // ownChallenge is the validation method the server's own certificate is ordered with now, read from the ACME manager.

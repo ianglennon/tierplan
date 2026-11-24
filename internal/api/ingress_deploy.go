@@ -26,23 +26,24 @@ import (
 // own deploy to join the ingress network.
 
 const (
-	problemIngressStandalone       = "ingress_standalone_unavailable"
 	problemIngressPreflightRefused = "ingress_preflight_refused"
 	problemIngressJobNotFound      = "ingress_job_not_found"
 	problemIngressRoutesLive       = ingressdeploy.CodeRoutesLive
 	problemIngressPaused           = ingressdeploy.CodePaused
 
-	// ingressJobKindPrefix is what every kind of ingress job in the jobs hub starts with (ingress_enable and ingress_disable).
+	// ingressJobKindPrefix is what every kind of ingress job in the jobs hub starts with (ingress_enable, ingress_disable and ingress_ensure).
 	ingressJobKindPrefix = "ingress_"
 
 	ingressJobGone = "This ingress job is no longer here. Jobs are kept for 10 minutes after they end."
 )
 
-// IngressStatusObjects says which of the ingress objects the swarm holds.
+// IngressStatusObjects says which of the ingress objects the swarm or the standalone host holds.
 type IngressStatusObjects struct {
-	Network bool `json:"network" doc:"True when the ingress network exists"`
-	Service bool `json:"service" doc:"True when the proxy service exists"`
-	Secret  bool `json:"secret" doc:"True when a join token secret exists"`
+	Network   bool `json:"network" doc:"True when the ingress network exists"`
+	Service   bool `json:"service" doc:"True when the proxy service exists; always false on a standalone host, whose proxy is a container"`
+	Secret    bool `json:"secret" doc:"True when a join token secret exists; always false on a standalone host, whose join token is a file"`
+	Container bool `json:"container" doc:"True when the proxy container exists on a standalone host; always false on a swarm"`
+	Volume    bool `json:"volume" doc:"True when the certificate cache volume exists on a standalone host; always false on a swarm, whose volumes are on its nodes"`
 }
 
 // IngressStatusNodes counts the proxy nodes.
@@ -55,7 +56,7 @@ type IngressStatusNodes struct {
 // IngressStatusEnsure is the last pass of the loop that keeps the ingress objects as wanted.
 type IngressStatusEnsure struct {
 	At    string `json:"at" doc:"When the last pass ended, RFC 3339 UTC; empty when none has run"`
-	Class string `json:"class" doc:"How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, enable_failed (switching ingress on failed and ingress is still off), url_unset (TierPlan has no usable ingress address, so nothing was written) or update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes)"`
+	Class string `json:"class" doc:"How it ended: empty for success, otherwise unreachable, locked, paused, write_failed, enable_failed (switching ingress on failed and ingress is still off), url_unset (TierPlan has no usable ingress address, so nothing was written), update_failed (the swarm rolled back the last update of the proxy service, which is not tried again for an hour or until the wanted spec changes), not_enrolled (the standalone proxy has run for five minutes without enrolling: check that it can reach TierPlan's address) or name_shadowed (a container on the standalone host is joined to a network by a name that is the start of the ingress network's ID, so the proxy was taken down and stays down while that network is there; once it is gone, the next pass makes it again with another ID)"`
 }
 
 // IngressStatusBody is an environment's ingress status. It carries counts and names, never a token or a secret.
@@ -94,7 +95,7 @@ type IngressAccessLogsInput struct {
 // IngressAccessLogsBody is the answer to the access-log switch.
 type IngressAccessLogsBody struct {
 	AccessLogs bool   `json:"accessLogs" doc:"The value now stored"`
-	Applies    string `json:"applies" enum:"rolling,when_enabled,when_resumed" doc:"rolling: it applies as each node's proxy restarts. when_enabled: it is stored and applies when ingress is switched on. when_resumed: it is stored and applies once the environment is resumed"`
+	Applies    string `json:"applies" enum:"rolling,recreate,when_enabled,when_resumed" doc:"rolling: it applies as each node's proxy restarts. recreate: it applies when the next pass recreates the standalone host's proxy container. when_enabled: it is stored and applies when ingress is switched on. when_resumed: it is stored and applies once the environment is resumed"`
 }
 
 // IngressAccessLogsOutput wraps IngressAccessLogsBody for huma.
@@ -154,6 +155,8 @@ type IngressPlanBody struct {
 	Service IngressPlanService `json:"service"`
 	Secret  IngressPlanSecret  `json:"secret"`
 	Volume  IngressPlanVolume  `json:"volume"`
+	// Standalone is true for a standalone host's plan.
+	Standalone bool `json:"standalone" doc:"True when the plan is a standalone host's: the proxy is one container of the compose project tierplan-ingress, its network is a bridge, its join token is a file and its volume is the host's. False on a swarm"`
 }
 
 // IngressPlanNetwork is the ingress network of the plan.
@@ -218,10 +221,11 @@ type IngressDisableNodeBody struct {
 
 // IngressDisableRemovesBody is what a switch-off would remove.
 type IngressDisableRemovesBody struct {
-	Service string                   `json:"service" doc:"The proxy service's name; empty when the swarm was read and does not hold it"`
-	Network string                   `json:"network" doc:"The ingress network's name; empty when the swarm was read and does not hold it"`
-	Secrets []string                 `json:"secrets" doc:"The names of the join token secrets the swarm holds"`
-	Volumes []IngressDisableNodeBody `json:"volumes" doc:"The nodes whose certificate cache volume is wiped: every node of the environment"`
+	Service   string                   `json:"service" doc:"The proxy service's name; empty when the swarm was read and does not hold it"`
+	Network   string                   `json:"network" doc:"The ingress network's name; empty when the swarm or the host was read and does not hold it"`
+	Container string                   `json:"container" doc:"The proxy container's name on a standalone host; empty when the host does not hold it and on a swarm"`
+	Secrets   []string                 `json:"secrets" doc:"The names of the join token secrets the swarm holds"`
+	Volumes   []IngressDisableNodeBody `json:"volumes" doc:"The nodes whose certificate cache volume is wiped: every node of a swarm, the one host of a standalone environment"`
 }
 
 // IngressDisablePreviewBody is the answer to the preview of a switch-off.
@@ -257,12 +261,12 @@ type IngressJobPathInput struct {
 // IngressJobBody is an ingress job.
 type IngressJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
-	Kind       string               `json:"kind" enum:"ingress_enable,ingress_disable" doc:"What the job does: ingress_enable or ingress_disable"`
+	Kind       string               `json:"kind" enum:"ingress_enable,ingress_disable,ingress_ensure" doc:"What the job does: ingress_enable, ingress_disable, or ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person)"`
 	StartedBy  string               `json:"startedBy" doc:"Who started it, as the hub records its owner"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
-	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch for ingress_enable; switch_off, service, volumes, network, secret, token and nodes for ingress_disable"`
+	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable"`
 	Output     []StackJobOutputLine `json:"output" doc:"The output log, oldest first"`
 }
 
@@ -345,8 +349,6 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		var refused *ingressdeploy.DisableRefusedError
 		var locked *ingressdeploy.LockedError
 		switch {
-		case errors.Is(err, ingressdeploy.ErrStandaloneUnavailable):
-			return httpx.Problem(http.StatusConflict, problemIngressStandalone, "Ingress is not yet available on a standalone environment.")
 		case errors.As(err, &pre):
 			return ingressPreflightProblem(pre)
 		case errors.As(err, &refused):
@@ -368,11 +370,12 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		OperationID: "previewIngressEnable",
 		Method:      http.MethodPost,
 		Path:        "/api/env/{envId}/ingress/enable/preview",
-		Summary:     "Preview switching ingress on for a swarm environment",
+		Summary:     "Preview switching ingress on for a swarm or standalone environment",
 		Description: "Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret " +
 			"that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings " +
 			"do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. " +
-			"409 " + problemIngressStandalone + " on a standalone environment, which has no ingress yet. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"On a standalone host creates.standalone is true: the proxy is one container of the compose project tierplan-ingress with a bridge network and a cache volume, and the host is read only when its agent is connected. " +
+			"A standalone host whose agent is not connected is a finding, ingress_host_unreachable. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressEnableInput) (*IngressEnablePreviewOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
@@ -390,6 +393,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		body.Creates.Service = IngressPlanService{Name: res.Plan.Service.Name, Image: res.Plan.Service.Image}
 		body.Creates.Secret = IngressPlanSecret{Name: res.Plan.Secret.Name, New: res.Plan.Secret.New}
 		body.Creates.Volume = IngressPlanVolume{Name: res.Plan.Volume.Name}
+		body.Creates.Standalone = res.Plan.Standalone
 		for _, st := range res.Redeploy {
 			body.Redeploy = append(body.Redeploy, IngressRedeployBody{StackID: st.ID, StackName: st.Name, HoldsClaims: st.HoldsClaims})
 		}
@@ -400,12 +404,13 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		OperationID:   "enableIngress",
 		Method:        http.MethodPost,
 		Path:          "/api/env/{envId}/ingress/enable",
-		Summary:       "Switch ingress on for a swarm environment",
+		Summary:       "Switch ingress on for a swarm or standalone environment",
 		DefaultStatus: http.StatusAccepted,
 		Description: "Runs the preflight again, then, as a job answered with 202 and its ID at once, makes the join token's swarm secret, the ingress network " +
 			"and the global proxy service and switches ingress on. Existing stacks are not changed: a stack must be redeployed to be attached to the ingress network. " +
 			"Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream; enrolment and readiness of the proxy nodes are read through the ingress status and the node list. " +
-			"409 " + problemIngressStandalone + " on a standalone environment; 409 " + problemIngressPreflightRefused + " when the preflight refuses, with each finding's code and items in errors; " +
+			"On a standalone host the job makes the join token, brings up the compose project tierplan-ingress (one proxy container, a bridge network and the cache volume) through the host's one node and switches ingress on. " +
+			"409 " + problemIngressPreflightRefused + " when the preflight refuses, with each finding's code and items in errors (ingress_host_unreachable on a standalone host whose agent is not connected); " +
 			"409 " + problemOperationLocked + " while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin). " +
 			"Audited as ingress.enabled when the job switches it on.",
 		Tags: []string{"ingress"},
@@ -428,13 +433,13 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		OperationID: "previewIngressDisable",
 		Method:      http.MethodPost,
 		Path:        "/api/env/{envId}/ingress/disable/preview",
-		Summary:     "Preview switching ingress off for a swarm environment",
+		Summary:     "Preview switching ingress off for a swarm or standalone environment",
 		Description: "Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) " +
 			"and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live " +
 			"while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. " +
 			"A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: " +
 			"their cache volume, which holds the private keys, is wiped when the agent connects. " +
-			"409 " + problemIngressStandalone + " on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressDisablePreviewOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -455,7 +460,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		body := IngressDisablePreviewBody{
 			Findings: ingressFindings(res.Findings), Unreachable: res.Unreachable,
 			Removes: IngressDisableRemovesBody{
-				Service: res.Removes.Service, Network: res.Removes.Network, Secrets: res.Removes.Secrets,
+				Service: res.Removes.Service, Network: res.Removes.Network, Container: res.Removes.Container, Secrets: res.Removes.Secrets,
 				Volumes: make([]IngressDisableNodeBody, 0, len(res.Removes.Volumes)),
 			},
 		}
@@ -469,14 +474,15 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		OperationID:   "disableIngress",
 		Method:        http.MethodPost,
 		Path:          "/api/env/{envId}/ingress/disable",
-		Summary:       "Switch ingress off for a swarm environment",
+		Summary:       "Switch ingress off for a swarm or standalone environment",
 		DefaultStatus: http.StatusAccepted,
 		Description: "Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), " +
 			"remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, " +
 			"disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped " +
 			"when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. " +
 			"409 " + problemIngressRoutesLive + " while a claim with routes exists, listing each hostname and path with its stack in errors; 409 " + problemIngressPaused + " while a restore's pause stands; " +
-			"409 " + problemIngressStandalone + " on a standalone environment; 409 " + problemOperationLocked + " while another operation holds the environment. Nothing is written when it is refused. " +
+			"On a standalone host the job removes the proxy container, the ingress network and the cache volume through the host's one node; a network another container still uses fails the job, naming it. " +
+			"409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 " + problemOperationLocked + " while another operation holds the environment. Nothing is written when it is refused. " +
 			"Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressDisableStartOutput, error) {
@@ -525,11 +531,11 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		OperationID: "getIngressStatus",
 		Method:      http.MethodGet,
 		Path:        "/api/env/{envId}/ingress/status",
-		Summary:     "Read the ingress status of a swarm environment",
-		Description: "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds; " +
+		Summary:     "Read the ingress status of a swarm or standalone environment",
+		Description: "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds, or on a standalone host which of the network, proxy container and cache volume it holds; " +
 			"how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; " +
 			"how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. " +
-			"It carries no token and no secret. 409 " + problemIngressStandalone + " on a standalone environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressStatusOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
@@ -544,7 +550,10 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		}
 		body := IngressStatusBody{
 			Enabled: st.Enabled, Paused: st.Paused, AccessLogs: st.AccessLogs, ObjectsKnown: st.ObjectsKnown,
-			Objects:      IngressStatusObjects{Network: st.Objects.Network, Service: st.Objects.Service, Secret: st.Objects.Secret},
+			Objects: IngressStatusObjects{
+				Network: st.Objects.Network, Service: st.Objects.Service, Secret: st.Objects.Secret,
+				Container: st.Objects.Container, Volume: st.Objects.Volume,
+			},
 			Nodes:        IngressStatusNodes{Expected: st.Nodes.Expected, Enrolled: st.Nodes.Enrolled, Ready: st.Nodes.Ready},
 			LastEnsure:   IngressStatusEnsure{At: rfc3339(st.LastEnsure.At), Class: st.LastEnsure.Class},
 			PendingWipes: st.PendingWipes, DisablingIncomplete: st.DisablingIncomplete, EnableFailed: st.EnableFailed, TokenDisabled: st.TokenDisabled,
@@ -560,11 +569,11 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		OperationID: "setIngressAccessLogs",
 		Method:      http.MethodPut,
 		Path:        "/api/env/{envId}/ingress/access-logs",
-		Summary:     "Switch the proxy access log of a swarm environment",
+		Summary:     "Switch the proxy access log of a swarm or standalone environment",
 		Description: "Stores whether the proxies write an access log; it is off by default. Switching it restarts each node's proxy in turn, as the proxy service is rolled with " +
-			"the setting changed. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). " +
-			"The answer says when it applies: rolling, or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. " +
-			"409 " + problemIngressStandalone + " on a standalone environment. Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).",
+			"the setting changed; on a standalone host the next pass recreates the proxy container. The log carries the client address and the request path of every request, but never a request or response header (so no cookie or authorization value). " +
+			"The answer says when it applies: rolling, recreate (a standalone host), or stored for when ingress is switched on or the environment is resumed. Asking for the value already stored changes nothing and is not audited. " +
+			"Audited as ingress.access_logs_changed. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressAccessLogsInput) (*IngressAccessLogsOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -588,7 +597,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Summary:     "Resume the ingress of an environment a restore paused",
 		Description: "After a restore from a backup, TierPlan only observes each environment's ingress and writes nothing to its swarm until an Admin resumes it here. " +
 			"Resuming clears the marker and the next pass writes the ingress objects again. Resuming an environment that is not paused answers 200 with resumed false and is not audited. " +
-			"409 " + problemIngressStandalone + " on a standalone environment. Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).",
+			"Audited as ingress.deploy_resumed. Needs ingress.manage on the environment (its Admin).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressResumeOutput, error) {
 		p := httpx.PrincipalFrom(ctx)

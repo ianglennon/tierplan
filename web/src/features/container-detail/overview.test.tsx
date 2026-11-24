@@ -25,6 +25,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     nodeId: "n1",
     node: "node-1",
     readOnly: false,
+    ingressOwned: false,
     id: "web-id",
     name: "web",
     image: "nginx:1.27",
@@ -348,8 +349,9 @@ describe("Overview: the other cards", () => {
               ipv4: "10.0.0.2",
               mac: "02:42:0a:00:00:02",
               aliases: ["web", "site"],
+              ingress: false,
             },
-            { networkId: "n2", name: "back", aliases: [] },
+            { networkId: "n2", name: "back", aliases: [], ingress: false },
           ],
         }),
       );
@@ -431,8 +433,14 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
   const withNetworks = () =>
     detail({
       networks: [
-        { networkId: "front-id", name: "front", ipv4: "10.0.0.2", aliases: ["web"] },
-        { networkId: "back-id", name: "back", aliases: [] },
+        {
+          networkId: "front-id",
+          name: "front",
+          ipv4: "10.0.0.2",
+          aliases: ["web"],
+          ingress: false,
+        },
+        { networkId: "back-id", name: "back", aliases: [], ingress: false },
       ],
     });
 
@@ -481,6 +489,62 @@ describe("Overview: connecting and disconnecting from the Networks card", () => 
     });
     expect(await screen.findByText("Disconnected web from front.")).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
+  it("disables the Disconnect row of TierPlan's ingress network with the reason, and leaves the others open", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    answer = () =>
+      Response.json(
+        detail({
+          networks: [
+            { networkId: "front-id", name: "front", aliases: ["web"], ingress: false },
+            {
+              networkId: "ing-id",
+              name: "tierplan-ingress",
+              aliases: ["shop-web-4f2a9c1d7b3e"],
+              ingress: true,
+            },
+          ],
+        }),
+      );
+    mount();
+    const networks = await screen.findByRole("region", { name: "Networks" });
+    await signedIn();
+    const ingressRow = within(networks).getByRole("button", {
+      name: "Disconnect web from tierplan-ingress",
+    });
+    expect(ingressRow.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      within(networks).getByText(
+        "TierPlan joined this container to the network for its ingress route. To leave it, remove the route and redeploy.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(ingressRow);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    const front = within(networks).getByRole("button", { name: "Disconnect web from front" });
+    expect(front.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("words an ingress_owned refusal of a disconnect as TierPlan ingress's, not as the proxy's", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    answer = () => Response.json(withNetworks());
+    disconnectAnswer = () =>
+      Response.json(
+        { type: "ingress_owned", title: "Conflict", status: 409, detail: "x" },
+        { status: 409, headers: { "Content-Type": "application/problem+json" } },
+      );
+    mount();
+    const row = await screen.findByRole("button", { name: "Disconnect web from front" });
+    await signedIn();
+    fireEvent.click(row);
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect container" }));
+    expect(
+      await within(dialog).findByText(
+        "This is managed by TierPlan ingress. Switch ingress off to remove it. Nothing was changed.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/ingress proxy for this host/)).toBeNull();
   });
 
   it("reads the container again after a disconnect so the card follows", async () => {

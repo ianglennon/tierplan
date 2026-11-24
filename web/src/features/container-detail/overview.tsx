@@ -266,7 +266,13 @@ function MountsCard({ envId, detail }: { envId: string; detail: ContainerDetail 
 function NetworksCard({ envId, detail }: { envId: string; detail: ContainerDetail }) {
   const t = useT();
   const missing = useMissing();
-  const connect = useNeeds("networks.connect", envId);
+  const needs = useNeeds("networks.connect", envId);
+  // The standalone ingress proxy's networks are the ensure loop's, not rewired by hand (D-09):
+  // Connect and Disconnect say why. Who may comes first.
+  const connect =
+    needs.allowed && detail.ingressOwned
+      ? { allowed: false, reason: t("containers.readOnlyIngress") }
+      : needs;
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState<DisconnectDialogTarget | null>(null);
   return (
@@ -300,35 +306,43 @@ function NetworksCard({ envId, detail }: { envId: string; detail: ContainerDetai
           {
             header: t("networks.disconnect.actions"),
             hideHeader: true,
-            cell: (n) => (
-              <NeedsTooltip reason={connect.reason}>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="max-md:h-11"
-                  aria-label={t("networks.disconnect.label", {
-                    container: detail.name,
-                    network: n.name,
-                  })}
-                  onClick={
-                    connect.allowed
-                      ? () =>
-                          setDisconnecting({
-                            networkId: n.networkId,
-                            networkName: n.name,
-                            containerId: detail.id,
-                            containerName: detail.name,
-                            nodeId: detail.nodeId,
-                            selfKind: detail.selfKind,
-                          })
-                      : undefined
-                  }
-                >
-                  {t("networks.disconnect.action")}
-                </Button>
-              </NeedsTooltip>
-            ),
+            cell: (n) => {
+              // TierPlan's ingress network is the ensure loop's, for any container on it (D-29): the row says so,
+              // and names the way out, which is the route (switch-off is refused while routes are live).
+              const gate =
+                connect.allowed && n.ingress
+                  ? { allowed: false, reason: t("ingress.owned.attachedReason") }
+                  : connect;
+              return (
+                <NeedsTooltip reason={gate.reason}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="max-md:h-11"
+                    aria-label={t("networks.disconnect.label", {
+                      container: detail.name,
+                      network: n.name,
+                    })}
+                    onClick={
+                      gate.allowed
+                        ? () =>
+                            setDisconnecting({
+                              networkId: n.networkId,
+                              networkName: n.name,
+                              containerId: detail.id,
+                              containerName: detail.name,
+                              nodeId: detail.nodeId,
+                              selfKind: detail.selfKind,
+                            })
+                        : undefined
+                    }
+                  >
+                    {t("networks.disconnect.action")}
+                  </Button>
+                </NeedsTooltip>
+              );
+            },
           },
         ]}
       />

@@ -5,6 +5,7 @@ package stackops
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -35,8 +36,13 @@ func (d Deps) PrepareRollbackStandaloneWith(ctx context.Context, st Stack, targe
 	refuse := func(stage string, err error) error {
 		return &PrepareError{Stage: stage, Err: err, Masker: stacks.NewMasker(target.Copy.Vars, target.Copy.Files)}
 	}
-	// ingress: unattached, the standalone attach is Phase 25
-	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: target.Copy, IngressPolicy: policy})
+	// The revision is loaded with the attachment the environment has now, as a swarm revision is (D-16, D-38): a routed
+	// service joins the host's ingress bridge when ingress is on. The deploy job reads the switch again under the lock.
+	attach, err := d.attachFor(ctx, st.EnvID, stacks.TargetStandalone)
+	if err != nil {
+		return RollbackPlan{}, refuse(PrepareIngress, fmt.Errorf("%s: %w", prepareIngressMessage, err))
+	}
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: target.Copy, IngressPolicy: policy, Ingress: attach})
 	if err != nil {
 		return RollbackPlan{}, refuse(PrepareLoad, err)
 	}
@@ -47,7 +53,7 @@ func (d Deps) PrepareRollbackStandaloneWith(ctx context.Context, st Stack, targe
 	if _, err := RestoredStandalonePins(loaded.Project, pins); err != nil {
 		return RollbackPlan{}, refuse(PreparePins, err)
 	}
-	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: convert.Plan{}, Pins: pins}, nil
+	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: convert.Plan{}, Pins: pins, Attach: attach}, nil
 }
 
 // RestoredStandalonePins are the images a standalone roll back sends: for each service of the project with an

@@ -40,8 +40,8 @@ func certFileNames(b ingressbundle.Bundle) []string {
 }
 
 // TestSkippedReasons is the tracer of the selection (D-09, D-12): four routes on four hostnames, one
-// per case. Only the claimed, certified, swarm-backed one is rendered; each other is returned with its
-// stable reason, in hostname order.
+// per case. The two claimed, certified ones (a swarm stack's and a standalone stack's, D-15) are
+// rendered; each other is returned with its stable reason, in hostname order.
 func TestSkippedReasons(t *testing.T) {
 	in := Input{
 		Snapshot: ingress.Snapshot{
@@ -69,14 +69,20 @@ func TestSkippedReasons(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 
-	if got := len(res.Bundle.Manifest.Routes); got != 1 || res.Bundle.Manifest.Routes[0].Hostname != "a.example.com" {
-		t.Errorf("manifest routes = %+v, want exactly the a.example.com route", res.Bundle.Manifest.Routes)
+	var rendered []string
+	for _, r := range res.Bundle.Manifest.Routes {
+		rendered = append(rendered, r.Hostname)
+	}
+	slices.Sort(rendered)
+	if !slices.Equal(rendered, []string{"a.example.com", "d.example.com"}) {
+		t.Errorf("manifest routes = %+v, want the a.example.com and d.example.com routes", res.Bundle.Manifest.Routes)
 	}
 	_, doc := dynamicOf(t, res.Bundle)
 	routers, ok := dig(t, doc, "http", "routers").(map[string]any)
-	if !ok || len(routers) != 1 {
-		t.Errorf("dynamic file has %d routers, want 1: %v", len(routers), routers)
+	if !ok || len(routers) != 2 {
+		t.Errorf("dynamic file has %d routers, want 2: %v", len(routers), routers)
 	}
+	// Both hosts carry the same fixture certificate, and the bundle stores certificate bytes once.
 	if got := len(certFileNames(res.Bundle)); got != 2 {
 		t.Errorf("bundle has %d certificate files, want one pair: %v", got, certFileNames(res.Bundle))
 	}
@@ -84,7 +90,6 @@ func TestSkippedReasons(t *testing.T) {
 	want := []Skipped{
 		{Hostname: "b.example.com", PathPrefix: "/", Stack: "shop", Service: "web", Reason: SkipNoCertificate},
 		{Hostname: "c.example.com", PathPrefix: "/", Stack: "shop", Service: "web", Reason: SkipCertificateNotReady},
-		{Hostname: "d.example.com", PathPrefix: "/", Stack: "legacy", Service: "app", Reason: SkipNoBackend},
 	}
 	if !slices.Equal(res.Skipped, want) {
 		t.Errorf("Skipped = %+v\nwant      %+v", res.Skipped, want)
@@ -179,10 +184,10 @@ func TestNoPartialHost(t *testing.T) {
 	})
 }
 
-// TestStandaloneAndSystemHaveNoBackend is D-12 and D-28: a route of a standalone stack waits for
-// Phase 25 and a route of a system-owned claim waits for Phase 28, both as no_backend (there is no
-// fourth reason), even with a ready certificate.
-func TestStandaloneAndSystemHaveNoBackend(t *testing.T) {
+// TestSystemHasNoBackend is D-28: a route of a system-owned claim waits for Phase 28, and a route
+// with no stack name cannot be addressed, both as no_backend (there is no fourth reason), even with a
+// ready certificate. A standalone stack's route is not among them (D-15): it is served.
+func TestSystemHasNoBackend(t *testing.T) {
 	system := swarmRoute("sys.example.com", "/", "", "ui", 8080)
 	system.OwnerKind = ingress.OwnerSystem
 	system.StackName = ""
@@ -195,17 +200,27 @@ func TestStandaloneAndSystemHaveNoBackend(t *testing.T) {
 	oddClaim := ingress.SnapshotClaim{
 		Claim: ingress.Claim{Hostname: "odd.example.com", OwnerKind: ingress.OwnerSystem}, StackName: "shop", Target: ingress.TargetSwarm,
 	}
+	// A stack route with no stack name, on either target, has no name to build a backend from.
+	nameless := standaloneRoute("nameless.example.com", "/", "", "app", 80)
+	namelessSwarm := swarmRoute("nameless-swarm.example.com", "/", "", "app", 80)
 
 	in := Input{
 		Snapshot: ingress.Snapshot{
 			Settings: ingress.Settings{Exists: true, Enabled: true, ConfigVersion: 1},
-			Claims:   []ingress.SnapshotClaim{standaloneClaim("old.example.com"), systemClaim, oddClaim},
-			Routes:   []ingress.SnapshotRoute{standaloneRoute("old.example.com", "/", "legacy", "app", 80), system, odd},
+			Claims: []ingress.SnapshotClaim{
+				standaloneClaim("old.example.com"), systemClaim, oddClaim,
+				standaloneClaim("nameless.example.com"), standaloneClaim("nameless-swarm.example.com"),
+			},
+			Routes: []ingress.SnapshotRoute{
+				standaloneRoute("old.example.com", "/", "legacy", "app", 80), system, odd, nameless, namelessSwarm,
+			},
 		},
 		Certs: []HostCert{
 			{Hostname: "old.example.com", ChainPEM: chainA, KeyPEM: keyA},
 			{Hostname: "sys.example.com", ChainPEM: chainA, KeyPEM: keyA},
 			{Hostname: "odd.example.com", ChainPEM: chainA, KeyPEM: keyA},
+			{Hostname: "nameless.example.com", ChainPEM: chainA, KeyPEM: keyA},
+			{Hostname: "nameless-swarm.example.com", ChainPEM: chainA, KeyPEM: keyA},
 		},
 	}
 	res, err := Render(in)
@@ -213,15 +228,19 @@ func TestStandaloneAndSystemHaveNoBackend(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 	want := []Skipped{
+		{Hostname: "nameless-swarm.example.com", PathPrefix: "/", Stack: "", Service: "app", Reason: SkipNoBackend},
+		{Hostname: "nameless.example.com", PathPrefix: "/", Stack: "", Service: "app", Reason: SkipNoBackend},
 		{Hostname: "odd.example.com", PathPrefix: "/", Stack: "shop", Service: "web", Reason: SkipNoBackend},
-		{Hostname: "old.example.com", PathPrefix: "/", Stack: "legacy", Service: "app", Reason: SkipNoBackend},
 		{Hostname: "sys.example.com", PathPrefix: "/", Stack: "", Service: "ui", Reason: SkipNoBackend},
 	}
 	if !slices.Equal(res.Skipped, want) {
 		t.Errorf("Skipped = %+v\nwant      %+v", res.Skipped, want)
 	}
-	if len(res.Bundle.Manifest.Routes) != 0 || len(certFileNames(res.Bundle)) != 0 {
-		t.Errorf("nothing should be rendered or written: routes %+v, files %v", res.Bundle.Manifest.Routes, certFileNames(res.Bundle))
+	if got := res.Bundle.Manifest.Routes; len(got) != 1 || got[0].Hostname != "old.example.com" {
+		t.Errorf("manifest routes = %+v, want only the standalone stack's old.example.com route", got)
+	}
+	if got := len(certFileNames(res.Bundle)); got != 2 {
+		t.Errorf("bundle has %d certificate files, want the one pair of old.example.com: %v", got, certFileNames(res.Bundle))
 	}
 }
 

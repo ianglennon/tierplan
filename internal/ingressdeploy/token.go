@@ -18,6 +18,15 @@ import (
 // ErrPaused means a restore paused the environment's ingress, so nothing is written to its swarm until an Admin resumes it.
 var ErrPaused = errors.New("ingressdeploy: ingress on this environment is paused")
 
+// ErrTokenNotEnrolled means a join token rotation on a standalone environment with ingress on was refused because the proxy
+// has not enrolled yet: rotating now would supersede, in the server, the token inside the proxy's container before the
+// proxy uses it, and nothing would put the new one there but a redeploy. Once the proxy has enrolled it authenticates with
+// its own key and not with the token, so a rotation then changes nothing on the host.
+var ErrTokenNotEnrolled = errors.New("ingressdeploy: the standalone proxy has not enrolled with the token it was given")
+
+// CodeTokenNotEnrolled is the problem code the API gives ErrTokenNotEnrolled.
+const CodeTokenNotEnrolled = "ingress_token_not_enrolled"
+
 // ErrNoManager means no manager node's agent is connected, so the swarm cannot be written to.
 var ErrNoManager = errors.New("ingressdeploy: no manager is connected")
 
@@ -34,7 +43,11 @@ func (e *TokenNotStoredError) Error() string {
 func (e *TokenNotStoredError) Unwrap() error { return e.Err }
 
 // IssueJoinToken is an Admin's make or rotate of the environment's ingress join token. Where nothing is deployed (ingress is
-// off, the environment is a standalone host or has no ingress state) it is ingresshub's IssueToken and nothing else.
+// off, or the environment has no ingress state) it is ingresshub's IssueToken and nothing else.
+//
+// A standalone host whose ingress is on keeps no swarm secret: its proxy was given the token when its container was made, and
+// once it has enrolled it authenticates with its key. So such a rotation is refused with ErrTokenNotEnrolled while no proxy node
+// has enrolled, and after that it only issues the next token: nothing is written to the host and no redeploy is woken (D-26).
 //
 // Where ingress is on, the proxies take the token from a swarm secret and the ensure loop keeps that secret in step with the
 // current token. The loop can only make a secret from a token's clear text, which exists nowhere but in IssueToken's answer, so
@@ -45,6 +58,13 @@ func (e *TokenNotStoredError) Unwrap() error { return e.Err }
 // lock is held (*LockedError), a restore paused the environment (ErrPaused) or no manager is connected (ErrNoManager). A swarm
 // that refuses the secret after the token was made is a *TokenNotStoredError, with no token returned.
 func (s *Service) IssueJoinToken(ctx context.Context, actor audit.Actor, owner, envID, ip, ua string) (ingresshub.Token, error) {
+	standalone, err := s.joinTokenStandalone(ctx, envID)
+	if err != nil {
+		return ingresshub.Token{}, err
+	}
+	if standalone {
+		return s.issueStandaloneJoinToken(ctx, actor, owner, envID, ip, ua)
+	}
 	deployed, err := s.joinTokenDeployed(ctx, envID)
 	if err != nil {
 		return ingresshub.Token{}, err
@@ -114,4 +134,59 @@ func (s *Service) joinTokenDeployed(ctx context.Context, envID string) (bool, er
 		return false, err
 	}
 	return state.Enabled, nil
+}
+
+// joinTokenStandalone is whether the environment is a standalone host whose ingress is on: the kind of environment whose
+// rotation is ruled by enrolment and not by a swarm secret. joinTokenDeployed keeps its meaning for a swarm only.
+func (s *Service) joinTokenStandalone(ctx context.Context, envID string) (bool, error) {
+	info, err := s.d.Envs.Info(ctx, envID)
+	switch {
+	case errors.Is(err, envs.ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	case info.Swarm:
+		return false, nil
+	}
+	state, err := s.d.Store.DeployState(ctx, envID)
+	if err != nil {
+		return false, err
+	}
+	return state.Enabled, nil
+}
+
+// issueStandaloneJoinToken is the rotation on a standalone host whose ingress is on. The operation lock is taken so a
+// redeploy, an enable or a switch-off is not under way, and everything is read again under it. A restore's pause refuses it
+// (ErrPaused), and so does a proxy that has not enrolled (ErrTokenNotEnrolled), with no token made. Otherwise the next token
+// is issued and nothing else happens: the host is not written to and no redeploy is asked for.
+func (s *Service) issueStandaloneJoinToken(ctx context.Context, actor audit.Actor, owner, envID, ip, ua string) (ingresshub.Token, error) {
+	release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
+		Kind: stackops.HolderKindIngress, By: owner, Workload: "ingress", Started: s.d.Clock.Now(),
+	})
+	if !ok {
+		return ingresshub.Token{}, &LockedError{Holder: held}
+	}
+	defer release()
+	standalone, err := s.joinTokenStandalone(ctx, envID)
+	if err != nil {
+		return ingresshub.Token{}, err
+	}
+	if !standalone {
+		return s.d.Tokens.IssueToken(ctx, actor, envID, ip, ua)
+	}
+	state, err := s.d.Store.DeployState(ctx, envID)
+	if err != nil {
+		return ingresshub.Token{}, err
+	}
+	if state.Paused {
+		return ingresshub.Token{}, ErrPaused
+	}
+	active, err := s.hasActiveNode(ctx, envID)
+	if err != nil {
+		return ingresshub.Token{}, err
+	}
+	if !active {
+		return ingresshub.Token{}, ErrTokenNotEnrolled
+	}
+	return s.d.Tokens.IssueToken(ctx, actor, envID, ip, ua)
 }

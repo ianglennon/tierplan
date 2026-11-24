@@ -52,10 +52,17 @@ func (e deployEngine) OnNode(_ context.Context, _, _ string, fn func(*dockerx.Cl
 	return fn(e.cli)
 }
 
-// deployEnvs says the environment is a swarm with a connected manager, or a standalone host.
+// deployEnvs says the environment is a swarm with a connected manager, or a standalone host whose one node is not connected.
 type deployEnvs struct{ standalone bool }
 
 func (d deployEnvs) Info(_ context.Context, envID string) (ingressdeploy.EnvInfo, error) {
+	if d.standalone {
+		// A standalone host has one node, and this one is not connected.
+		return ingressdeploy.EnvInfo{
+			ID: envID, Name: "prod", Swarm: false,
+			Nodes: []ingressdeploy.NodeInfo{{AgentID: "agent-sa", Name: "host-1", Connected: false}},
+		}, nil
+	}
 	return ingressdeploy.EnvInfo{
 		ID: envID, Name: "prod", Swarm: !d.standalone, ClusterID: "cluster-1", ManagerConnected: true,
 		Nodes: []ingressdeploy.NodeInfo{{SwarmNodeID: "node-1", AgentID: "agent-1", Name: "manager-1", Role: "manager", Connected: true}},
@@ -316,20 +323,35 @@ func TestIngressEnableNeedsManage(t *testing.T) {
 	}
 }
 
-// TestIngressEnableStandalone409: a standalone environment answers 409 ingress_standalone_unavailable on both routes (D-34).
-func TestIngressEnableStandalone409(t *testing.T) {
+// TestIngressEnableStandaloneAnswersThePreflight: a standalone environment whose host is not connected answers the
+// preflight on both routes: the preview 200 with the ingress_host_unreachable finding, the enable 409
+// ingress_preflight_refused listing it. Neither says ingress is unavailable, and nothing is written.
+func TestIngressEnableStandaloneAnswersThePreflight(t *testing.T) {
 	t.Parallel()
 	f := newDeployFix(t, true)
 	base := "/api/env/" + f.envA + "/ingress"
-	for _, path := range []string{base + "/enable/preview", base + "/enable"} {
-		rec := f.credCall(t, f.adminA, http.MethodPost, path, `{}`)
-		typ, detail := deployProblem(t, rec.Body.Bytes())
-		if rec.Code != http.StatusConflict || typ != "ingress_standalone_unavailable" || !strings.Contains(detail, "not yet available") {
-			t.Errorf("POST %s: %d type %q detail %q", path, rec.Code, typ, detail)
-		}
+
+	rec := f.credCall(t, f.adminA, http.MethodPost, base+"/enable/preview", `{}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), ingressdeploy.CodeHostUnreachable) || strings.Contains(rec.Body.String(), "ingress_standalone_unavailable") {
+		t.Errorf("preview body = %s, want the host-unreachable finding", rec.Body.String())
+	}
+
+	rec = f.credCall(t, f.adminA, http.MethodPost, base+"/enable", `{}`)
+	typ, detail := deployProblem(t, rec.Body.Bytes())
+	if rec.Code != http.StatusConflict || typ != "ingress_preflight_refused" || !strings.Contains(rec.Body.String(), ingressdeploy.CodeHostUnreachable) {
+		t.Errorf("enable: %d type %q detail %q body %s", rec.Code, typ, detail, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "ingress_standalone_unavailable") {
+		t.Error("the enable answered that ingress is unavailable on a standalone environment")
 	}
 	if n := len(f.fake.ServiceCreates()) + len(f.fake.SecretCreates()); n != 0 {
-		t.Errorf("a standalone refusal caused %d writes", n)
+		t.Errorf("a refused standalone enable caused %d writes", n)
+	}
+	if list := f.hub.List(func(jobs.Job) bool { return true }); len(list) != 0 {
+		t.Errorf("a refused standalone enable started %d jobs", len(list))
 	}
 }
 

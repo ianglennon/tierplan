@@ -253,3 +253,56 @@ func TestArchiveContainerIDReadsTheContainerOutOfThePath(t *testing.T) {
 		}
 	}
 }
+
+// ingressTokenFile is where the standalone proxy's join token lands inside its container: the path
+// of the compose secret the SDK writes (D-08).
+const ingressTokenFile = "/run/secrets/tierplan-ingress-token"
+
+// TestArchiveOfTheIngressTokenSecretIsForwarded pins the one request that places the standalone
+// proxy's join token on a host reached through an agent: the Compose SDK's createTar for a file secret
+// that names no UID, GID or mode, which is one regular file, mode 0444, owner 0:0, sent with no
+// copyUIDGID. The proxy runs as 1000:1000 and reads the file through the world-read bit (D-24).
+func TestArchiveOfTheIngressTokenSecretIsForwarded(t *testing.T) {
+	token := strings.Repeat("t", 43) // a base64url 32-byte token is 43 characters
+	raw := tarOf(t, tarEntry{hdr: tar.Header{Name: ingressTokenFile, Size: int64(len(token)), Mode: 0o444, Uid: 0, Gid: 0, ModTime: archiveModTime}, content: token})
+	const path = "/containers/" + "tierplan-ingress-proxy-1" + "/archive"
+	const query = "noOverwriteDirNonDir=true&path=%2F"
+
+	ok, reason, kind := Allowed("PUT", path, query, true, false, Policy{})
+	if !ok {
+		t.Fatalf("the route table refuses the token archive (%s): the proxy could not be deployed through an agent", reason)
+	}
+	if kind != BodyArchive {
+		t.Fatalf("the body kind is %d, want BodyArchive", kind)
+	}
+	out, err := validateBody(kind, bytes.NewReader(raw), bodyEnv{ctx: context.Background()})
+	if err != nil {
+		t.Fatalf("validateBody refuses the token archive: %v", err)
+	}
+	if !bytes.Equal(out, raw) {
+		t.Error("an archive is forwarded as received, and this one was changed")
+	}
+	if err := validateArchive(raw); err != nil {
+		t.Errorf("validateArchive refuses the token archive: %v", err)
+	}
+}
+
+// TestArchiveOfTheTokenWithCopyUIDGIDIsRefused is why the standalone token secret carries no UID or GID
+// (D-24): the SDK sets copyUIDGID=true as soon as a secret names either, and the agent's archive route
+// takes that key only as false. Widening the route would need an agent release and a version gate, so the
+// secret stays root-owned and world-readable instead.
+func TestArchiveOfTheTokenWithCopyUIDGIDIsRefused(t *testing.T) {
+	token := strings.Repeat("t", 43)
+	raw := tarOf(t, tarEntry{hdr: tar.Header{Name: ingressTokenFile, Size: int64(len(token)), Mode: 0o400, Uid: 1000, Gid: 1000, ModTime: archiveModTime}, content: token})
+	// The tar itself is a valid one: it is the query, not the archive check, that refuses the owner.
+	if err := validateArchive(raw); err != nil {
+		t.Fatalf("validateArchive refuses the owned tar: %v", err)
+	}
+	ok, reason, _ := Allowed("PUT", "/containers/tierplan-ingress-proxy-1/archive", "copyUIDGID=true&noOverwriteDirNonDir=true&path=%2F", true, false, Policy{})
+	if ok {
+		t.Fatal("the route table accepted copyUIDGID=true: the standalone secret may carry a UID again, and D-24 no longer holds")
+	}
+	if reason == "" {
+		t.Error("the refusal names no reason")
+	}
+}

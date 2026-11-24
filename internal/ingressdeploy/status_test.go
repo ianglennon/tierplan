@@ -5,7 +5,6 @@ package ingressdeploy_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -77,7 +76,7 @@ func TestStatusCounts(t *testing.T) {
 }
 
 // TestStatusWithoutManagerOrNodes: no manager connected means the objects are not known; no node lister and no current
-// bundle count nobody as ready; a standalone environment is refused.
+// bundle count nobody as ready; a standalone environment is read like a swarm, with one node expected.
 func TestStatusWithoutManagerOrNodes(t *testing.T) {
 	r := newRig(t, rigOptions{})
 	ctx := testsupport.Context(t)
@@ -91,8 +90,12 @@ func TestStatusWithoutManagerOrNodes(t *testing.T) {
 	}
 
 	sa := newRig(t, rigOptions{standalone: true})
-	if _, err := sa.svc.Status(ctx, sa.envID); !errors.Is(err, ingressdeploy.ErrStandaloneUnavailable) {
-		t.Errorf("standalone status error = %v, want ErrStandaloneUnavailable", err)
+	sst, err := sa.svc.Status(ctx, sa.envID)
+	if err != nil {
+		t.Fatalf("standalone status: %v", err)
+	}
+	if sst.Enabled || sst.Nodes != (ingressdeploy.StatusNodes{Expected: 1}) || sst.Objects.Service || sst.Objects.Secret {
+		t.Errorf("standalone status = %+v, want ingress off and one node expected", sst)
 	}
 }
 

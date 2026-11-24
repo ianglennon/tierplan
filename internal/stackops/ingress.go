@@ -16,7 +16,7 @@ import (
 // stack packages know nothing of how ingress is stored or switched: the api package adapts the ingress store to it.
 type Ingress interface {
 	// AttachFor says how the services of a stack that declare a route join the shared ingress network. It is non-nil
-	// only for a swarm target of an environment whose ingress is switched on (D-13, D-19); nil means nothing is
+	// for a swarm or a standalone target of an environment whose ingress is switched on (D-13, D-16, D-19); nil means nothing is
 	// attached, so a deploy with ingress off never names a network that does not exist. A read that fails is an
 	// error, never a nil answer: a start or a roll back must not silently drop a routed service off the network.
 	AttachFor(ctx context.Context, envID string, target stacks.Target) (*stacks.IngressAttach, error)

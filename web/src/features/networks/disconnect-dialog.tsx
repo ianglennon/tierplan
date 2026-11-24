@@ -72,6 +72,8 @@ export function DisconnectDialog({ envId, target, onClose }: DisconnectDialogPro
 
   function wording(err: NetworkRequestError): string {
     switch (err.type) {
+      case "ingress_owned":
+        return t("ingress.owned.refused");
       case "host_read_only":
         return t("networks.errors.hostReadOnly");
       case "node_unavailable":

@@ -21,8 +21,6 @@ import (
 // The codes of the preflight refusals this file owns. Every other check of the list adds its own beside
 // its function.
 const (
-	// CodeStandaloneUnavailable is the refusal of a standalone environment: ingress is for swarms (D-34).
-	CodeStandaloneUnavailable = "ingress_standalone_unavailable"
 	// CodeNoManager is the refusal of an environment no manager agent is connected to (D-07).
 	CodeNoManager = "ingress_no_manager"
 	// CodePortInUse is the refusal of an environment where something already publishes TCP port 80 or 443 (D-07, D-43).
@@ -68,9 +66,6 @@ const (
 	// SeverityWarning tells the person something and lets the operation go on.
 	SeverityWarning = "warning"
 )
-
-// ErrStandaloneUnavailable means ingress is not available on a standalone environment. Nothing was written.
-var ErrStandaloneUnavailable = errors.New("ingress is not yet available on a standalone environment")
 
 // Finding is one thing the preflight found: a refusal, or a warning.
 type Finding struct {
@@ -118,6 +113,8 @@ type checkInput struct {
 	cl *clusterView
 	// redeploy collects the stacks to redeploy, for the preview.
 	redeploy *[]StackRef
+	// host is read once and shared by the checks that look at a standalone host, nil for a swarm.
+	host *hostView
 }
 
 // clusterView is what one manager says of the swarm, read the first time a check asks for it.
@@ -151,6 +148,20 @@ func (v *clusterView) load(ctx context.Context, s *Service, envID string) error 
 		v.err = fmt.Errorf("read the swarm: %w", v.err)
 	}
 	return v.err
+}
+
+// hostView is what the standalone host's one engine says of itself, read the first time a check asks for it.
+type hostView struct {
+	read bool
+	err  error
+	// published are the containers, of every state, that bind host TCP 80 or 443.
+	published []dockerx.PublishedPort
+	// networks are every network of the host.
+	networks []dockerx.NetworkRow
+	// project are the containers of the proxy's compose project, of every state.
+	project []dockerx.ComposeContainer
+	// volume is the volume the proxy's cache would use, nil when the host has none by that name.
+	volume *dockerx.VolumeDetail
 }
 
 // check is one step of the preflight. It returns what it found, or an error when it could not look.
@@ -380,7 +391,7 @@ func checkAddressPool(ctx context.Context, s *Service, in checkInput) ([]Finding
 		}
 	}
 	if in.Req.Subnet != "" {
-		return checkTypedSubnet(ctx, s, in)
+		return checkTypedSubnet(ctx, s, in, in.cl.networks, "10.20.0.0/22", "a network on one of the nodes")
 	}
 	if s.d.AddressSpaces == nil {
 		return nil, nil
@@ -402,19 +413,20 @@ func checkAddressPool(ctx context.Context, s *Service, in checkInput) ([]Finding
 	return nil, nil
 }
 
-// checkTypedSubnet judges a subnet the person typed: it must be an IPv4 CIDR block and must not overlap a network of the
-// swarm, checked the way the stack editor checks an explicit subnet.
-func checkTypedSubnet(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
+// checkTypedSubnet judges a subnet the person typed: it must be an IPv4 CIDR block and must not overlap one of the
+// networks given, checked the way the stack editor checks an explicit subnet. example is the block the refusal writes as
+// an example of the form, and elsewhere names a block that is taken by a network the read does not list.
+func checkTypedSubnet(ctx context.Context, s *Service, in checkInput, networks []dockerx.NetworkRow, example, elsewhere string) ([]Finding, error) {
 	candidate, err := netip.ParsePrefix(in.Req.Subnet)
 	if err != nil || !candidate.Addr().Is4() {
 		return []Finding{{
 			Code:     CodeSubnetInvalid,
-			Message:  "The subnet must be an IPv4 block written like 10.20.0.0/22.",
+			Message:  "The subnet must be an IPv4 block written like " + example + ".",
 			Severity: SeverityError,
 		}}, nil
 	}
 	var same []netspace.MapItemNamed
-	for _, n := range in.cl.networks {
+	for _, n := range networks {
 		var ps []netip.Prefix
 		for _, raw := range n.Subnets {
 			if p, err := netip.ParsePrefix(raw); err == nil && p.Addr().Is4() {
@@ -435,7 +447,7 @@ func checkTypedSubnet(ctx context.Context, s *Service, in checkInput) ([]Finding
 		// A network of another node that the cluster read does not list has no name, but its block is taken.
 		if inputs, err := s.d.AddressSpaces.AllocationInputs(ctx, in.Info.ID, false); err == nil {
 			if sub, ok := netspace.FirstOverlap([]netip.Prefix{candidate.Masked()}, inputs.Occupied); ok {
-				items = append(items, fmt.Sprintf("a network on one of the nodes (%s)", sub))
+				items = append(items, fmt.Sprintf("%s (%s)", elsewhere, sub))
 			}
 		}
 	}

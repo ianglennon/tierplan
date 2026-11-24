@@ -9,7 +9,10 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
+	"strings"
 
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
 
@@ -155,4 +158,115 @@ func (c *Client) RunningContainers(ctx context.Context) ([]ContainerRow, error) 
 		return nil, fmt.Errorf("list running containers on %s: %w", c.t.Describe(), err)
 	}
 	return containerRows(cs.Items), nil
+}
+
+// ContainersOnNetwork names the containers, stopped ones too, that are attached to the network of that name, sorted. An
+// attached container is what keeps an engine from removing the network. It is read-only and works on any engine.
+func (c *Client) ContainersOnNetwork(ctx context.Context, network string) ([]string, error) {
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
+	}
+	names := []string{}
+	for _, row := range containerRows(cs.Items) {
+		if slices.ContainsFunc(row.Networks, func(n ContainerNet) bool { return n.Name == network }) {
+			names = append(names, row.Name)
+		}
+	}
+	return names, nil
+}
+
+// PublishedPort is one host TCP port a container binds, as ContainersPublishing reads it.
+type PublishedPort struct {
+	ID, Name, State string
+	Port            uint32
+	Labels          map[string]string
+}
+
+// ContainersPublishing lists every container, whatever its state, that binds one of the host TCP ports, one
+// row per container and port, sorted by name then port. A running container is read from the ports of the
+// list; every other one is inspected and its HostConfig.PortBindings read, because an engine lists a created
+// or exited container with no ports at all, and one with a restart policy takes its port back when the
+// engine starts (D-12, D-31). A container that cannot be inspected is an error, never a skipped row: a
+// preflight that missed a holder would say a port is free when it is not.
+//
+// Containers on the host network and processes outside Docker bind ports this read cannot see (Pitfall 11).
+// It is read-only.
+func (c *Client) ContainersPublishing(ctx context.Context, tcpPorts ...uint32) ([]PublishedPort, error) {
+	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
+	}
+	wanted := func(n uint32) bool { return slices.Contains(tcpPorts, n) }
+	var out []PublishedPort
+	for _, it := range cs.Items {
+		row := PublishedPort{ID: it.ID, Name: containerName(it.ID, it.Names), State: string(it.State), Labels: maps.Clone(it.Labels)}
+		seen := map[uint32]bool{}
+		add := func(n uint32) {
+			if wanted(n) && !seen[n] {
+				seen[n] = true
+				r := row
+				r.Port = n
+				out = append(out, r)
+			}
+		}
+		if it.State == "running" {
+			for _, p := range it.Ports {
+				if p.Type == "tcp" && p.PublicPort != 0 {
+					add(uint32(p.PublicPort))
+				}
+			}
+			continue
+		}
+		res, err := c.cur().ContainerInspect(ctx, it.ID, client.ContainerInspectOptions{})
+		if IsNotFound(err) {
+			continue // removed since the list (a --rm container that just exited): it holds no port
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect container %s on %s: %w", row.Name, c.t.Describe(), err)
+		}
+		if res.Container.HostConfig == nil {
+			continue
+		}
+		for port, binds := range res.Container.HostConfig.PortBindings {
+			if port.Proto() != network.TCP {
+				continue
+			}
+			for _, b := range binds {
+				// An empty host port is a binding the engine picks a port for, not a host port held; "8000-8010"
+				// is a range, and holds every port in it.
+				lo, hi, ok := hostPortRange(b.HostPort)
+				if !ok {
+					continue
+				}
+				for _, want := range tcpPorts {
+					if want >= lo && want <= hi {
+						add(want)
+					}
+				}
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b PublishedPort) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Port, b.Port), cmp.Compare(a.ID, b.ID))
+	})
+	return out, nil
+}
+
+// hostPortRange reads a binding's HostPort, a number or a range "lo-hi"; ok is false for an empty or unreadable
+// one.
+func hostPortRange(s string) (lo, hi uint32, ok bool) {
+	a, b, isRange := strings.Cut(s, "-")
+	l, err := strconv.ParseUint(a, 10, 16)
+	if err != nil || l == 0 {
+		return 0, 0, false
+	}
+	if !isRange {
+		return uint32(l), uint32(l), true
+	}
+	h, err := strconv.ParseUint(b, 10, 16)
+	if err != nil || h < l {
+		return 0, 0, false
+	}
+	return uint32(l), uint32(h), true
 }

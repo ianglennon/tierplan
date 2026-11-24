@@ -21,8 +21,7 @@
           "added": "Added",
           "kept": "Kept",
           "released": "Released"
-        },
-        "noBackend": "Not served on this host yet."
+        }
       },
       "certificates": {
         "heading": "Certificates",
@@ -50,6 +49,7 @@
         "joins": "Joins {{network}}",
         "leaves": "Leaves {{network}}",
         "replaces": "Replaces its tasks",
+        "recreates": "Recreates its container",
         "noRestart": "No restart",
         "footnote": "TierPlan attaches routed services to the ingress network itself. It never appears in your compose file."
       }
@@ -68,7 +68,8 @@
         },
         "pending": {
           "label": "Rolling out",
-          "detail": "Not every node has it yet."
+          "detail": "Not every node has it yet.",
+          "detailStandalone": "The proxy has not applied it yet."
         },
         "waiting_certificate": {
           "label": "Waiting for certificate"
@@ -76,7 +77,8 @@
         "backend_not_running": {
           "label": "Backend not running",
           "stopped": "The stack is stopped.",
-          "noTask": "{{service}} has no running task."
+          "noTask": "{{service}} has no running task.",
+          "noContainer": "{{service}} has no running container."
         },
         "not_attached": {
           "label": "Not attached",
@@ -85,10 +87,6 @@
         "ingress_off": {
           "label": "Ingress is off",
           "detail": "It serves once ingress is switched on and the stack is redeployed."
-        },
-        "not_served_yet": {
-          "label": "Not served yet",
-          "detail": "Not served on this host yet. The stack keeps its hostnames."
         }
       },
       "stopped": "This stack is stopped. Its hostnames stay reserved for it.",
@@ -107,6 +105,7 @@
   "ingress": {
     "owned": {
       "reason": "Managed by TierPlan. Switch ingress off to remove it.",
+      "attachedReason": "TierPlan joined this container to the network for its ingress route. To leave it, remove the route and redeploy.",
       "refused": "This is managed by TierPlan ingress. Switch ingress off to remove it. Nothing was changed.",
       "alertTitle": "Managed by TierPlan ingress",
       "serviceBody": "TierPlan creates and updates this itself. To remove it, switch ingress off. You can still read its logs and inspect it.",

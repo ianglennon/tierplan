@@ -79,3 +79,37 @@ func TestOwnershipNeedsLabelAndName(t *testing.T) {
 		t.Error("HasComponentLabel reads the label alone")
 	}
 }
+
+// TestOwnsProxyContainer pins D-06 and D-10: the standalone proxy is the container with the component
+// label, the reserved compose project and the proxy's compose service, all three.
+func TestOwnsProxyContainer(t *testing.T) {
+	compose := func(project, service string) map[string]string {
+		return map[string]string{"com.docker.compose.project": project, "com.docker.compose.service": service}
+	}
+	with := func(m map[string]string) map[string]string {
+		m[LabelComponent] = ComponentIngress
+		return m
+	}
+	cases := []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{"label, project and service", with(compose(ProjectName, ProxyComposeService)), true},
+		{"the component label alone", ObjectLabels(), false},
+		{"project and service without the label", compose(ProjectName, ProxyComposeService), false},
+		{"another service of the project", with(compose(ProjectName, "other")), false},
+		{"another project's proxy service", with(compose("shop", ProxyComposeService)), false},
+		{"no labels", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := OwnsProxyContainer(c.labels); got != c.want {
+				t.Errorf("OwnsProxyContainer(%v) = %v, want %v", c.labels, got, c.want)
+			}
+		})
+	}
+	if ProjectName != "tierplan-ingress" || ProxyComposeService != "proxy" {
+		t.Errorf("reserved names changed: %q, %q", ProjectName, ProxyComposeService)
+	}
+}

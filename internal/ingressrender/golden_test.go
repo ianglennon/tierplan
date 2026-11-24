@@ -87,8 +87,8 @@ func goldenScenarios() map[string]Input {
 			Certs:        []HostCert{{Hostname: "staging.example.com", Reason: SkipCertificateNotReady}},
 			CertsVersion: 4,
 		},
-		// A standalone host has a ready certificate and still renders nothing until Phase 25 (D-12).
-		"standalone-skipped": {
+		// A standalone host's route is served through its alias (Phase 25, D-15).
+		"standalone-served": {
 			Snapshot: ingress.Snapshot{
 				Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 8},
 				Claims:   []ingress.SnapshotClaim{standaloneClaim("old.example.com")},

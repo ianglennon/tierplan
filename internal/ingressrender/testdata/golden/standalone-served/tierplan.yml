@@ -1,0 +1,22 @@
+tls:
+  options:
+    default:
+      sniStrict: true
+      minVersion: VersionTLS12
+  certificates:
+    - certFile: /var/lib/tierplan-ingress/certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt
+      keyFile: /var/lib/tierplan-ingress/certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key
+http:
+  routers:
+    r-e340fc02a46e:
+      rule: Host(`old.example.com`)
+      entryPoints:
+        - websecure
+      service: s-5dc8b1e750d6
+      priority: 1
+      tls: {}
+  services:
+    s-5dc8b1e750d6:
+      loadBalancer:
+        servers:
+          - url: http://legacy-app-612d4e0aaa88cc24:80

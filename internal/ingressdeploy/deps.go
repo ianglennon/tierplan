@@ -46,8 +46,14 @@ type NodeInfo struct {
 // EnvInfo is what the deployer needs to know of an environment before it touches it.
 type EnvInfo struct {
 	ID, Name string
-	// Swarm is true for a swarm environment; ingress is not available on any other (D-34).
+	// Swarm is true for a swarm environment; ingress is available on any other only as a standalone host (Phase 25).
+	// A standalone environment has exactly one node: its AgentID is the ID writes are routed by (the environment's own ID
+	// for the local socket, the agent's ID otherwise) and its Connected says whether the host can be reached.
 	Swarm bool
+	// Local is true for TierPlan's own local-socket environment, so the host is TierPlan's own (D-04).
+	Local bool
+	// EngineID is the standalone host's engine ID, "" when it is not known.
+	EngineID string
 	// ClusterID is the swarm cluster the environment's agents report, "" when none has.
 	ClusterID string
 	// ManagerConnected is true when a manager node's agent is connected, so the cluster can be written to.
@@ -85,6 +91,14 @@ type Tokens interface {
 }
 
 var _ Tokens = (*ingresshub.Service)(nil)
+
+// SystemDeployer deploys and removes the standalone host's proxy project: stackops.Deps has these methods.
+type SystemDeployer interface {
+	DeploySystem(ctx context.Context, in stackops.SystemDeployInput, r *jobs.Reporter) stackops.DeployResult
+	DownSystem(ctx context.Context, envID, nodeID string) error
+}
+
+var _ SystemDeployer = stackops.Deps{}
 
 // Kicker closes the live ingress sessions of an environment: *ingresshub.Hub has this method. Disable calls it once ingress
 // is switched off and before the proxy service is removed, so no proxy is still being served.
@@ -152,6 +166,9 @@ type Deps struct {
 	// Notifier is the ingress store's notifier: the ensure loop takes a pass whenever it reports a change. Nil
 	// leaves the loop to its tick and to Wake.
 	Notifier *ingress.Notifier
+	// System deploys and removes the standalone proxy's compose project. It is required on a standalone environment; the
+	// server gives it a stackops.Deps with the aggregator, the address spaces and the registry resolver.
+	System SystemDeployer
 	// Resolver chooses the registry credential of the proxy image; nil sends none. Give it only a non-nil
 	// *registry.Resolver, since a nil one inside the interface is not nil.
 	Resolver Registry
@@ -188,6 +205,11 @@ type Service struct {
 	// every pass (WR-07); heldMu guards it.
 	heldMu  sync.Mutex
 	written map[string]updateMemo
+	// outstanding is, by environment, the join token the ensure loop made for a standalone redeploy that has not
+	// succeeded yet, so the next pass gives it again rather than superseding it for as long as the fault stands (WR-A2).
+	// It holds a clear text, in memory only; outstandingMu guards it.
+	outstandingMu sync.Mutex
+	outstanding   map[string]StandaloneToken
 }
 
 // New builds the deployer.

@@ -230,7 +230,7 @@ func TestEnrolUnknownEnvironmentTypeIsRetryable(t *testing.T) {
 	f.requireNothingWritten(t, envID)
 }
 
-func TestEnrolLocalEnvironmentIsNotRetryable(t *testing.T) {
+func TestEnrolLocalEnvironmentWithSwarmNodeIDIsRefused(t *testing.T) {
 	f := newFixture(t)
 	envID := f.insertEnvKind(t, "local", "")
 	tok := f.issue(t, envID)
@@ -246,10 +246,40 @@ func TestEnrolLocalEnvironmentIsNotRetryable(t *testing.T) {
 	if re.RetryAfter != 0 {
 		t.Errorf("RetryAfter = %v, want none: no wait makes it succeed", re.RetryAfter)
 	}
-	if !strings.Contains(re.Detail, "local-socket environment") {
-		t.Errorf("detail = %q, want it to name the local-socket environment", re.Detail)
+	if !strings.Contains(re.Detail, "enrols without a swarm node ID") {
+		t.Errorf("detail = %q, want it to say the proxy enrols without a swarm node ID", re.Detail)
 	}
 	f.requireNothingWritten(t, envID)
+}
+
+func TestEnrolLocalEnvironmentStandaloneSlot(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	envID := f.insertEnvKind(t, "local", "")
+	tok := f.issue(t, envID)
+
+	first, err := f.enrolOnce(t, tok.Token, "edge-a", "")
+	if err != nil {
+		t.Fatalf("a local-socket proxy without a swarm node ID: %v", err)
+	}
+	row, err := sqlc.New(f.st.Read).GetIngressNode(ctx, first.NodeID)
+	if err != nil {
+		t.Fatalf("GetIngressNode: %v", err)
+	}
+	if row.SwarmNodeID.Valid || row.Status != "active" {
+		t.Errorf("row = %+v, want an active row with a NULL swarm_node_id", row)
+	}
+
+	_, err = f.enrolOnce(t, tok.Token, "edge-b", "")
+	if err == nil {
+		t.Fatal("a second key took the local environment's one slot")
+	}
+	if re := refusal(t, err); re.Code != ingresswire.RefuseNodeAlreadyEnrolled || re.AuditReason != "node_already_enrolled" {
+		t.Errorf("refusal = code %q, audit %q", re.Code, re.AuditReason)
+	}
+	if n := f.activeNodes(t, envID); n != 1 {
+		t.Errorf("%d active rows, want 1", n)
+	}
 }
 
 func TestEnrolBlockedNodeIsRefusedNodeRevoked(t *testing.T) {
