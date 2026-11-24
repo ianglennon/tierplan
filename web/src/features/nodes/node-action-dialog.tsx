@@ -14,6 +14,7 @@ import {
   nodeImpactQuery,
   useSetNodeAvailability,
   useSetNodeRole,
+  type VIPHandoff,
 } from "@/api/nodes";
 import { matchesName, TypeToConfirm } from "@/components/type-to-confirm";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -30,7 +31,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { TargetList, type TargetRow } from "@/features/resources/target-list";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { useT } from "@/i18n/use-t";
-import { toastSuccess } from "@/lib/toast";
+import { toastInfo, toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
@@ -132,8 +133,9 @@ export function NodeActionDialog({ envId, node, mode, onClose, onDone }: NodeAct
     setError(null);
     const confirm = named ? typed.trim() : undefined;
     try {
+      let handoff: VIPHandoff | undefined;
       if (mode === "drain" || mode === "pause") {
-        await availability.mutateAsync({
+        handoff = await availability.mutateAsync({
           nodeId: node.id,
           availability: mode,
           version: impact.version,
@@ -147,7 +149,13 @@ export function NodeActionDialog({ envId, node, mode, onClose, onDone }: NodeAct
           confirm,
         });
       }
-      toastSuccess(t(`nodes.action.${mode}.done`, { name }));
+      // A drain that could not move the virtual IP first still succeeded: one calm toast says so,
+      // carrying the done sentence, and it is never an error (D-25).
+      if (mode === "drain" && handoff && handoff.outcome !== "moved") {
+        toastInfo(t(`nodes.action.drain.vipHandoff.${handoff.outcome}`, { name }));
+      } else {
+        toastSuccess(t(`nodes.action.${mode}.done`, { name }));
+      }
       onClose();
       onDone?.({ nodeId: node.id, action: mode });
     } catch (e) {

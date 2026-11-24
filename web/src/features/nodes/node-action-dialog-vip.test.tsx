@@ -184,3 +184,94 @@ describe("NodeActionDialog virtual IP warnings", () => {
     expect(text.className).not.toContain("line-clamp");
   });
 });
+
+describe("NodeActionDialog drain result", () => {
+  async function drain(name = "wkr-1", mode: NodeImpactAction = "drain") {
+    const { onClose, onDone } = mount(mode, { id: "n3", hostname: name });
+    const dialog = await dialogOf(mode === "drain" ? `Drain ${name}?` : `Pause ${name}?`);
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: mode === "drain" ? "Drain node" : "Pause node" }),
+    );
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    return { onClose, onDone };
+  }
+
+  const handoff = (outcome: string, holder?: string) => () =>
+    Response.json({ vipHandoff: { outcome, ...(holder ? { holder } : {}) } });
+
+  it("shows the success toast for a 204", async () => {
+    const { onDone } = await drain();
+    expect(toasts.toastSuccess).toHaveBeenCalledExactlyOnceWith("Drained wkr-1.");
+    expect(toasts.toastInfo).not.toHaveBeenCalled();
+    expect(toasts.toastError).not.toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledWith({ nodeId: "n3", action: "drain" });
+  });
+
+  it("shows the same success toast when the handoff moved the address", async () => {
+    answerPost = handoff("moved", "wkr-2");
+    await drain();
+    expect(toasts.toastSuccess).toHaveBeenCalledExactlyOnceWith("Drained wkr-1.");
+    expect(toasts.toastInfo).not.toHaveBeenCalled();
+    expect(toasts.toastError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "no_candidate",
+      "Drained wkr-1. No other node was ready to take the virtual IP, so it may go unanswered until one is.",
+    ],
+    [
+      "agent_unreachable",
+      "Drained wkr-1. TierPlan couldn't reach its agent to move the virtual IP first, so the address may drop for a few seconds.",
+    ],
+    [
+      "timeout",
+      "Drained wkr-1. The virtual IP hadn't moved after 10 seconds, so the address may drop for a few seconds.",
+    ],
+  ])("shows one info toast for %s, never an error", async (outcome, text) => {
+    answerPost = handoff(outcome);
+    const { onClose, onDone } = await drain();
+    expect(toasts.toastInfo).toHaveBeenCalledExactlyOnceWith(text);
+    expect(toasts.toastSuccess).not.toHaveBeenCalled();
+    expect(toasts.toastError).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+    expect(onDone).toHaveBeenCalledWith({ nodeId: "n3", action: "drain" });
+  });
+
+  it("carries a 64-character node name whole into the toast, with its point in the first two lines", async () => {
+    const long = "w".repeat(64);
+    answerImpact = () => Response.json(impact({ hostname: long }));
+    answerPost = handoff("timeout");
+    await drain(long);
+    const [text] = toasts.toastInfo.mock.calls[0] as [string];
+    expect(text).toContain(long);
+    expect(text).not.toContain("…");
+    // The name wraps with break-words; the sentence that matters follows it at once.
+    expect(text.startsWith(`Drained ${long}. The virtual IP hadn't moved after 10 seconds`)).toBe(
+      true,
+    );
+  });
+
+  it("does not read a handoff for a pause", async () => {
+    answerImpact = () => Response.json(impact({ action: "pause" }));
+    await drain("wkr-1", "pause");
+    expect(toasts.toastSuccess).toHaveBeenCalledExactlyOnceWith("Paused wkr-1.");
+    expect(toasts.toastInfo).not.toHaveBeenCalled();
+  });
+
+  it("keeps the in-dialog alert and no toast when the drain is refused", async () => {
+    answerPost = () =>
+      Response.json({ status: 409, type: "node_changed", title: "x" }, { status: 409 });
+    const { onClose } = mount("drain");
+    const dialog = await dialogOf("Drain wkr-1?");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Drain node" }));
+    expect(
+      await within(dialog).findByText(
+        "That changed while you were looking at it. Reload the page and try again.",
+      ),
+    ).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(toasts.toastSuccess).not.toHaveBeenCalled();
+    expect(toasts.toastInfo).not.toHaveBeenCalled();
+  });
+});

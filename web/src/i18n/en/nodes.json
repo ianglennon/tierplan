@@ -270,7 +270,12 @@
         "confirm": "Drain node",
         "confirmNamed": "Drain {{name}}",
         "pending": "Draining…",
-        "done": "Drained {{name}}."
+        "done": "Drained {{name}}.",
+        "vipHandoff": {
+          "no_candidate": "Drained {{name}}. No other node was ready to take the virtual IP, so it may go unanswered until one is.",
+          "agent_unreachable": "Drained {{name}}. TierPlan couldn't reach its agent to move the virtual IP first, so the address may drop for a few seconds.",
+          "timeout": "Drained {{name}}. The virtual IP hadn't moved after 10 seconds, so the address may drop for a few seconds."
+        }
       },
       "pause": {
         "title": "Pause {{name}}?",
