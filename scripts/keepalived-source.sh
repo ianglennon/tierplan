@@ -47,6 +47,7 @@ if [ -z "$have" ]; then
     echo "keepalived-source: the download has sha256 $got, want $SHA256" >&2
     exit 1
   fi
+  chmod 0644 "$tmp"
   mv "$tmp" "$FILE"
   trap - EXIT
 fi
