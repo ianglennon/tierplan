@@ -16,8 +16,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -55,6 +57,8 @@ type deps struct {
 	serve func(ctx context.Context, cfg config.Config, log *slog.Logger) error
 	// vipRun runs the keepalived image's entrypoint until ctx ends and returns its exit status (D-15).
 	vipRun func(ctx context.Context, d vip.RunDeps) int
+	// vipFlag is the address-in-use flag probe looks for. Empty means vip.AddressInUseFlag.
+	vipFlag string
 }
 
 func run(d deps) int {
@@ -127,7 +131,24 @@ func healthcheck(d deps) int {
 // anything else, 2 when the port is missing or not a port. It asks only the node's own loopback, prints
 // nothing when ready and never the endpoint's body. It does not touch the node: no no-new-privileges, no
 // configuration load.
+//
+// It first looks for the flag the helper writes while another machine answers for the virtual address (D-11,
+// A-05): while it exists the check fails whatever the proxy says, so keepalived keeps the node in FAULT and the
+// node never claims an address another machine holds. A flag that cannot be looked up holds the node too, for
+// the same reason.
 func probe(d deps) int {
+	flag := d.vipFlag
+	if flag == "" {
+		flag = vip.AddressInUseFlag
+	}
+	switch _, err := os.Stat(flag); {
+	case err == nil:
+		_, _ = fmt.Fprintln(d.stderr, "tierplan-ingress: probe: address in use on the network")
+		return 1
+	case !errors.Is(err, fs.ErrNotExist):
+		_, _ = fmt.Fprintln(d.stderr, "tierplan-ingress: probe: address check unreadable")
+		return 1
+	}
 	port, err := strconv.Atoi(d.getenv(ingressbundle.EnvVIPProbePort))
 	if err != nil || port < 1 || port > 65535 {
 		_, _ = fmt.Fprintln(d.stderr, "tierplan-ingress: probe:", ingressbundle.EnvVIPProbePort, "must be a port from 1 to 65535")

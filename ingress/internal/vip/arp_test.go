@@ -429,3 +429,115 @@ func TestVRRPAdvertRouter(t *testing.T) {
 		}
 	}
 }
+
+// TestVIPEntrypointChecksAddressFirst is A-05: Run asks the prober before it starts keepalived, and starts
+// keepalived whatever the answer, because the flag and not a missing keepalived is what keeps the node out.
+func TestVIPEntrypointChecksAddressFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		a        answer
+		wantFlag bool
+	}{
+		{"the segment is quiet", answer{}, false},
+		{"another machine holds the address", answer{arp: true}, true},
+		{"a peer holds the address", answer{arp: true, adverts: []int{77}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t, "lines")
+			p := &fakeProber{script: []answer{tc.a}}
+			var startedAtCheck = -1
+			p.onARP = func() { startedAtCheck = len(r.proc) }
+			r.deps.Prober = p
+			flag := r.deps.FlagPath
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := r.run(ctx)
+
+			// start, the fault when there is one, then the three states of the fake keepalived.
+			want := 4
+			if tc.wantFlag {
+				want = 5
+			}
+			events := parseAll(t, r.out.waitLines(t, want))
+			if startedAtCheck != 0 {
+				t.Fatalf("keepalived had been started (%d) when the prober was asked, want the check first", startedAtCheck)
+			}
+			select {
+			case <-r.proc:
+			case <-time.After(20 * time.Second): // wall-clock: failure bound
+				t.Fatal("keepalived was not started")
+			}
+			if p.calls != 1 {
+				t.Fatalf("the prober was asked %d times at the start, want 1", p.calls)
+			}
+			if r.hasFile(flag) != tc.wantFlag {
+				t.Fatalf("flag exists %v, want %v", r.hasFile(flag), tc.wantFlag)
+			}
+			// The fault follows the start line and precedes everything keepalived reports.
+			if events[0].Event != ingressbundle.VIPEventStart {
+				t.Fatalf("first line = %+v, want the start", events[0])
+			}
+			if tc.wantFlag {
+				if ev := events[1]; ev.Event != ingressbundle.VIPEventFault || ev.Reason != ingressbundle.VIPReasonAddressInUse || !ev.Active {
+					t.Fatalf("second line = %+v, want the address_in_use fault", ev)
+				}
+			}
+			cancel()
+			if code := waitCode(t, done); code != 0 {
+				t.Fatalf("Run = %d, want 0 (stderr %q)", code, r.errw.String())
+			}
+		})
+	}
+
+	t.Run("a stop during the check ends Run without starting keepalived", func(t *testing.T) {
+		r := newRig(t, "lines")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		p := &fakeProber{script: []answer{{}}}
+		p.onARP = cancel
+		r.deps.Prober = p
+		if code := waitCode(t, r.run(ctx)); code != 0 {
+			t.Fatalf("Run = %d, want 0", code)
+		}
+		if len(r.proc) != 0 {
+			t.Fatal("keepalived was started after a stop that came during the check")
+		}
+		evs := parseAll(t, r.out.lines())
+		if last := evs[len(evs)-1]; last.State != ingressbundle.VIPStateStop {
+			t.Fatalf("last line = %+v, want STOP", last)
+		}
+	})
+
+	t.Run("while the address is in use the helper looks again and clears the fault", func(t *testing.T) {
+		r := newRig(t, "lines")
+		p := &fakeProber{script: []answer{{arp: true}, {}}}
+		r.deps.Prober = p
+		flag := r.deps.FlagPath
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := r.run(ctx)
+		r.out.waitLines(t, 5)
+		if !r.hasFile(flag) {
+			t.Fatal("no flag while the address is in use")
+		}
+		r.clock.waitTimer(t, AddressRecheck)
+		r.clock.Advance(AddressRecheck)
+		lines := parseAll(t, r.out.waitLines(t, 6))
+		cancel()
+		if code := waitCode(t, done); code != 0 {
+			t.Fatalf("Run = %d, want 0 (stderr %q)", code, r.errw.String())
+		}
+		var cleared bool
+		for _, ev := range lines {
+			if ev.Event == ingressbundle.VIPEventFault && ev.Reason == ingressbundle.VIPReasonAddressInUse && !ev.Active {
+				cleared = true
+			}
+		}
+		if !cleared {
+			t.Fatalf("no cleared fault in %+v", lines)
+		}
+		if r.hasFile(flag) {
+			t.Fatal("the flag is still there after the address was free")
+		}
+	})
+}

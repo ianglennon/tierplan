@@ -187,9 +187,11 @@ type rig struct {
 	clock *fakeClock
 	deps  RunDeps
 	conf  map[string][]byte
-	proc  chan Process // the started child, once Start was called
-	fifo  string
-	mark  string
+	// confMu guards conf: the statistics poll and the address check run beside Run's own writes.
+	confMu sync.Mutex
+	proc   chan Process // the started child, once Start was called
+	fifo   string
+	mark   string
 }
 
 // newRig makes the FIFO keepalived would make and a RunDeps that starts the fake child in mode.
@@ -218,7 +220,19 @@ func newRig(t *testing.T, mode string) *rig {
 			if perm != 0o600 {
 				t.Errorf("configuration written with mode %o, want 600", perm)
 			}
+			r.confMu.Lock()
+			defer r.confMu.Unlock()
 			r.conf[path] = data
+			return nil
+		},
+		// The files the helper writes are held in conf, so a test sees the flag without a real file system.
+		RemoveFile: func(path string) error {
+			r.confMu.Lock()
+			defer r.confMu.Unlock()
+			if _, ok := r.conf[path]; !ok {
+				return os.ErrNotExist
+			}
+			delete(r.conf, path)
 			return nil
 		},
 		OpenFIFO: func(string) (io.ReadCloser, error) { return openFIFO(fifo) },
@@ -231,6 +245,14 @@ func newRig(t *testing.T, mode string) *rig {
 		},
 	}
 	return r
+}
+
+// hasFile reports whether the helper has written path and not removed it.
+func (r *rig) hasFile(path string) bool {
+	r.confMu.Lock()
+	defer r.confMu.Unlock()
+	_, ok := r.conf[path]
+	return ok
 }
 
 // run starts Run in a goroutine and returns the channel its exit status arrives on.

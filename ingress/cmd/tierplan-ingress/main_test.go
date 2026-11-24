@@ -11,7 +11,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -44,10 +47,12 @@ type harness struct {
 
 func (h *harness) deps(args ...string) deps {
 	return deps{
-		args:   args,
-		getenv: testEnv,
-		stdout: &h.stdout,
-		stderr: &h.stderr,
+		// A path that never exists, so no test reads the real address-in-use flag of the machine it runs on.
+		vipFlag: "/nonexistent-tierplan-test/address-in-use",
+		args:    args,
+		getenv:  testEnv,
+		stdout:  &h.stdout,
+		stderr:  &h.stderr,
 		nnp: func() error {
 			h.nnpCalls++
 			h.order = append(h.order, "nnp")
@@ -62,6 +67,81 @@ func (h *harness) deps(args ...string) deps {
 			}
 			return h.serveErr
 		},
+	}
+}
+
+// TestProbeHoldsWhileAddressInUse is D-11: while the helper's flag file exists the probe fails whatever the
+// proxy says, so keepalived keeps the node in FAULT and it never claims an address another machine holds.
+func TestProbeHoldsWhileAddressInUse(t *testing.T) {
+	dir := t.TempDir()
+	flag := filepath.Join(dir, "address-in-use")
+	var hits atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	probeWith := func(flagPath string) (int, *harness) {
+		var h harness
+		d := h.deps("probe")
+		d.readyURL = ts.URL + "/readyz"
+		d.vipFlag = flagPath
+		d.getenv = func(k string) string {
+			if k == ingressbundle.EnvVIPProbePort {
+				return "7483"
+			}
+			return testEnv(k)
+		}
+		return run(d), &h
+	}
+
+	// No flag: the proxy answers 200 and the probe passes, silently, as before.
+	if got, h := probeWith(flag); got != 0 || h.stdout.Len() != 0 || h.stderr.Len() != 0 {
+		t.Fatalf("without the flag: run = %d, stdout %q stderr %q, want 0 and silence", got, h.stdout.String(), h.stderr.String())
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("the proxy was asked %d times without the flag, want 1", hits.Load())
+	}
+
+	// The flag: exit 1 and one short line, and the proxy is not even asked.
+	if err := os.WriteFile(flag, []byte("address in use\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, h := probeWith(flag)
+	if got != 1 {
+		t.Fatalf("with the flag: run = %d, want 1 (stderr %q)", got, h.stderr.String())
+	}
+	if lines := strings.Split(strings.TrimSuffix(h.stderr.String(), "\n"), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "address in use") {
+		t.Fatalf("stderr = %q, want one short line", h.stderr.String())
+	}
+	if h.stdout.Len() != 0 {
+		t.Fatalf("probe wrote to stdout: %q", h.stdout.String())
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("the proxy was asked with the flag present (%d hits)", hits.Load())
+	}
+
+	// The flag gone again: the node may claim the address.
+	if err := os.Remove(flag); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := probeWith(flag); got != 0 {
+		t.Fatalf("after the flag was removed: run = %d, want 0", got)
+	}
+
+	// A flag that cannot be looked up holds the node too: it must never claim on a guess.
+	file := filepath.Join(dir, "a-file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, h = probeWith(filepath.Join(file, "address-in-use"))
+	if got != 1 || h.stdout.Len() != 0 || strings.Count(h.stderr.String(), "\n") != 1 {
+		t.Fatalf("an unreadable flag: run = %d, stdout %q stderr %q, want 1 and one line", got, h.stdout.String(), h.stderr.String())
+	}
+
+	// The default path is the helper's, which is what the image uses.
+	if vip.AddressInUseFlag != "/run/tierplan-vip/address-in-use" {
+		t.Fatalf("AddressInUseFlag = %q", vip.AddressInUseFlag)
 	}
 }
 
