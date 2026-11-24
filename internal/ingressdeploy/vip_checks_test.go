@@ -4,7 +4,9 @@
 package ingressdeploy_test
 
 import (
+	"math/rand/v2"
 	"net/netip"
+	"strconv"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -323,6 +325,137 @@ func TestVIPAddressChecks(t *testing.T) {
 		in.Nodes = append(in.Nodes, ingressdeploy.VIPNode{ID: "n9", Hostname: "unknown"})
 		if f := findCode(ingressdeploy.CheckVIPAddress(in), ingressdeploy.CodeVIPOutsideNodeSubnet); f != nil {
 			t.Errorf("unexpected %s", f.Code)
+		}
+	})
+}
+
+func TestDerivedRouterID(t *testing.T) {
+	// The vectors were computed with an independent SHA-256 (1 + big-endian uint32 of the first four bytes, mod 255)
+	// and are fixed: a change here moves the router ID of every swarm that runs without an override (D-05).
+	vectors := []struct {
+		clusterID string
+		want      int
+	}{
+		{"swarm-a", 240},
+		{"abcdefghijklmnopqrstuvwxy", 248},
+		{"w3k1z0q8c7m2n5p4r6t9y1u3x", 19},
+		{"cluster-1", 70},
+		{"0", 159},
+		{"l8s9q2m7n4b1v6c3x5z0a2d4f", 155},
+	}
+	for _, v := range vectors {
+		if got := ingressdeploy.DerivedRouterID(v.clusterID); got != v.want {
+			t.Errorf("DerivedRouterID(%q) = %d, want %d", v.clusterID, got, v.want)
+		}
+	}
+
+	t.Run("always in 1 to 255", func(t *testing.T) {
+		rng := rand.New(rand.NewPCG(26, 6))
+		const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+		seen := map[int]bool{}
+		for range 1000 {
+			b := make([]byte, 25)
+			for i := range b {
+				b[i] = alphabet[rng.IntN(len(alphabet))]
+			}
+			id := ingressdeploy.DerivedRouterID(string(b))
+			if id < 1 || id > 255 {
+				t.Fatalf("DerivedRouterID(%q) = %d, outside 1..255", b, id)
+			}
+			seen[id] = true
+		}
+		if len(seen) < 200 {
+			t.Errorf("only %d distinct IDs over 1000 cluster IDs, the spread is wrong", len(seen))
+		}
+	})
+
+	t.Run("the same cluster gives the same ID", func(t *testing.T) {
+		if ingressdeploy.DerivedRouterID("swarm-a") != ingressdeploy.DerivedRouterID("swarm-a") {
+			t.Error("not deterministic")
+		}
+	})
+}
+
+func TestResolveRouterID(t *testing.T) {
+	intp := func(v int) *int { return &v }
+	derived := ingressdeploy.DerivedRouterID("swarm-a")
+
+	t.Run("no override uses the derived value", func(t *testing.T) {
+		id, isDerived, f := ingressdeploy.ResolveRouterID(nil, "swarm-a")
+		if f != nil || !isDerived || id != derived || id != 240 {
+			t.Errorf("got id=%d derived=%v finding=%v, want 240 true nil", id, isDerived, f)
+		}
+	})
+
+	for _, v := range []int{1, 77, 255} {
+		t.Run("accepts "+strconv.Itoa(v), func(t *testing.T) {
+			id, isDerived, f := ingressdeploy.ResolveRouterID(intp(v), "swarm-a")
+			if f != nil || isDerived || id != v {
+				t.Errorf("got id=%d derived=%v finding=%v, want %d false nil", id, isDerived, f, v)
+			}
+		})
+	}
+
+	for _, v := range []int{0, 256, -1, 1 << 40} {
+		t.Run("refuses "+strconv.Itoa(v), func(t *testing.T) {
+			_, _, f := ingressdeploy.ResolveRouterID(intp(v), "swarm-a")
+			if f == nil || f.Code != ingressdeploy.CodeVIPRouterIDInvalid || f.Severity != ingressdeploy.SeverityError {
+				t.Fatalf("finding = %+v, want an error with vip_router_id_invalid", f)
+			}
+			if f.Message != "The router ID must be a whole number from 1 to 255." {
+				t.Errorf("message = %q", f.Message)
+			}
+		})
+	}
+}
+
+func TestRouterIDCollision(t *testing.T) {
+	pfx := netip.MustParsePrefix
+	others := []ingressdeploy.VIPOther{
+		{EnvID: "e2", EnvName: "staging", Prefix: pfx("192.168.1.50/24"), RouterID: 51},
+		{EnvID: "e3", EnvName: "lab", Prefix: pfx("10.9.0.5/24"), RouterID: 51},
+		{EnvID: "e4", EnvName: "other-id", Prefix: pfx("192.168.1.70/24"), RouterID: 52},
+	}
+
+	t.Run("the same ID on an overlapping prefix is refused naming the environment", func(t *testing.T) {
+		f := ingressdeploy.CheckRouterIDCollision("e1", 51, pfx("192.168.1.60/24"), others)
+		if f == nil {
+			t.Fatal("no finding")
+		}
+		if f.Code != ingressdeploy.CodeVIPRouterIDInUse || f.Severity != ingressdeploy.SeverityError {
+			t.Errorf("finding = %+v", f)
+		}
+		if len(f.Items) != 1 || f.Items[0] != "staging" {
+			t.Errorf("items = %v, want [staging]", f.Items)
+		}
+		want := "staging already uses router ID 51 on an overlapping network. Set a different router ID."
+		if f.Message != want {
+			t.Errorf("message = %q, want %q", f.Message, want)
+		}
+	})
+
+	t.Run("the same ID on a prefix that does not overlap passes", func(t *testing.T) {
+		if f := ingressdeploy.CheckRouterIDCollision("e1", 51, pfx("172.16.0.5/24"), others); f != nil {
+			t.Errorf("unexpected %s", f.Code)
+		}
+	})
+
+	t.Run("a different ID on an overlapping prefix passes", func(t *testing.T) {
+		if f := ingressdeploy.CheckRouterIDCollision("e1", 53, pfx("192.168.1.60/24"), others); f != nil {
+			t.Errorf("unexpected %s", f.Code)
+		}
+	})
+
+	t.Run("the environment itself is never a collision", func(t *testing.T) {
+		if f := ingressdeploy.CheckRouterIDCollision("e2", 51, pfx("192.168.1.50/24"), others); f != nil {
+			t.Errorf("unexpected %s", f.Code)
+		}
+	})
+
+	t.Run("the overlap is between the masked networks", func(t *testing.T) {
+		// 192.168.1.60/16 contains the whole /24 of the other environment.
+		if f := ingressdeploy.CheckRouterIDCollision("e1", 51, pfx("192.168.9.60/16"), others); f == nil {
+			t.Error("a /16 over the other's /24 was not a collision")
 		}
 	})
 }
