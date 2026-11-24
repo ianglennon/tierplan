@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -90,6 +91,10 @@ type RunDeps struct {
 	OpenFIFO func(path string) (io.ReadCloser, error)
 	// RemoveAddr deletes an address from an interface (A-15).
 	RemoveAddr func(iface string, p netip.Prefix) error
+	// RemoveFile deletes a file (the statistics file before each poll). A missing file is not an error here.
+	RemoveFile func(path string) error
+	// OpenFile opens a file for reading (the statistics file).
+	OpenFile func(path string) (io.ReadCloser, error)
 }
 
 func (d RunDeps) withDefaults() RunDeps {
@@ -119,6 +124,12 @@ func (d RunDeps) withDefaults() RunDeps {
 	}
 	if d.RemoveAddr == nil {
 		d.RemoveAddr = RemoveAddr
+	}
+	if d.RemoveFile == nil {
+		d.RemoveFile = os.Remove
+	}
+	if d.OpenFile == nil {
+		d.OpenFile = func(path string) (io.ReadCloser, error) { return os.Open(path) } //nolint:gosec // the fixed StatsPath
 	}
 	return d
 }
@@ -199,6 +210,20 @@ func Run(ctx context.Context, d RunDeps) int {
 		reportStates(d.Clock, em, facts, lines)
 	}()
 
+	// The statistics watcher lives as long as the child: it ends with the child's exit or the stop, and it is
+	// finished before the final STOP line is written, so no line follows it.
+	wctx, wcancel := context.WithCancel(ctx)
+	var watchers sync.WaitGroup
+	sw := &statsWatcher{
+		clock: d.Clock, em: em, facts: facts, remove: d.RemoveFile, open: d.OpenFile,
+		signal: func() error { return proc.Signal(syscall.SIGUSR2) },
+	}
+	watchers.Add(1)
+	go func() {
+		defer watchers.Done()
+		sw.run(wctx)
+	}()
+
 	code := 0
 	select {
 	case <-ctx.Done():
@@ -209,6 +234,8 @@ func Run(ctx context.Context, d RunDeps) int {
 			code = 1
 		}
 	}
+	wcancel()
+	watchers.Wait()
 	_ = fifo.Close()
 	<-readerDone
 	<-reporterDone

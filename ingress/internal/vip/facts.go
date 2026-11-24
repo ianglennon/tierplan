@@ -6,9 +6,12 @@ package vip
 import (
 	"bytes"
 	"io"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
 
 // DiscoveryRescan is how often the helper looks for the interface again while it has none (D-09).
@@ -32,12 +35,59 @@ var (
 	scriptOK       = "VRRP_Script(" + scriptName + ") succeeded"
 )
 
-// probeFacts is the one fact the helper keeps from keepalived's own output: whether the proxy check is
-// failing now (D-12). Everything else keepalived prints is read and dropped (T-26-29).
+// authPatterns are the texts keepalived logs when an advert fails authentication (RESEARCH Pitfall 4): the
+// counter each one belongs to and the words before the sender's address. keepalived logs each once per state
+// change, so the log can name a sender but cannot say the condition cleared (A-04).
+var authPatterns = []struct{ counter, lead string }{
+	{ingressbundle.VIPCounterInvalidHMAC, "(" + InstanceName + ") invalid authentication HMAC from "},
+	{ingressbundle.VIPCounterMissing, "(" + InstanceName + ") missing authentication trailer from "},
+	// The key id sits between the words and " from ".
+	{ingressbundle.VIPCounterUnknownKey, "(" + InstanceName + ") unknown authentication key id "},
+}
+
+// authSender reads the sender of an authentication failure line. The address is validated by netip and
+// returned in its own canonical form, so nothing else of the line can pass on (T-26-29).
+func authSender(s string) (counter, addr string, ok bool) {
+	for _, p := range authPatterns {
+		i := strings.Index(s, p.lead)
+		if i < 0 {
+			continue
+		}
+		rest := s[i+len(p.lead):]
+		if p.counter == ingressbundle.VIPCounterUnknownKey {
+			j := strings.Index(rest, " from ")
+			if j < 0 {
+				return "", "", false
+			}
+			rest = rest[j+len(" from "):]
+		}
+		if k := strings.IndexAny(rest, " ,\t\r"); k >= 0 {
+			rest = rest[:k]
+		}
+		a, err := netip.ParseAddr(rest)
+		if err != nil {
+			return "", "", false
+		}
+		return p.counter, a.WithZone("").String(), true
+	}
+	return "", "", false
+}
+
+// probeFacts holds the facts the helper keeps from keepalived's own output: whether the proxy check is
+// failing now (D-12) and the latest sender of each kind of authentication failure (A-04). Everything else
+// keepalived prints is read and dropped (T-26-29).
 type probeFacts struct {
-	mu   sync.Mutex
-	fail bool
-	ch   chan struct{}
+	mu      sync.Mutex
+	fail    bool
+	ch      chan struct{}
+	senders map[string]string
+}
+
+// sender returns the address the latest failure line of that counter named, or empty when there was none.
+func (f *probeFacts) sender(counter string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.senders[counter]
 }
 
 // writer returns the sink keepalived's standard output and error are given. Its Write never blocks and never
@@ -81,6 +131,13 @@ func (f *probeFacts) scan(line []byte) {
 		}
 	case strings.Contains(s, scriptOK):
 		f.fail = false
+	default:
+		if counter, addr, ok := authSender(s); ok {
+			if f.senders == nil {
+				f.senders = map[string]string{}
+			}
+			f.senders[counter] = addr
+		}
 	}
 }
 

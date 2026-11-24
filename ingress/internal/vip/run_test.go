@@ -146,7 +146,9 @@ func TestHelperFakeKeepalived(t *testing.T) {
 	if mode == "deaf" {
 		signal.Ignore(syscall.SIGTERM)
 	}
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGUSR1)
+	// SIGUSR2 is the statistics request (A-04): the fake takes it and writes nothing, as a keepalived with
+	// nothing to report would.
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2)
 	write := func(s string) { _, _ = f.WriteString(s) }
 	switch mode {
 	case "lines":
@@ -162,6 +164,9 @@ func TestHelperFakeKeepalived(t *testing.T) {
 	for s := range sigs {
 		if s == syscall.SIGUSR1 {
 			os.Exit(1)
+		}
+		if s == syscall.SIGUSR2 {
+			continue
 		}
 		if mode == "deaf" {
 			continue
@@ -313,6 +318,31 @@ func (c *fakeClock) waitPending(t *testing.T, n int) {
 	}
 }
 
+// waitTimer blocks until a timer of exactly d waits on the clock. The statistics poll keeps a timer of its own
+// on the clock, so a test that means one particular wait names it instead of counting timers.
+func (c *fakeClock) waitTimer(t *testing.T, d time.Duration) {
+	t.Helper()
+	deadline := time.After(20 * time.Second) // wall-clock: failure bound
+	for {
+		c.mu.Lock()
+		found := false
+		for _, tm := range c.timers {
+			if tm.at.Sub(c.now) == d {
+				found = true
+			}
+		}
+		c.mu.Unlock()
+		if found {
+			return
+		}
+		select {
+		case <-c.changed:
+		case <-deadline:
+			t.Fatalf("waited for a timer of %s on the clock", d)
+		}
+	}
+}
+
 func TestVIPEntrypointWritesStateLines(t *testing.T) {
 	r := newRig(t, "lines")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -395,7 +425,7 @@ func TestVIPEntrypointSignals(t *testing.T) {
 		done := r.run(ctx)
 		r.out.waitLines(t, 1)
 		cancel()
-		r.clock.waitPending(t, 1)
+		r.clock.waitTimer(t, StopWait)
 		r.clock.Advance(StopWait)
 		if code := waitCode(t, done); code != 0 {
 			t.Fatalf("Run = %d, want 0 after a stop (stderr %q)", code, r.errw.String())
@@ -559,7 +589,7 @@ func TestVIPEntrypointFaultReason(t *testing.T) {
 		defer cancel()
 		done := r.run(ctx)
 		// The helper holds a FAULT for a short grace in case the check's line is still on its way.
-		r.clock.waitPending(t, 1)
+		r.clock.waitTimer(t, FaultReasonGrace)
 		r.clock.Advance(FaultReasonGrace)
 		ev := parseAll(t, r.out.waitLines(t, 2))[1]
 		if ev.State != ingressbundle.VIPStateFault || ev.Reason != "" {
