@@ -65,3 +65,27 @@ func (s *Service) VIPSkipped(envID string) uint64 {
 	defer e.mu.Unlock()
 	return e.skipped
 }
+
+// SeedNode is one node of the reader's memory that a test writes by hand, so a status test need not play a log.
+type SeedNode struct {
+	NodeID, Hostname, State, Reason string
+	Foreign                         bool
+	ForeignSender                   string
+	ClockSkew                       bool
+	LastHeard                       time.Time
+}
+
+// SeedVIPState replaces the reader's memory of the environment with the nodes and the instant the address lost its holder.
+func (s *Service) SeedVIPState(envID string, nodes []SeedNode, holderlessSince time.Time) {
+	e := s.vip.env(envID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	view := vipEnvState{Nodes: map[string]vipNode{}, HolderlessSince: holderlessSince}
+	for _, n := range nodes {
+		view.Nodes[n.NodeID] = vipNode{
+			NodeID: n.NodeID, Hostname: n.Hostname, State: n.State, Reason: n.Reason, Faults: map[string]bool{},
+			Foreign: n.Foreign, ForeignSender: n.ForeignSender, ClockSkew: n.ClockSkew, LastHeard: n.LastHeard,
+		}
+	}
+	e.view = view
+}

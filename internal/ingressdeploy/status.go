@@ -13,6 +13,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresshub"
 )
 
 // nodeActive is the status of an enrolled ingress node that has not been revoked.
@@ -61,6 +62,13 @@ type StatusNodes struct {
 	// Expected is the swarm's nodes, each of which runs a proxy. Enrolled is the proxies that enrolled and were not
 	// revoked. Ready is the enrolled proxies whose health is ok and whose applied bundle is the current one.
 	Expected, Enrolled, Ready int
+}
+
+// proxyReady is the one rule for a ready proxy node: enrolled and not revoked, its health ok and its applied bundle the
+// environment's current one. have is false when the environment has no current bundle, so no node is ready. The ingress
+// status counts nodes with it and the virtual IP status marks each candidate with it.
+func proxyReady(n ingresshub.Node, current string, have bool) bool {
+	return n.Status == nodeActive && have && n.Health == "ok" && n.AppliedBundleID == current
 }
 
 // Status reads the ingress state of an environment. A swarm or a standalone host that cannot be read leaves ObjectsKnown

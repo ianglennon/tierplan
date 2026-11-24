@@ -140,6 +140,14 @@ type Registry interface {
 
 var _ Registry = (*registry.Resolver)(nil)
 
+// ManagerPolicies reads where the privileged-services opt-in stands on every manager of a swarm: *envs.Clusters has this
+// method. A nil one means the table is unread, so the gate refuses and the status says it could not read it.
+type ManagerPolicies interface {
+	ManagerPolicies(ctx context.Context, envID string) ([]envs.ManagerPolicyRow, error)
+}
+
+var _ ManagerPolicies = (*envs.Clusters)(nil)
+
 // Deps are what the deployer reads and writes. A nil Stacks lists no stacks; every other field is required
 // by the operation that uses it.
 type Deps struct {
@@ -150,6 +158,9 @@ type Deps struct {
 	Tokens Tokens
 	// Nodes lists the enrolled proxy nodes, for the status; nil reads none.
 	Nodes NodeLister
+	// Managers reads the managers' privileged-services opt-in for the virtual IP's status and gate; nil leaves the table
+	// unread.
+	Managers ManagerPolicies
 	// CurrentBundle is the environment's current ingress bundle ID and whether it has one, for the status; nil
 	// reads none, so no node counts as ready.
 	CurrentBundle func(envID string) (string, bool)
