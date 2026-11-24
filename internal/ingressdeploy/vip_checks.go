@@ -90,7 +90,30 @@ func ParseVIPAddress(raw string) (netip.Prefix, *Finding) {
 	if !a.Is4() {
 		return netip.Prefix{}, &Finding{Code: CodeVIPIPv6Unsupported, Message: vipIPv6UnsupportedText, Severity: SeverityError}
 	}
+	// IsGlobalUnicast is false for loopback, link-local, multicast and unspecified addresses, and for the limited
+	// broadcast address, which no node could hold either.
+	if !a.IsGlobalUnicast() {
+		return netip.Prefix{}, &Finding{Code: CodeVIPNotUnicast, Message: vipNotUnicastText(a), Severity: SeverityError}
+	}
+	if isNetworkOrBroadcast(p) {
+		return netip.Prefix{}, &Finding{
+			Code: CodeVIPNetworkOrBroadcast, Message: vipIsNetworkOrBroadcastText(a, p.Masked()), Severity: SeverityError,
+		}
+	}
 	return p, nil
+}
+
+// isNetworkOrBroadcast reports whether the address of an IPv4 prefix is its network or its broadcast address. A /31
+// and a /32 have neither (RFC 3021), so every address of them is a host.
+func isNetworkOrBroadcast(p netip.Prefix) bool {
+	if p.Bits() >= 31 {
+		return false
+	}
+	a := p.Addr().As4()
+	hostMask := ^uint32(0) >> uint(p.Bits())
+	v := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3])
+	host := v & hostMask
+	return host == 0 || host == hostMask
 }
 
 // CheckVIPAddress runs the address checks of D-08 on a parsed address and returns every finding: the refusals first,
@@ -101,6 +124,113 @@ func CheckVIPAddress(in VIPAddressInput) []Finding {
 	if f := checkOutsideNodeSubnet(in); f != nil {
 		out = append(out, *f)
 	}
+	if f := checkIsNodeAddress(in); f != nil {
+		out = append(out, *f)
+	}
+	out = append(out, checkInUseByEnvironment(in)...)
+	out = append(out, checkOverlapsDocker(in)...)
+	out = append(out, checkInsidePool(in)...)
+	return append(out, Finding{
+		Code: CodeVIPUnverified, Message: vipUnverifiedText(in.Prefix.Addr()), Severity: SeverityWarning,
+	})
+}
+
+// checkIsNodeAddress refuses an address a node already holds.
+func checkIsNodeAddress(in VIPAddressInput) *Finding {
+	addr := in.Prefix.Addr()
+	var names []string
+	for _, n := range sortedNodes(in.Nodes) {
+		if n.Address.IsValid() && n.Address.Unmap() == addr {
+			names = append(names, vipNodeLabel(n))
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return &Finding{
+		Code: CodeVIPIsNodeAddress, Message: vipIsNodeAddressText(addr, names), Items: cutAll(names), Severity: SeverityError,
+	}
+}
+
+// checkInUseByEnvironment refuses an address that is another environment's virtual IP, one finding per environment.
+func checkInUseByEnvironment(in VIPAddressInput) []Finding {
+	addr := in.Prefix.Addr()
+	others := slices.Clone(in.Others)
+	slices.SortFunc(others, func(a, b VIPOther) int {
+		if c := strings.Compare(a.EnvName, b.EnvName); c != 0 {
+			return c
+		}
+		return strings.Compare(a.EnvID, b.EnvID)
+	})
+	var out []Finding
+	for _, o := range others {
+		if !o.Prefix.IsValid() || o.Prefix.Addr().Unmap() != addr {
+			continue
+		}
+		out = append(out, Finding{
+			Code: CodeVIPInUseByEnvironment, Message: vipInUseByEnvironmentText(addr, o.EnvName),
+			Items: []string{vipName(o.EnvName)}, Severity: SeverityError,
+		})
+	}
+	return out
+}
+
+// checkOverlapsDocker refuses a prefix that overlaps the subnet of an allocated network, one finding per network
+// (A-11). An address pool or a host route does not refuse (checkInsidePool).
+func checkOverlapsDocker(in VIPAddressInput) []Finding {
+	network := in.Prefix.Masked()
+	nets := slices.Clone(in.Allocated)
+	slices.SortFunc(nets, func(a, b VIPNetwork) int {
+		if c := strings.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		return a.Subnet.Addr().Compare(b.Subnet.Addr())
+	})
+	var out []Finding
+	for _, n := range nets {
+		if !n.Subnet.IsValid() || !network.Overlaps(n.Subnet.Masked()) {
+			continue
+		}
+		out = append(out, Finding{
+			Code: CodeVIPOverlapsDocker, Message: vipOverlapsDockerText(network, n.Name),
+			Items: []string{vipName(n.Name)}, Severity: SeverityError,
+		})
+	}
+	return out
+}
+
+// checkInsidePool warns about each address pool or host route the prefix overlaps (A-11).
+func checkInsidePool(in VIPAddressInput) []Finding {
+	network := in.Prefix.Masked()
+	pools := slices.Clone(in.Pools)
+	slices.SortFunc(pools, func(a, b netip.Prefix) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
+		}
+		return a.Bits() - b.Bits()
+	})
+	var out []Finding
+	for _, pool := range pools {
+		if !pool.IsValid() || !network.Overlaps(pool.Masked()) {
+			continue
+		}
+		out = append(out, Finding{
+			Code: CodeVIPInsidePool, Message: vipInsidePoolText(network, pool.Masked()),
+			Items: []string{pool.Masked().String()}, Severity: SeverityWarning,
+		})
+	}
+	return out
+}
+
+// sortedNodes returns the nodes ordered by host name then ID, so findings read the same on every run.
+func sortedNodes(nodes []VIPNode) []VIPNode {
+	out := slices.Clone(nodes)
+	slices.SortFunc(out, func(a, b VIPNode) int {
+		if c := strings.Compare(a.Hostname, b.Hostname); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
 	return out
 }
 
@@ -108,7 +238,7 @@ func CheckVIPAddress(in VIPAddressInput) []Finding {
 // address the swarm did not report cannot be compared, so it is left to the nodes' own check when they start.
 func checkOutsideNodeSubnet(in VIPAddressInput) *Finding {
 	var outside []VIPNode
-	for _, n := range in.Nodes {
+	for _, n := range sortedNodes(in.Nodes) {
 		if !n.Address.IsValid() {
 			continue
 		}
@@ -119,12 +249,6 @@ func checkOutsideNodeSubnet(in VIPAddressInput) *Finding {
 	if len(outside) == 0 {
 		return nil
 	}
-	slices.SortFunc(outside, func(a, b VIPNode) int {
-		if c := strings.Compare(a.Hostname, b.Hostname); c != 0 {
-			return c
-		}
-		return strings.Compare(a.ID, b.ID)
-	})
 	names := make([]string, len(outside))
 	for i, n := range outside {
 		names[i] = vipNodeLabel(n)
