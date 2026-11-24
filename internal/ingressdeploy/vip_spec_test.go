@@ -4,10 +4,13 @@
 package ingressdeploy_test
 
 import (
+	"encoding/json"
+	"errors"
 	"maps"
 	"net/netip"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -16,8 +19,10 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/agents"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
+	"github.com/ianglennon/tierplan/proto/hostpath"
 )
 
 // keepalivedInput is the fixed input of the keepalived spec in the tests and in the policy vector.
@@ -180,5 +185,86 @@ func TestKeepalivedImage(t *testing.T) {
 		if got := ingressdeploy.KeepalivedImage(in); got != want {
 			t.Errorf("KeepalivedImage(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestKeepalivedSecret pins the name and the content of the VRRP key secret (D-03, A-03).
+func TestKeepalivedSecret(t *testing.T) {
+	name := ingressdeploy.KeepalivedSecretName("e1", 3)
+	if !strings.HasPrefix(name, "tierplan-keepalived-key-g3-") || !strings.HasSuffix(name, agents.SecretTag("e1")) {
+		t.Errorf("KeepalivedSecretName(e1, 3) = %q, want tierplan-keepalived-key-g3-<tag of e1>", name)
+	}
+	if want := "tierplan-keepalived-key-g3-" + agents.SecretTag("e1"); name != want {
+		t.Errorf("KeepalivedSecretName(e1, 3) = %q, want %q", name, want)
+	}
+	if !ingress.OwnsKeepalivedSecret(name, ingress.KeepalivedLabels()) {
+		t.Errorf("the secret name %q is not recognised as a keepalived key", name)
+	}
+	// A UUIDv7 and a long generation still fit Docker's 64 characters.
+	if long := ingressdeploy.KeepalivedSecretName("018f3b7e-aaaa-7bbb-8ccc-0123456789ab", 123456); len(long) > 64 {
+		t.Errorf("a long name is %d characters, over Docker's 64", len(long))
+	}
+
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(0xa0 + i)
+	}
+	got, err := ingressdeploy.KeepalivedSecretContent(raw)
+	if err != nil {
+		t.Fatalf("KeepalivedSecretContent(32 bytes): %v", err)
+	}
+	if len(got) != 68 || !strings.HasPrefix(string(got), "hex:") {
+		t.Fatalf("content is %d bytes starting %q, want 68 starting hex:", len(got), got[:4])
+	}
+	if !regexp.MustCompile(`^hex:[0-9a-f]{64}$`).Match(got) {
+		t.Errorf("content is not hex: followed by 64 lower-case hex digits")
+	}
+	if want := "hex:a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf"; string(got) != want {
+		t.Errorf("content = %q, want %q", got, want)
+	}
+
+	for _, n := range []int{0, 31, 33, 64} {
+		out, err := ingressdeploy.KeepalivedSecretContent(make([]byte, n))
+		if err == nil || out != nil {
+			t.Errorf("%d bytes: err = %v, content %v, want an error and no content", n, err, out)
+		}
+		if err != nil && !errors.Is(err, ingressdeploy.ErrKeepalivedKeyLength) {
+			t.Errorf("%d bytes: err = %v, want ErrKeepalivedKeyLength", n, err)
+		}
+	}
+	// The refusal names the length and never the bytes (PROH-26-03).
+	bad := []byte("0123456789abcdef0123456789abcde")
+	if _, err := ingressdeploy.KeepalivedSecretContent(bad); err == nil || strings.Contains(err.Error(), string(bad)) {
+		t.Errorf("error %v is missing or repeats the key bytes", err)
+	}
+}
+
+// keepalivedVectorName is the policy vector that holds the keepalived spec.
+const keepalivedVectorName = "tierplan-keepalived VIP spec"
+
+// TestKeepalivedSpecMatchesTheVector keeps the vector equal to the builder (as TestProxySpecMatchesS4Vector
+// does for the proxy), so the agent's and the server's policies are tested against the spec the deployer
+// really sends, and the vector marks it as escalating: the host network and the added capabilities.
+func TestKeepalivedSpecMatchesTheVector(t *testing.T) {
+	var vector *hostpath.SpecVector
+	for _, v := range hostpath.Vectors() {
+		if v.Name == keepalivedVectorName {
+			vector = &v
+			break
+		}
+	}
+	if vector == nil {
+		t.Fatalf("vector %q not found in proto/hostpath/testdata/service-specs.json", keepalivedVectorName)
+	}
+	if !vector.Escalates {
+		t.Errorf("vector %q does not escalate; the host network and the added capabilities must", keepalivedVectorName)
+	}
+	var want any
+	if err := json.Unmarshal(vector.Spec, &want); err != nil {
+		t.Fatalf("decode vector: %v", err)
+	}
+	got := asTree(t, ingressdeploy.KeepalivedServiceSpec(keepalivedInput()))
+	if d := firstDiff("$", got, want); d != "" {
+		t.Errorf("the builder's spec differs from the vector at %s", d)
 	}
 }

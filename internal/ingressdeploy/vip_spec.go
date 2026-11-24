@@ -4,6 +4,9 @@
 package ingressdeploy
 
 import (
+	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"strconv"
@@ -70,6 +73,37 @@ func KeepalivedImage(serverVersion string) string {
 // dead never faults. Each call returns a new slice.
 func KeepalivedCaps() []string {
 	return []string{"NET_ADMIN", "NET_RAW", "SETUID", "SETGID"}
+}
+
+// ErrKeepalivedKeyLength is returned for a VRRP key that is not keepalivedKeyBytes long.
+var ErrKeepalivedKeyLength = errors.New("ingressdeploy: the VRRP key is not 32 bytes")
+
+// keepalivedKeyBytes is how many random bytes the VRRP key has before it is written as text.
+const keepalivedKeyBytes = 32
+
+// KeepalivedSecretName is the swarm secret that holds generation gen of the VRRP key of environment
+// envID: tierplan-keepalived-key-g<gen>-<envtag>. Every environment has its own name and every
+// generation its own secret, so a key change creates the new secret beside the old one and the
+// service update swaps them, and a restored install never collides with a secret an earlier install
+// left on the swarm. It is 38 characters plus the digits of the generation, well under Docker's 64, and
+// in the form of the agent's secret names (D-03, A-03).
+func KeepalivedSecretName(envID string, generation int) string {
+	return ingress.SecretPrefixKeepalived + "g" + strconv.Itoa(generation) + "-" + agents.SecretTag(envID)
+}
+
+// KeepalivedSecretContent is the content of the VRRP key secret for raw, which must be 32 bytes: the
+// text `hex:` followed by 64 lower-case hex digits. keepalived reads the key file as text, and the
+// prefix is how it reads the digits as bytes (A-03). The clear content exists only between the moment
+// it is generated and the SecretCreate call that seals it into the swarm; this is the one place that
+// builds it, and it is called nowhere else. The error names the length it got and never the bytes
+// (PROH-26-03).
+func KeepalivedSecretContent(raw []byte) ([]byte, error) {
+	if len(raw) != keepalivedKeyBytes {
+		return nil, fmt.Errorf("%w: got %d bytes, want %d", ErrKeepalivedKeyLength, len(raw), keepalivedKeyBytes)
+	}
+	out := make([]byte, 0, len("hex:")+hex.EncodedLen(len(raw)))
+	out = append(out, "hex:"...)
+	return hex.AppendEncode(out, raw), nil
 }
 
 // KeepalivedSpecInput is what the keepalived service spec is built from. None of it is the VRRP key:

@@ -656,5 +656,100 @@
         ]
       }
     }
+  },
+  {
+    "name": "tierplan-keepalived VIP spec",
+    "escalates": true,
+    "spec": {
+      "Name": "tierplan-keepalived",
+      "Labels": {
+        "tierplan.component": "keepalived",
+        "tierplan.keep": "true",
+        "tierplan.updates": "ignore"
+      },
+      "TaskTemplate": {
+        "ContainerSpec": {
+          "Image": "ghcr.io/ianglennon/tierplan-keepalived:edge",
+          "Labels": {
+            "tierplan.component": "keepalived",
+            "tierplan.keep": "true",
+            "tierplan.updates": "ignore"
+          },
+          "Env": [
+            "TIERPLAN_VIP_ADDRESS=192.168.1.50/24",
+            "TIERPLAN_VIP_ROUTER_ID=77",
+            "TIERPLAN_VIP_PROBE_PORT=7483",
+            "TIERPLAN_VIP_KEY_FILE=/run/secrets/tierplan-keepalived-key",
+            "TIERPLAN_VIP_NODE_ID={{.Node.ID}}",
+            "TIERPLAN_VIP_NODE_NAME={{.Node.Hostname}}"
+          ],
+          "ReadOnly": true,
+          "Mounts": [
+            {
+              "Type": "tmpfs",
+              "Target": "/run"
+            },
+            {
+              "Type": "tmpfs",
+              "Target": "/tmp"
+            }
+          ],
+          "StopGracePeriod": 10000000000,
+          "Secrets": [
+            {
+              "File": {
+                "Name": "tierplan-keepalived-key",
+                "UID": "0",
+                "GID": "0",
+                "Mode": 256
+              },
+              "SecretID": "",
+              "SecretName": "tierplan-keepalived-key-g1-abcd"
+            }
+          ],
+          "CapabilityAdd": [
+            "NET_ADMIN",
+            "NET_RAW",
+            "SETUID",
+            "SETGID"
+          ],
+          "CapabilityDrop": [
+            "ALL"
+          ]
+        },
+        "RestartPolicy": {
+          "Condition": "any",
+          "Delay": 2000000000
+        },
+        "Networks": [
+          {
+            "Target": "host"
+          }
+        ],
+        "LogDriver": {
+          "Name": "json-file",
+          "Options": {
+            "max-file": "3",
+            "max-size": "1m"
+          }
+        },
+        "ForceUpdate": 0
+      },
+      "Mode": {
+        "Global": {}
+      },
+      "UpdateConfig": {
+        "Parallelism": 1,
+        "Delay": 10000000000,
+        "FailureAction": "rollback",
+        "MaxFailureRatio": 0,
+        "Order": "stop-first"
+      },
+      "RollbackConfig": {
+        "Parallelism": 1,
+        "MaxFailureRatio": 0,
+        "Order": "stop-first"
+      }
+    }
   }
 ]
