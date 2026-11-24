@@ -18,6 +18,7 @@ import (
 
 	"github.com/ianglennon/tierplan/ingress/internal/config"
 	"github.com/ianglennon/tierplan/ingress/internal/version"
+	"github.com/ianglennon/tierplan/ingress/internal/vip"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
 
@@ -304,5 +305,50 @@ func TestSIGTERMEndsTheServeContext(t *testing.T) {
 	}
 	if got := run(h.deps()); got != 0 {
 		t.Fatalf("run = %d, want 0 after SIGTERM", got)
+	}
+}
+
+func TestVIPEntrypointSubcommand(t *testing.T) {
+	var h harness
+	var got vip.RunDeps
+	var ctxEnded bool
+	d := h.deps("vip-entrypoint")
+	d.vipRun = func(ctx context.Context, rd vip.RunDeps) int {
+		got = rd
+		if err := syscall.Kill(syscall.Getpid(), syscall.SIGTERM); err != nil {
+			t.Errorf("signal self: %v", err)
+			return 99
+		}
+		<-ctx.Done()
+		ctxEnded = true
+		return 7
+	}
+	if code := run(d); code != 7 {
+		t.Fatalf("run = %d, want the entrypoint's own status 7", code)
+	}
+	if !ctxEnded {
+		t.Fatal("SIGTERM did not end the entrypoint's context")
+	}
+	if got.Getenv == nil || got.Stdout != &h.stdout || got.Stderr != &h.stderr {
+		t.Fatalf("the entrypoint was not given the process's env, stdout and stderr: %+v", got)
+	}
+	if h.nnpCalls != 0 || h.serveCalls != 0 {
+		t.Fatalf("vip-entrypoint touched the node: nnp=%d serve=%d (keepalived must keep its capabilities)", h.nnpCalls, h.serveCalls)
+	}
+}
+
+func TestVIPEntrypointWithAnArgumentIsUnknown(t *testing.T) {
+	var h harness
+	called := false
+	d := h.deps("vip-entrypoint", "extra")
+	d.vipRun = func(context.Context, vip.RunDeps) int { called = true; return 0 }
+	if got := run(d); got != 2 {
+		t.Fatalf("run = %d, want 2", got)
+	}
+	if called {
+		t.Fatal("the entrypoint ran with an extra argument")
+	}
+	if !strings.Contains(h.stderr.String(), "usage: tierplan-ingress") {
+		t.Fatalf("stderr = %q, want a usage line", h.stderr.String())
 	}
 }

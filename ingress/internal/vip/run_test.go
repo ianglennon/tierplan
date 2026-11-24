@@ -118,6 +118,8 @@ func parseAll(t *testing.T, lines []string) []ingressbundle.VIPEvent {
 const (
 	envFake     = "TIERPLAN_TEST_FAKE_KEEPALIVED"
 	envFakeFIFO = "TIERPLAN_TEST_FAKE_FIFO"
+	// envFakeMark is a file the fake creates when it gets SIGTERM, so a test can tell the signal was forwarded.
+	envFakeMark = "TIERPLAN_TEST_FAKE_MARK"
 )
 
 func fifoLine(state string) string { return fmt.Sprintf("INSTANCE %q %s 100\n", InstanceName, state) }
@@ -129,6 +131,7 @@ func fifoLine(state string) string { return fmt.Sprintf("INSTANCE %q %s 100\n", 
 //	fault   write FAULT to the FIFO only, then as lines
 //	exit1   write BACKUP, then exit 1 on SIGUSR1
 //	quiet   write nothing, then exit 0 on SIGTERM
+//	deaf    write nothing and ignore SIGTERM, so only SIGKILL ends it
 func TestHelperFakeKeepalived(t *testing.T) {
 	mode := os.Getenv(envFake)
 	if mode == "" {
@@ -140,6 +143,9 @@ func TestHelperFakeKeepalived(t *testing.T) {
 		os.Exit(3)
 	}
 	sigs := make(chan os.Signal, 1)
+	if mode == "deaf" {
+		signal.Ignore(syscall.SIGTERM)
+	}
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGUSR1)
 	write := func(s string) { _, _ = f.WriteString(s) }
 	switch mode {
@@ -157,6 +163,12 @@ func TestHelperFakeKeepalived(t *testing.T) {
 		if s == syscall.SIGUSR1 {
 			os.Exit(1)
 		}
+		if mode == "deaf" {
+			continue
+		}
+		if mark := os.Getenv(envFakeMark); mark != "" {
+			_ = os.WriteFile(mark, []byte("TERM"), 0o600)
+		}
 		write(fifoLine("STOP"))
 		os.Exit(0)
 	}
@@ -172,6 +184,7 @@ type rig struct {
 	conf  map[string][]byte
 	proc  chan Process // the started child, once Start was called
 	fifo  string
+	mark  string
 }
 
 // newRig makes the FIFO keepalived would make and a RunDeps that starts the fake child in mode.
@@ -181,9 +194,11 @@ func newRig(t *testing.T, mode string) *rig {
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatalf("mkfifo: %v", err)
 	}
+	mark := filepath.Join(t.TempDir(), "sigterm.mark")
 	t.Setenv(envFake, mode)
 	t.Setenv(envFakeFIFO, fifo)
-	r := &rig{t: t, out: newSyncBuf(), errw: newSyncBuf(), clock: newFakeClock(), conf: map[string][]byte{}, proc: make(chan Process, 4), fifo: fifo}
+	t.Setenv(envFakeMark, mark)
+	r := &rig{t: t, out: newSyncBuf(), errw: newSyncBuf(), clock: newFakeClock(), conf: map[string][]byte{}, proc: make(chan Process, 4), fifo: fifo, mark: mark}
 	r.deps = RunDeps{
 		Getenv:     testEnv,
 		Stdout:     r.out,
@@ -334,5 +349,278 @@ func TestVIPEntrypointWritesStateLines(t *testing.T) {
 	conf := string(r.conf[ConfPath])
 	if !strings.Contains(conf, "interface eth0") || !strings.Contains(conf, "virtual_router_id 77") {
 		t.Errorf("configuration written to %s = %q", ConfPath, conf)
+	}
+}
+
+func stateOf(ev ingressbundle.VIPEvent) string { return ev.Event + "/" + ev.State }
+
+func TestVIPEntrypointSignals(t *testing.T) {
+	t.Run("a stop is forwarded to keepalived, waited for and reported once", func(t *testing.T) {
+		r := newRig(t, "lines")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := r.run(ctx)
+		r.out.waitLines(t, 4)
+		cancel()
+		if code := waitCode(t, done); code != 0 {
+			t.Fatalf("Run = %d, want 0 (stderr %q)", code, r.errw.String())
+		}
+		// Run returns only after the child exited, so the mark proves the SIGTERM reached it first.
+		if got, err := os.ReadFile(r.mark); err != nil || string(got) != "TERM" {
+			t.Fatalf("the child did not get SIGTERM: mark %q, %v", got, err)
+		}
+		events := parseAll(t, r.out.lines())
+		last := events[len(events)-1]
+		if last.Event != ingressbundle.VIPEventState || last.State != ingressbundle.VIPStateStop {
+			t.Fatalf("last line = %+v, want state STOP", last)
+		}
+		stops := 0
+		for i, ev := range events {
+			if ev.State == ingressbundle.VIPStateStop {
+				stops++
+			}
+			if ev.Seq != uint64(i+1) {
+				t.Errorf("line %d seq = %d, want %d", i, ev.Seq, i+1)
+			}
+		}
+		if stops != 1 {
+			t.Errorf("%d STOP lines, want 1", stops)
+		}
+		if r.clock.pending() != 1 {
+			t.Errorf("%d timers pending, want only the stop window's: a prompt child needs no SIGKILL", r.clock.pending())
+		}
+	})
+
+	t.Run("a keepalived that ignores SIGTERM is killed after the stop window", func(t *testing.T) {
+		r := newRig(t, "deaf")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := r.run(ctx)
+		r.out.waitLines(t, 1)
+		cancel()
+		r.clock.waitPending(t, 1)
+		r.clock.Advance(StopWait)
+		if code := waitCode(t, done); code != 0 {
+			t.Fatalf("Run = %d, want 0 after a stop (stderr %q)", code, r.errw.String())
+		}
+		events := parseAll(t, r.out.lines())
+		if last := events[len(events)-1]; last.State != ingressbundle.VIPStateStop {
+			t.Fatalf("last line = %+v, want state STOP", last)
+		}
+	})
+
+	t.Run("a keepalived that exits on its own makes the helper exit non-zero", func(t *testing.T) {
+		r := newRig(t, "exit1")
+		done := r.run(context.Background())
+		r.out.waitLines(t, 2)
+		p := <-r.proc
+		if err := p.Signal(syscall.SIGUSR1); err != nil {
+			t.Fatalf("signal the fake: %v", err)
+		}
+		if code := waitCode(t, done); code != 1 {
+			t.Fatalf("Run = %d, want 1 so swarm restarts the task", code)
+		}
+		events := parseAll(t, r.out.lines())
+		if last := events[len(events)-1]; stateOf(last) != "state/STOP" {
+			t.Fatalf("last line = %+v, want state STOP", last)
+		}
+		if !strings.Contains(r.errw.String(), "keepalived exited") {
+			t.Errorf("stderr = %q, want it to say keepalived exited", r.errw.String())
+		}
+	})
+}
+
+// swappable is an interface list a test changes while Run polls it.
+type swappable struct {
+	mu   sync.Mutex
+	list []Interface
+}
+
+func (s *swappable) set(l ...Interface) {
+	s.mu.Lock()
+	s.list = l
+	s.mu.Unlock()
+}
+
+func (s *swappable) get() ([]Interface, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Interface(nil), s.list...), nil
+}
+
+func nic(name, addr string) Interface {
+	return Interface{Name: name, Addrs: []netip.Prefix{netip.MustParsePrefix(addr)}}
+}
+
+func TestVIPEntrypointDiscoveryFault(t *testing.T) {
+	r := newRig(t, "quiet")
+	ifs := &swappable{}
+	ifs.set(nic("lo", "127.0.0.1/8"), nic("eth9", "10.0.0.5/24"))
+	r.deps.Interfaces = ifs.get
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := r.run(ctx)
+
+	// rescan moves the clock one rescan interval and waits until Run has scanned and is parked again, so a
+	// line that was not written is known not to be coming.
+	rescan := func() {
+		t.Helper()
+		r.clock.waitPending(t, 1)
+		r.clock.Advance(DiscoveryRescan)
+		r.clock.waitPending(t, 1)
+	}
+
+	first := parseAll(t, r.out.waitLines(t, 1))[0]
+	if first.Event != ingressbundle.VIPEventFault || first.Reason != ingressbundle.VIPReasonNoInterface || !first.Active ||
+		len(first.Ifaces) != 1 || first.Ifaces[0] != "eth9" {
+		t.Fatalf("first line = %+v, want an active no_interface fault naming eth9", first)
+	}
+	if len(r.proc) != 0 {
+		t.Fatal("keepalived was started without an interface")
+	}
+
+	rescan()
+	if n := len(r.out.lines()); n != 1 {
+		t.Fatalf("%d lines after a rescan that changed nothing, want 1", n)
+	}
+
+	// Two interfaces in the network: a different fault, written once.
+	ifs.set(nic("lo", "127.0.0.1/8"), nic("eth0", "192.168.1.10/24"), nic("eth1", "192.168.1.11/24"))
+	rescan()
+	second := parseAll(t, r.out.waitLines(t, 2))[1]
+	if second.Reason != ingressbundle.VIPReasonAmbiguousInterface || !second.Active || len(second.Ifaces) != 2 {
+		t.Fatalf("second line = %+v, want an active ambiguous_interface fault naming both", second)
+	}
+	rescan()
+	if n := len(r.out.lines()); n != 2 {
+		t.Fatalf("%d lines after a second identical fault, want 2", n)
+	}
+	if len(r.proc) != 0 {
+		t.Fatal("keepalived was started with two interfaces")
+	}
+
+	// One interface appears: the fault clears, then start, and keepalived runs.
+	ifs.set(nic("lo", "127.0.0.1/8"), nic("eth0", "192.168.1.10/24"))
+	r.clock.Advance(DiscoveryRescan)
+	events := parseAll(t, r.out.waitLines(t, 4))
+	cleared, start := events[2], events[3]
+	if cleared.Event != ingressbundle.VIPEventFault || cleared.Active || cleared.Reason != ingressbundle.VIPReasonAmbiguousInterface {
+		t.Fatalf("third line = %+v, want the ambiguous_interface fault with active false", cleared)
+	}
+	if start.Event != ingressbundle.VIPEventStart || start.Iface != "eth0" {
+		t.Fatalf("fourth line = %+v, want start on eth0", start)
+	}
+	<-r.proc
+
+	cancel()
+	if code := waitCode(t, done); code != 0 {
+		t.Fatalf("Run = %d, want 0 (stderr %q)", code, r.errw.String())
+	}
+}
+
+func TestVIPEntrypointDiscoveryFaultStopsOnSignal(t *testing.T) {
+	r := newRig(t, "quiet")
+	r.deps.Interfaces = func() ([]Interface, error) { return []Interface{nic("lo", "127.0.0.1/8")}, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := r.run(ctx)
+	r.out.waitLines(t, 1)
+	cancel()
+	if code := waitCode(t, done); code != 0 {
+		t.Fatalf("Run = %d, want 0", code)
+	}
+	events := parseAll(t, r.out.lines())
+	if last := events[len(events)-1]; stateOf(last) != "state/STOP" {
+		t.Fatalf("last line = %+v, want state STOP", last)
+	}
+	if len(r.proc) != 0 {
+		t.Fatal("keepalived was started")
+	}
+}
+
+func TestVIPEntrypointFaultReason(t *testing.T) {
+	t.Run("a failing check before FAULT is the reason", func(t *testing.T) {
+		r := newRig(t, "probe")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := r.run(ctx)
+		ev := parseAll(t, r.out.waitLines(t, 2))[1]
+		if ev.State != ingressbundle.VIPStateFault || ev.Reason != ingressbundle.VIPReasonProbeFailing {
+			t.Fatalf("line = %+v, want FAULT with probe_failing", ev)
+		}
+		cancel()
+		waitCode(t, done)
+		// keepalived's text reached no line.
+		if strings.Contains(r.out.String(), "VRRP_Script") || strings.Contains(r.out.String(), "exited with status") {
+			t.Fatalf("keepalived's own text is in the report: %q", r.out.String())
+		}
+	})
+
+	t.Run("FAULT with no failing check has no reason", func(t *testing.T) {
+		r := newRig(t, "fault")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := r.run(ctx)
+		// The helper holds a FAULT for a short grace in case the check's line is still on its way.
+		r.clock.waitPending(t, 1)
+		r.clock.Advance(FaultReasonGrace)
+		ev := parseAll(t, r.out.waitLines(t, 2))[1]
+		if ev.State != ingressbundle.VIPStateFault || ev.Reason != "" {
+			t.Fatalf("line = %+v, want FAULT with no reason", ev)
+		}
+		cancel()
+		waitCode(t, done)
+	})
+}
+
+func TestProbeFactsScanner(t *testing.T) {
+	var f probeFacts
+	w := f.writer()
+	write := func(s string) {
+		t.Helper()
+		if n, err := w.Write([]byte(s)); n != len(s) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v", s, n, err)
+		}
+	}
+	write("Nov 24 VRRP_Script(chk_proxy) succeeded\n")
+	if f.failing() {
+		t.Fatal("failing after a success")
+	}
+	// A line that arrives in two writes counts once it is complete.
+	write("Nov 24 VRRP_Script(chk_pr")
+	if f.failing() {
+		t.Fatal("failing on half a line")
+	}
+	write("oxy) failed (exited with status 1)\nunrelated\n")
+	if !f.failing() {
+		t.Fatal("not failing after the check failed")
+	}
+	write("VRRP_Script(chk_proxy) succeeded\n")
+	if f.failing() {
+		t.Fatal("still failing after the check succeeded")
+	}
+	write("VRRP_Script(chk_proxy) timed out\n")
+	if !f.failing() {
+		t.Fatal("a timed-out check is a failing check")
+	}
+	f.reset()
+	if f.failing() {
+		t.Fatal("still failing after a reset")
+	}
+	// Another script's lines and a line that is far too long change nothing, and Write never blocks the child.
+	write("VRRP_Script(other) failed (exited with status 1)\n")
+	write(strings.Repeat("x", 100000) + "VRRP_Script(chk_proxy) failed\n")
+	if f.failing() {
+		t.Fatal("an overlong line or another script's line made the check fail")
+	}
+}
+
+func TestRenderNamesTheScriptTheScannerWatches(t *testing.T) {
+	cfg, err := Load(testEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(Render(cfg, "eth0")), "vrrp_script "+scriptName+" {") {
+		t.Fatalf("Render does not define the vrrp_script %q the stderr scanner watches", scriptName)
 	}
 }
