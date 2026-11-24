@@ -373,8 +373,8 @@ jobs:
   # D-57, D-58: the multi-node suite on the oldest and newest Engines, on every
   # pull request. Unlike the integration job there is no dind service: every test
   # starts its own swarm of dind nodes (3 managers and a worker) on a network of
-  # its own, so the in-process TierPlan is reachable from them, and loads the agent
-  # image built here. A leg runs the swarm-tagged internal/agents suite only
+  # its own, so the in-process TierPlan is reachable from them, and loads the agent,
+  # ingress and keepalived images built here. A leg runs the swarm-tagged internal/agents suite only
   # (make test-swarm, shuffled); go test allows 80 minutes and the job 90, so a
   # hang ends in Go's goroutine dump and not in a silent kill (D-22).
   swarm:
@@ -407,6 +407,18 @@ jobs:
           # The runner VMs keep Go caches between runs; restoring the action cache
           # over them while another job on the VM builds corrupts them.
           cache: false
+      # The virtual IP case of the shared suite (26-32) switches ingress and the virtual IP on
+      # through real agents, so the proxy and keepalived images are built on the runner first and
+      # the case loads them into its dind nodes. make test-swarm builds all three images itself
+      # (they are its prerequisites); building them here puts the build in its own step and reuses
+      # the keepalived source tarball cache of the integration job (D-26, A-09).
+      - name: Cache the keepalived source tarball
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/keepalived
+          key: keepalived-source-${{ hashFiles('scripts/keepalived-source.sh') }}
+      - name: Build the ingress and keepalived images
+        run: make ingress-image keepalived-image
       - run: make test-swarm
       # D-21: the failing and hung tests, their packages and the shuffle seed.
       - name: Name the failing tests
