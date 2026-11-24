@@ -108,7 +108,9 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 			"the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. " + changeErrors + " Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code. " +
 			"The answer is 204 with no body, except for a drain of the node that holds the environment's virtual IP: that first stops the node's keepalived through its agent so the address moves to another node (waiting at most 10 seconds for one to report MASTER), " +
 			"and the answer is then 200 with vipHandoff giving the outcome (moved with the new holder, no_candidate, agent_unreachable or timeout). The drain is made whatever the outcome, and each handoff is audited as ingress.vip_handoff with the node, the holder and the outcome.",
-		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
+		// 200 is the documented success with a body, and 204 the one without; the handler sets Status to say which.
+		Tags: []string{"environments"}, DefaultStatus: http.StatusOK,
+		Responses: map[string]*huma.Response{"204": {Description: "No Content: the drain, pause or activate was made and no virtual IP handoff ran"}},
 	}, need, func(ctx context.Context, in *NodeAvailabilityInput) (*NodeAvailabilityOutput, error) {
 		p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 		if p == nil || env == nil {

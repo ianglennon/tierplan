@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -331,6 +332,77 @@ func TestDrainHandoffOutcomesAudited(t *testing.T) {
 			}
 			if len(order) != 2 || order[0] != audit.ActionIngressVIPHandoff || order[1] != audit.ActionNodeAvailabilityChanged {
 				t.Errorf("audit order = %v, want the handoff then the drain", order)
+			}
+		})
+	}
+}
+
+// TestNodeImpactHoldsVIP pins the warnings of a drain of the node that holds the address (UI-SPEC S3, D-25): holds_vip with a
+// ready peer, holds_vip_alone without one, neither of them asking for the name, and never on a pause, promote or demote.
+func TestNodeImpactHoldsVIP(t *testing.T) {
+	t.Parallel()
+	impact := func(t *testing.T, vip *fakeVIP, node, action string) niBody {
+		t.Helper()
+		f, e := naEnvVIP(t, vip)
+		return niOf(t, f.nodeImpact(t, e, node, action))
+	}
+
+	t.Run("a holder with a ready peer", func(t *testing.T) {
+		t.Parallel()
+		b := impact(t, &fakeVIP{holder: "node-4"}, "node-4", "drain")
+		if len(b.Warnings) != 1 || b.Warnings[0] != "holds_vip" || b.NeedsConfirm {
+			t.Fatalf("warnings %v needsConfirm %v, want holds_vip and no confirm", b.Warnings, b.NeedsConfirm)
+		}
+	})
+	t.Run("a holder alone", func(t *testing.T) {
+		t.Parallel()
+		b := impact(t, &fakeVIP{holder: "node-4", alone: true}, "node-4", "drain")
+		if len(b.Warnings) != 1 || b.Warnings[0] != "holds_vip_alone" || b.NeedsConfirm {
+			t.Fatalf("warnings %v needsConfirm %v, want holds_vip_alone and no confirm", b.Warnings, b.NeedsConfirm)
+		}
+	})
+	t.Run("a node that holds nothing", func(t *testing.T) {
+		t.Parallel()
+		b := impact(t, &fakeVIP{holder: "node-4"}, "node-5", "drain")
+		if len(b.Warnings) != 0 || b.NeedsConfirm {
+			t.Fatalf("warnings %v needsConfirm %v, want none", b.Warnings, b.NeedsConfirm)
+		}
+	})
+	t.Run("another warning still asks for the name", func(t *testing.T) {
+		t.Parallel()
+		// node-1 is TierPlan's own node.
+		b := impact(t, &fakeVIP{holder: "node-1"}, "node-1", "drain")
+		if !slices.Equal(b.Warnings, []string{"runs_tierplan", "holds_vip"}) || !b.NeedsConfirm {
+			t.Fatalf("warnings %v needsConfirm %v, want runs_tierplan and holds_vip, confirm needed", b.Warnings, b.NeedsConfirm)
+		}
+	})
+	t.Run("a read that fails leaves the warnings off", func(t *testing.T) {
+		t.Parallel()
+		b := impact(t, &fakeVIP{holder: "node-4", holdsOf: errors.New("unreadable")}, "node-4", "drain")
+		if len(b.Warnings) != 0 || b.NeedsConfirm {
+			t.Fatalf("warnings %v needsConfirm %v, want none", b.Warnings, b.NeedsConfirm)
+		}
+	})
+	t.Run("no virtual IP", func(t *testing.T) {
+		t.Parallel()
+		f, e := naEnv(t, nil)
+		b := niOf(t, f.nodeImpact(t, e, "node-4", "drain"))
+		if len(b.Warnings) != 0 {
+			t.Fatalf("warnings %v, want none", b.Warnings)
+		}
+	})
+	for _, action := range []string{"pause", "promote", "demote"} {
+		t.Run(action+" of the holder", func(t *testing.T) {
+			t.Parallel()
+			node := "node-4"
+			if action == "demote" {
+				node = "node-2"
+			}
+			b := impact(t, &fakeVIP{holder: node}, node, action)
+			for _, w := range b.Warnings {
+				if w == "holds_vip" || w == "holds_vip_alone" {
+					t.Fatalf("%s carries %v, want no virtual IP warning", action, b.Warnings)
+				}
 			}
 		})
 	}

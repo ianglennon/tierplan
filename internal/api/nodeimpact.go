@@ -44,6 +44,10 @@ const (
 	warnRunsTierPlan     = "runs_tierplan"
 	warnOnlyManagerAgent = "only_manager_agent"
 	warnFactsUnreadable  = "facts_unreadable"
+	// warnHoldsVIP and warnHoldsVIPAlone are a drain of the node that holds the environment's virtual IP (D-25): the address
+	// is moved off it first, or, when no other node is ready to take it, is lost until one is. Neither asks for the name.
+	warnHoldsVIP      = "holds_vip"
+	warnHoldsVIPAlone = "holds_vip_alone"
 )
 
 // NodeImpactTask is one task of the node and what the change does to it.
@@ -69,8 +73,8 @@ type NodeImpactBody struct {
 	Version      uint64             `json:"version" doc:"The node's object version as read for this judgement: the version a change made on the strength of it must send back"`
 	Tasks        []NodeImpactTask   `json:"tasks" doc:"For drain and pause, the node's tasks whose desired state is running, by service then slot; empty otherwise"`
 	Managers     NodeImpactManagers `json:"managers" doc:"The manager counts"`
-	Warnings     []string           `json:"warnings" doc:"What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_tierplan (the node hosts TierPlan), only_manager_agent (it has the only manager agent connected to TierPlan), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null"`
-	NeedsConfirm bool               `json:"needsConfirm" doc:"True when the node's name must be typed to make the change: a drain or demote of TierPlan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it"`
+	Warnings     []string           `json:"warnings" doc:"What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_tierplan (the node hosts TierPlan), only_manager_agent (it has the only manager agent connected to TierPlan), facts_unreadable (a manager's state is not known, so the first cannot be judged), holds_vip (a drain of the node that holds the virtual IP: the address is moved to another node first), holds_vip_alone (the same, but no other node is ready to take the address, so it is lost until one is). Never null"`
+	NeedsConfirm bool               `json:"needsConfirm" doc:"True when the node's name must be typed to make the change: a drain or demote of TierPlan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The virtual IP warnings never set it. The server refuses the change without it"`
 }
 
 // nodeImpactInput is everything nodeImpact judges.
@@ -86,6 +90,9 @@ type nodeImpactInput struct {
 	// Services are the swarm's services by ID.
 	Services                       map[string]dockerx.ServiceRow
 	RunsTierPlan, OnlyManagerAgent bool
+	// HoldsVIP is true for a drain of the node that holds the environment's virtual IP, and VIPAlone says no other node is
+	// ready to take the address.
+	HoldsVIP, VIPAlone bool
 }
 
 // majority is how many of n managers make a quorum.
@@ -130,7 +137,14 @@ func nodeImpact(in nodeImpactInput) NodeImpactBody {
 			if in.OnlyManagerAgent {
 				b.Warnings = append(b.Warnings, warnOnlyManagerAgent)
 			}
+			// Only the drain's own warnings ask for the name; the virtual IP's are added after, and never do.
 			b.NeedsConfirm = len(b.Warnings) > 0
+			switch {
+			case in.HoldsVIP && in.VIPAlone:
+				b.Warnings = append(b.Warnings, warnHoldsVIPAlone)
+			case in.HoldsVIP:
+				b.Warnings = append(b.Warnings, warnHoldsVIP)
+			}
 		}
 	case impactPromote:
 		if !isManager {
@@ -288,6 +302,15 @@ func gatherImpact(ctx context.Context, d NodesDeps, envID, nodeID, action string
 	targets := swarmNodeTargets(ctx, d.services(), envID)
 	in.RunsTierPlan = tierplanNode(ctx, d, envID, targets) == nodeID
 	in.OnlyManagerAgent = onlyManagerAgent(targets, envID, nodeID)
+	if action == impactDrain && d.VIP != nil {
+		// A read that fails leaves both off: the drain is judged as it was before the virtual IP existed.
+		holds, alone, err := d.VIP.VIPHolds(ctx, envID, nodeID)
+		if err != nil {
+			d.Log.Warn("could not tell whether the node holds the virtual IP for the drain's impact", "node", nodeID, "error", err)
+		} else {
+			in.HoldsVIP, in.VIPAlone = holds, holds && alone
+		}
+	}
 	return in, nil
 }
 
@@ -310,7 +333,7 @@ func registerNodeImpact(r *httpx.Router, d NodesDeps) {
 		Summary: "What a change to a swarm node will do",
 		Description: "Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. " +
 			"For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). " +
-			"managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_tierplan, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. " +
+			"managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_tierplan, only_manager_agent and facts_unreadable, and, for a drain of the node that holds the environment's virtual IP, holds_vip (the address is moved to another node first) or holds_vip_alone (no other node is ready to take it); neither of those two asks for the name. needsConfirm says the node's name must be typed for the change to be accepted. " +
 			"404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermNodesManage, Scope: rbac.ScopeEnvironment},

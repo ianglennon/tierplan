@@ -2315,7 +2315,7 @@ export interface paths {
         put?: never;
         /**
          * Drain, pause or activate a node
-         * @description Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs TierPlan or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. TierPlan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.
+         * @description Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs TierPlan or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. TierPlan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code. The answer is 204 with no body, except for a drain of the node that holds the environment's virtual IP: that first stops the node's keepalived through its agent so the address moves to another node (waiting at most 10 seconds for one to report MASTER), and the answer is then 200 with vipHandoff giving the outcome (moved with the new holder, no_candidate, agent_unreachable or timeout). The drain is made whatever the outcome, and each handoff is audited as ingress.vip_handoff with the node, the holder and the outcome.
          */
         post: operations["setNodeAvailability"];
         delete?: never;
@@ -2333,7 +2333,7 @@ export interface paths {
         };
         /**
          * What a change to a swarm node will do
-         * @description Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_tierplan, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         * @description Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_tierplan, only_manager_agent and facts_unreadable, and, for a drain of the node that holds the environment's virtual IP, holds_vip (the address is moved to another node first) or holds_vip_alone (no other node is ready to take it); neither of those two asks for the name. needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
          */
         get: operations["getNodeActionImpact"];
         put?: never;
@@ -12296,6 +12296,10 @@ export interface components {
             /** @description The agent's version; empty when no agent is connected there and for the local socket's node */
             version: string;
         };
+        NodeAvailabilityBody: {
+            /** @description How the move of the virtual IP off the node went; present only for a drain of the node that held it */
+            vipHandoff?: components["schemas"]["VIPHandoffBody"];
+        };
         NodeAvailabilityRequest: {
             /**
              * @description What the node's spec should let the swarm do with it: active, pause (no new tasks) or drain (move its tasks away)
@@ -12409,7 +12413,7 @@ export interface components {
             hostname: string;
             /** @description The manager counts */
             managers: components["schemas"]["NodeImpactManagers"];
-            /** @description True when the node's name must be typed to make the change: a drain or demote of TierPlan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it */
+            /** @description True when the node's name must be typed to make the change: a drain or demote of TierPlan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The virtual IP warnings never set it. The server refuses the change without it */
             needsConfirm: boolean;
             /** @description For drain and pause, the node's tasks whose desired state is running, by service then slot; empty otherwise */
             tasks: components["schemas"]["NodeImpactTask"][] | null;
@@ -12418,7 +12422,7 @@ export interface components {
              * @description The node's object version as read for this judgement: the version a change made on the strength of it must send back
              */
             version: number;
-            /** @description What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_tierplan (the node hosts TierPlan), only_manager_agent (it has the only manager agent connected to TierPlan), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null */
+            /** @description What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_tierplan (the node hosts TierPlan), only_manager_agent (it has the only manager agent connected to TierPlan), facts_unreadable (a manager's state is not known, so the first cannot be judged), holds_vip (a drain of the node that holds the virtual IP: the address is moved to another node first), holds_vip_alone (the same, but no other node is ready to take the address, so it is lost until one is). Never null */
             warnings: string[] | null;
         };
         NodeImpactManagers: {
@@ -17854,6 +17858,15 @@ export interface components {
             /** @description The lower-cased username */
             username: string;
         };
+        VIPHandoffBody: {
+            /** @description The host name of the node that took the address; present only when the outcome is moved */
+            holder?: string;
+            /**
+             * @description moved (another node reported MASTER, named by holder), no_candidate (no other node was ready to take the address, so nothing was stopped), agent_unreachable (the node's agent was not connected or the stop failed) or timeout (no other node reported MASTER within 10 seconds). The drain was made whatever the outcome
+             * @enum {string}
+             */
+            outcome: "moved" | "no_candidate" | "agent_unreachable" | "timeout";
+        };
         VerifySetupTokenInputBody: {
             /** @description The setup token printed in the container log */
             token: string;
@@ -23164,21 +23177,21 @@ export interface operations {
             };
         };
         responses: {
-            /** @description No Content */
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeAvailabilityBody"];
+                };
+            };
+            /** @description No Content: the drain, pause or activate was made and no virtual IP handoff ran */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
             };
         };
     };
