@@ -15,9 +15,10 @@
 #    behind fails. With --check-clone the checked-out tag is compared too: its HEAD
 #    must be the commit the notice records (a force-moved upstream tag changes it)
 #    and its LICENSE.md must equal the shipped one.
-# 2. The distroless "static" digest. Dockerfile, agent/Dockerfile and
-#    ingress/Dockerfile share one base and are bumped together; a bump that
-#    reaches only one or two of them fails.
+# 2. The distroless "static" digest. Dockerfile, agent/Dockerfile, ingress/Dockerfile
+#    and keepalived/Dockerfile share one base and are bumped together; a bump that
+#    reaches only some of them fails. keepalived/Dockerfile has an Alpine build stage
+#    first, so its digest is read from its last FROM line (D-26, D-28).
 #
 # Usage: scripts/ingress-pin-check.sh [--print-tag] [--check-clone <traefik-clone>] [directory]
 # The directory defaults to the repository root. With --print-tag, and only after
@@ -57,7 +58,7 @@ DOCKERFILE_TRAEFIK=ingress/Dockerfile
 HARNESS=internal/ingressrender/traefiktest/traefiktest.go
 NOTICE=ingress/image/doc/NOTICE.md
 LICENCE_FILE=ingress/image/doc/LICENSE.md
-BASES="Dockerfile agent/Dockerfile ingress/Dockerfile"
+BASES="Dockerfile agent/Dockerfile ingress/Dockerfile keepalived/Dockerfile"
 
 REF='traefik:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}'
 BASE_REF='gcr\.io/distroless/static-debian13@sha256:[0-9a-f]{64}'
@@ -136,7 +137,8 @@ fi
 first_file=""
 first_digest=""
 for f in ${BASES}; do
-  d="$(sed -nE "s#^FROM (${BASE_REF})([[:space:]].*)?\$#\\1#p" "${f}" 2>/dev/null | head -n 1 || true)"
+  # The last FROM of the file is the final stage, the image that ships: it must be the distroless one.
+  d="$(grep -E '^FROM ' "${f}" 2>/dev/null | tail -n 1 | sed -nE "s#^FROM (${BASE_REF})([[:space:]].*)?\$#\\1#p" || true)"
   if [ -z "${d}" ]; then
     echo "PIN CHECK: ${f} holds no distroless static FROM line with a digest" >&2
     bad=1
@@ -146,7 +148,7 @@ for f in ${BASES}; do
     first_file="${f}"
     first_digest="${d}"
   elif [ "${d}" != "${first_digest}" ]; then
-    echo "PIN CHECK: ${f} uses ${d} but ${first_file} uses ${first_digest}; bump the distroless digest in all three Dockerfiles together" >&2
+    echo "PIN CHECK: ${f} uses ${d} but ${first_file} uses ${first_digest}; bump the distroless digest in all four Dockerfiles together" >&2
     bad=1
   fi
 done

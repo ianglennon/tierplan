@@ -311,10 +311,12 @@ pin_ref_other_digest="traefik:v9.9.9@sha256:$(printf 'b%.0s' $(seq 1 64))"
 pin_base="gcr.io/distroless/static-debian13@sha256:$(printf 'c%.0s' $(seq 1 64))"
 pin_base_other="gcr.io/distroless/static-debian13@sha256:$(printf 'd%.0s' $(seq 1 64))"
 pin_notice_commit="$(printf '1%.0s' $(seq 1 40))"
-# pin_fixture <traefik ref in the harness> <distroless in agent/Dockerfile>: rewrites the four files.
+pin_alpine="alpine:3.24@sha256:$(printf 'e%.0s' $(seq 1 64))"
+# pin_fixture <traefik ref in the harness> <distroless in agent/Dockerfile> [distroless in keepalived/Dockerfile]:
+# rewrites the files. keepalived/Dockerfile has an Alpine build stage first, as the real one does (D-26).
 pin_fixture() {
   rm -rf "${pinfix}"
-  mkdir -p "${pinfix}/agent" "${pinfix}/ingress/image/doc" "${pinfix}/internal/ingressrender/traefiktest"
+  mkdir -p "${pinfix}/agent" "${pinfix}/keepalived" "${pinfix}/ingress/image/doc" "${pinfix}/internal/ingressrender/traefiktest"
   # The licence evidence the image ships: it names the pinned tag, and records a commit (WR-B-02).
   printf '| Program | Traefik v9.9.9 |\n| Source | https://example.invalid/tree/v9.9.9 |\n| Commit | %s |\n\nThree exceptions were needed for Traefik v9.9.9.\n' \
     "${pin_notice_commit}" >"${pinfix}/ingress/image/doc/NOTICE.md"
@@ -322,6 +324,7 @@ pin_fixture() {
   printf 'FROM %s\nCOPY a /a\n' "${pin_base}" >"${pinfix}/Dockerfile"
   printf 'FROM %s\nCOPY a /a\n' "$2" >"${pinfix}/agent/Dockerfile"
   printf 'FROM %s AS traefik\n\nFROM %s\nCOPY a /a\n' "${pin_ref}" "${pin_base}" >"${pinfix}/ingress/Dockerfile"
+  printf 'FROM %s AS build\nRUN true\n\nFROM %s\nCOPY a /a\n' "${pin_alpine}" "${3:-${pin_base}}" >"${pinfix}/keepalived/Dockerfile"
   printf 'package traefiktest\n\nconst (\n\tTraefikImage = "%s"\n)\n' "$1" >"${pinfix}/internal/ingressrender/traefiktest/traefiktest.go"
 }
 pin_fixture "${pin_ref}" "${pin_base}"
@@ -338,7 +341,16 @@ expect_out "pin-check-digest-differs names the harness" "internal/ingressrender/
 pin_fixture "${pin_ref}" "${pin_base_other}"
 expect fail "pin-check-distroless-differs" scripts/ingress-pin-check.sh "${pinfix}"
 expect_out "pin-check-distroless-differs names agent/Dockerfile" "agent/Dockerfile uses ${pin_base_other}"
+# D-26, D-28: the keepalived image's final base (it has an Alpine build stage first) must be the same digest.
+pin_fixture "${pin_ref}" "${pin_base}" "${pin_base_other}"
+expect fail "pin-check-keepalived-differs" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-keepalived-differs names keepalived/Dockerfile" "keepalived/Dockerfile uses ${pin_base_other}"
 # --print-tag prints nothing when a check failed.
+pin_fixture "${pin_ref}" "${pin_base}"
+printf 'FROM %s AS build\nRUN true\n' "${pin_alpine}" >"${pinfix}/keepalived/Dockerfile"
+expect fail "pin-check-keepalived-final-not-distroless" scripts/ingress-pin-check.sh "${pinfix}"
+expect_out "pin-check-keepalived-final-not-distroless names keepalived/Dockerfile" "keepalived/Dockerfile holds no distroless static FROM line"
+pin_fixture "${pin_ref}" "${pin_base_other}"
 expect fail "pin-check-print-tag-after-failure" scripts/ingress-pin-check.sh --print-tag "${pinfix}"
 if grep -q '^v9\.9\.9$' <<<"${LAST_OUT}"; then
   echo "SCRIPT TEST FAIL: pin-check-print-tag-after-failure (a tag was printed after a failed check)"
