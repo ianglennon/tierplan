@@ -64,6 +64,29 @@ type ingressDeployDeps struct {
 // newIngressDeploy builds the deployer from the server's parts. A nil Stacks leaves the deployer listing no stacks to
 // redeploy.
 func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
+	return ingressdeploy.New(ingressDeployOf(d))
+}
+
+// ingressLoop is one loop the deployer runs for as long as the server does.
+type ingressLoop struct {
+	// Name says what the loop does, for a log line and a test.
+	Name string
+	Run  func(ctx context.Context)
+}
+
+// ingressDeployLoops are the loops the server starts for the deployer, each until its context ends: the ensure loop, the
+// wipe of a certificate cache on a node that was away at the switch-off, and the reader of the virtual IP's moves (D-21).
+func ingressDeployLoops(svc *ingressdeploy.Service) []ingressLoop {
+	return []ingressLoop{
+		{Name: "ensure", Run: svc.Run},
+		{Name: "wipes", Run: svc.RunWipes},
+		{Name: "vip_reader", Run: svc.RunVIPReader},
+	}
+}
+
+// ingressDeployOf maps the server's parts to the deployer's dependencies. Its Managers is the cluster reader, whose manager
+// table the virtual IP's gate and status read (D-19).
+func ingressDeployOf(d ingressDeployDeps) ingressdeploy.Deps {
 	var events func(ctx context.Context) (<-chan envs.HealthEvent, func())
 	if d.Broker != nil {
 		events = func(ctx context.Context) (<-chan envs.HealthEvent, func()) {
@@ -72,7 +95,12 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 			return ch, cancel
 		}
 	}
-	return ingressdeploy.New(ingressdeploy.Deps{
+	// A nil cluster reader leaves the interface nil, not holding a nil pointer, so the deployer sees no table to read.
+	var managers ingressdeploy.ManagerPolicies
+	if d.Clusters != nil {
+		managers = d.Clusters
+	}
+	return ingressdeploy.Deps{
 		Engine:        ingressEngine{agg: d.Aggregator, clusters: d.Clusters},
 		Envs:          ingressEnvReader{st: d.Store, svc: d.Envs},
 		Store:         d.Ingress,
@@ -97,7 +125,8 @@ func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
 		Pins:          d.Pins,
 		Clock:         d.Clock,
 		Log:           d.Log,
-	})
+		Managers:      managers,
+	}
 }
 
 // ingressSystem is the deployer of a standalone host's proxy project: the stack pipeline's own system deploy, on the server's
