@@ -1,0 +1,32 @@
+global_defs {
+    enable_script_security
+    script_user root
+    vrrp_garp_master_refresh 60
+    vrrp_notify_fifo /run/keepalived.fifo
+}
+vrrp_script chk_proxy {
+    script "/usr/local/bin/tierplan-ingress probe"
+    interval 1
+    timeout 1
+    fall 2
+    rise 2
+}
+vrrp_instance TIERPLAN_VIP {
+    state BACKUP
+    interface eth0
+    virtual_router_id 77
+    priority 100
+    advert_int 1
+    nopreempt
+    auth_hmac {
+        key 1 file:/etc/tierplan-keepalived/key
+        active_key 1
+        mode enforce
+        anti_replay time
+        time_window 30
+    }
+    virtual_ipaddress {
+        192.168.1.50/24 dev eth0
+    }
+    track_script { chk_proxy }
+}
