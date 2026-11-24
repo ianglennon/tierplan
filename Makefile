@@ -175,11 +175,13 @@ test-int: agent-image ingress-image keepalived-image
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
 # of 3 managers and 1 worker, for the engine TIERPLAN_TEST_ENGINE names (default
-# 29). Needs Docker it can reach, with buildx for the agent image. Only the
+# 29). Needs Docker it can reach, with buildx for the agent image; the virtual IP
+# case (Phase 26) also needs the ingress and keepalived images, so they are built
+# first and the case loads them into the nodes. Only the
 # swarm-tagged package (internal/agents) runs, derived like test-int's list. One
 # engine takes about 55 minutes on the dev host, so the 80 minute timeout (CI allows
 # 90 for the job, D-22) is a margin, not a target.
-test-swarm: agent-image
+test-swarm: agent-image ingress-image keepalived-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh swarm)"; \
 	if [ -z "$$pkgs" ]; then echo "test-swarm: no package has swarm-tagged tests" >&2; exit 1; fi; \
 	echo "test-swarm: $$pkgs"; \
