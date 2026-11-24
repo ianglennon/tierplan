@@ -26,6 +26,7 @@ type disablePreviewResp struct {
 		Service, Network string
 		Secrets          []string
 		Volumes          []struct{ NodeID, Name string }
+		VirtualIP        *struct{ Address, Secret string } `json:"virtualIP"`
 	} `json:"removes"`
 	Unreachable []string `json:"unreachable"`
 }
@@ -96,8 +97,8 @@ func TestDisableRoute(t *testing.T) {
 		t.Fatalf("read the job: %d %s", rec.Code, rec.Body)
 	}
 	job := decodeBody[jobResp](t, rec)
-	if job.Kind != "ingress_disable" || job.State != jobs.JobDone || len(job.Items) != 7 {
-		t.Fatalf("job = %+v, want a done ingress_disable with seven items", job)
+	if job.Kind != "ingress_disable" || job.State != jobs.JobDone || len(job.Items) != 8 {
+		t.Fatalf("job = %+v, want a done ingress_disable with eight items", job)
 	}
 	var ids []string
 	for _, it := range job.Items {
@@ -106,7 +107,7 @@ func TestDisableRoute(t *testing.T) {
 			t.Errorf("item %s = %q (code %q), want done", it.ID, it.State, it.Code)
 		}
 	}
-	if want := []string{"switch_off", "service", "volumes", "network", "secret", "token", "nodes"}; !slices.Equal(ids, want) {
+	if want := []string{"virtual_ip", "switch_off", "service", "volumes", "network", "secret", "token", "nodes"}; !slices.Equal(ids, want) {
 		t.Errorf("items = %v, want %v", ids, want)
 	}
 	if _, _, err := f.cli.ServiceInspect(testsupport.Context(t), ingress.ServiceName); err == nil {

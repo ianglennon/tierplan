@@ -1563,7 +1563,7 @@ export interface paths {
         put?: never;
         /**
          * Switch ingress off for a swarm or standalone environment
-         * @description Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; On a standalone host the job removes the proxy container, the ingress network and the cache volume through the host's one node; a network another container still uses fails the job, naming it. 409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).
+         * @description Refused while routes are live; otherwise answers 202 with a job's ID at once. On a swarm the job runs in this order: remove the virtual IP when the environment has one (its keepalived service, the wait for every node to release the address, its key secret and its row), which is the first item, virtual_ip, and ends vip_remove_failed with every later item not run when it fails, so the proxies are never removed under a running keepalived and ingress stays on; then stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; On a standalone host the job removes the proxy container, the ingress network and the cache volume through the host's one node; a network another container still uses fails the job, naming it. 409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).
          */
         post: operations["disableIngress"];
         delete?: never;
@@ -1583,7 +1583,7 @@ export interface paths {
         put?: never;
         /**
          * Preview switching ingress off for a swarm or standalone environment
-         * @description Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         * @description Says what switching ingress off would remove (the virtual IP, when the environment has one, with the address and the name of its key secret in removes.virtualIP; the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
          */
         post: operations["previewIngressDisable"];
         delete?: never;
@@ -10650,12 +10650,20 @@ export interface components {
             secrets: string[] | null;
             /** @description The proxy service's name; empty when the swarm was read and does not hold it */
             service: string;
+            /** @description The environment's virtual IP, with the name of its key secret, which the switch-off removes before it touches the proxies; absent when the environment has none and on a standalone host */
+            virtualIP?: components["schemas"]["IngressDisableVIPBody"];
             /** @description The nodes whose certificate cache volume is wiped: every node of a swarm, the one host of a standalone environment */
             volumes: components["schemas"]["IngressDisableNodeBody"][] | null;
         };
         IngressDisableStartBody: {
             /** @description The disable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
             jobId: string;
+        };
+        IngressDisableVIPBody: {
+            /** @description The virtual IP with the prefix length of its segment, for example 192.168.1.250/24 */
+            address: string;
+            /** @description The name of the swarm secret that holds the virtual IP's key; never the key */
+            secret: string;
         };
         IngressDomainBody: {
             /**
@@ -10762,7 +10770,7 @@ export interface components {
             finishedAt: string;
             /** @description The job ID */
             id: string;
-            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable */
+            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; virtual_ip (which removes the virtual IP first, and is done with nothing removed when there is none), switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
              * @description What the job does: ingress_enable, ingress_disable, or ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person)
