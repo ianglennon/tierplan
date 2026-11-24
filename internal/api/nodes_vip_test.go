@@ -6,6 +6,8 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"testing"
@@ -179,5 +181,157 @@ func TestDrainHandsOffTheVIP(t *testing.T) {
 	}
 	if drain := f.nodeAudits(t); len(drain) != 1 || drain[0].Action != audit.ActionNodeAvailabilityChanged || drain[0].Details["code"] != "done" {
 		t.Errorf("drain audit rows = %+v, want the drain's own row beside the handoff", drain)
+	}
+}
+
+// TestDrainOfANonHolderIsUnchanged pins that nothing else triggers the handoff (PROH-26-04): a drain of a node that does not
+// hold the address, and a pause, activate, promote or demote of the one that does, answer 204 with no body as before and
+// record no handoff.
+func TestDrainOfANonHolderIsUnchanged(t *testing.T) {
+	t.Parallel()
+	vip := &fakeVIP{holder: "node-4", result: ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffMoved, Holder: "wrk-2"}}
+	f, e := naEnvVIP(t, vip)
+
+	// A drain of a node that holds nothing: the hook is asked and answers that it does not.
+	rec := f.setAvailability(t, e, "node-5", `{"availability":"drain","version":4}`)
+	if rec.code != http.StatusNoContent || len(rec.body) != 0 {
+		t.Fatalf("drain of a non-holder = %d %q, want 204 with no body", rec.code, rec.body)
+	}
+	if calls := vip.called(); len(calls) != 1 || calls[0] != "node-5" {
+		t.Fatalf("handoff calls = %v, want the one for the drained node", calls)
+	}
+
+	// Every other change to the holder is judged without the hook.
+	for _, c := range []struct {
+		name, path, body string
+	}{
+		{"pause", "availability", `{"availability":"pause","version":3}`},
+		{"promote", "role", `{"role":"manager","version":4}`},
+	} {
+		var r *envRec
+		if c.path == "role" {
+			r = f.setRole(t, e, "node-4", c.body)
+		} else {
+			r = f.setAvailability(t, e, "node-4", c.body)
+		}
+		if r.code != http.StatusNoContent || len(r.body) != 0 {
+			t.Fatalf("%s of the holder = %d %q, want 204 with no body", c.name, r.code, r.body)
+		}
+	}
+	if calls := vip.called(); len(calls) != 1 {
+		t.Fatalf("handoff calls = %v after a pause and a promote, want no more", calls)
+	}
+	// The pause bumped the node's version; read it fresh for the activate and the demote.
+	ni := niOf(t, f.nodeImpact(t, e, "node-4", "pause"))
+	if r := f.setAvailability(t, e, "node-4", fmt.Sprintf(`{"availability":"active","version":%d}`, ni.Version)); r.code != http.StatusNoContent || len(r.body) != 0 {
+		t.Fatalf("activate of the holder = %d %q, want 204 with no body", r.code, r.body)
+	}
+	ni = niOf(t, f.nodeImpact(t, e, "node-4", "demote"))
+	if r := f.setRole(t, e, "node-4", fmt.Sprintf(`{"role":"worker","version":%d}`, ni.Version)); r.code != http.StatusNoContent || len(r.body) != 0 {
+		t.Fatalf("demote of the holder = %d %q, want 204 with no body", r.code, r.body)
+	}
+	if calls := vip.called(); len(calls) != 1 {
+		t.Fatalf("handoff calls = %v, want only the first drain's", calls)
+	}
+	if rows := f.vipAudits(t); len(rows) != 0 {
+		t.Errorf("handoff audit rows = %+v, want none", rows)
+	}
+}
+
+// TestDrainRefusedRunsNoHandoff pins that a drain the confirm check refuses never reaches the hook, so no keepalived is
+// stopped for a drain that will not be made.
+func TestDrainRefusedRunsNoHandoff(t *testing.T) {
+	t.Parallel()
+	// node-1 is TierPlan's own node, so its drain needs its name typed.
+	vip := &fakeVIP{holder: "node-1", result: ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffMoved, Holder: "mgr-2"}}
+	f, e := naEnvVIP(t, vip)
+	rec := f.setAvailability(t, e, "node-1", `{"availability":"drain","version":7}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
+		t.Fatalf("unconfirmed drain = %d %s (%s), want 422 confirmation_required", rec.code, rec.body, rec.ptyp)
+	}
+	if calls := vip.called(); len(calls) != 0 {
+		t.Fatalf("handoff calls = %v, want none for a refused drain", calls)
+	}
+	if rows := f.vipAudits(t); len(rows) != 0 || len(f.fake.NodeUpdates()) != 0 {
+		t.Fatalf("handoff rows %+v and updates %+v, want neither", rows, f.fake.NodeUpdates())
+	}
+}
+
+// TestDrainHandoffOutcomesAudited pins that every outcome is audited with the node, the holder and the outcome, that the
+// drain's own row follows it, and that none of them turns the drain into an error (PROH-26-04).
+func TestDrainHandoffOutcomesAudited(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name       string
+		result     ingressdeploy.VIPHandoff
+		err        error
+		wantStatus int
+		wantResult audit.Result
+	}{
+		{"moved", ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffMoved, Holder: "wrk-2"}, nil, http.StatusOK, audit.ResultSuccess},
+		{"no_candidate", ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffNoCandidate}, nil, http.StatusOK, audit.ResultSuccess},
+		{"agent_unreachable", ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffAgentUnreachable}, nil, http.StatusOK, audit.ResultFailure},
+		{"timeout", ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffTimeout}, nil, http.StatusOK, audit.ResultFailure},
+		// A hook that cannot even tell whether the node holds the address leaves the drain to be made as before.
+		{"unknown", ingressdeploy.VIPHandoff{}, errors.New("the proxy table is unreadable"), http.StatusNoContent, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			vip := &fakeVIP{holder: "node-4", result: c.result, err: c.err}
+			f, e := naEnvVIP(t, vip)
+			rec := f.setAvailability(t, e, "node-4", `{"availability":"drain","version":3}`)
+			if rec.code != c.wantStatus {
+				t.Fatalf("status = %d: %s, want %d", rec.code, rec.body, c.wantStatus)
+			}
+			if ups := f.fake.NodeUpdates(); len(ups) != 1 || ups[0].Spec.Availability != "drain" {
+				t.Fatalf("updates = %+v, want the drain made whatever the outcome", ups)
+			}
+			if c.err != nil {
+				if len(rec.body) != 0 || len(f.vipAudits(t)) != 0 {
+					t.Errorf("body %q and handoff rows %+v, want neither when the hook could not tell", rec.body, f.vipAudits(t))
+				}
+				return
+			}
+			var got struct {
+				VIPHandoff struct {
+					Outcome string `json:"outcome"`
+					Holder  string `json:"holder"`
+				} `json:"vipHandoff"`
+			}
+			if err := json.Unmarshal(rec.body, &got); err != nil {
+				t.Fatalf("body %s: %v", rec.body, err)
+			}
+			if got.VIPHandoff.Outcome != c.name || got.VIPHandoff.Holder != c.result.Holder {
+				t.Errorf("vipHandoff = %+v, want %s with holder %q", got.VIPHandoff, c.name, c.result.Holder)
+			}
+			rows := f.vipAudits(t)
+			if len(rows) != 1 {
+				t.Fatalf("handoff rows = %+v, want one", rows)
+			}
+			r := rows[0]
+			if r.Result != string(c.wantResult) || r.Details["node"] != "wrk-1" || r.Details["holder"] != c.result.Holder || r.Details["outcome"] != c.name {
+				t.Errorf("handoff row = %+v, want %s with node wrk-1 and holder %q", r, c.wantResult, c.result.Holder)
+			}
+			if c.wantResult == audit.ResultFailure && r.Reason != c.name {
+				t.Errorf("handoff reason = %q, want %q", r.Reason, c.name)
+			}
+			// The handoff's row comes first, and the drain's own follows it.
+			var order []string
+			all, err := f.st.Read.Query(`SELECT action FROM audit_log WHERE action IN (?, ?) ORDER BY seq`, audit.ActionIngressVIPHandoff, audit.ActionNodeAvailabilityChanged)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = all.Close() }()
+			for all.Next() {
+				var a string
+				if err := all.Scan(&a); err != nil {
+					t.Fatal(err)
+				}
+				order = append(order, a)
+			}
+			if len(order) != 2 || order[0] != audit.ActionIngressVIPHandoff || order[1] != audit.ActionNodeAvailabilityChanged {
+				t.Errorf("audit order = %v, want the handoff then the drain", order)
+			}
+		})
 	}
 }
