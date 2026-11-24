@@ -1,0 +1,74 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "tierplan-keepalived",
+  "documentNamespace": "https://spdx.org/spdxdocs/tierplan-keepalived-2.4.3-a0faef8e401c143487b131b526df7541c1e33d9b8814642fa9dfe8bb250a9632",
+  "creationInfo": {
+    "created": "@CREATED@",
+    "creators": [
+      "Tool: tierplan keepalived/Dockerfile"
+    ]
+  },
+  "documentDescribes": [
+    "SPDXRef-Package-keepalived"
+  ],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-keepalived",
+      "name": "keepalived",
+      "versionInfo": "2.4.3",
+      "downloadLocation": "https://www.keepalived.org/software/keepalived-2.4.3.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-2.0-or-later",
+      "licenseDeclared": "GPL-2.0-or-later",
+      "copyrightText": "NOASSERTION",
+      "homepage": "https://www.keepalived.org/",
+      "description": "VRRP daemon, built from the unmodified source tarball with LVS, iptables, nftables, systemd and track_process disabled",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "a0faef8e401c143487b131b526df7541c1e33d9b8814642fa9dfe8bb250a9632"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/keepalived@2.4.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-openssl",
+      "name": "openssl",
+      "versionInfo": "@OPENSSL_VERSION@",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "homepage": "https://www.openssl.org/",
+      "description": "libcrypto, linked statically into keepalived for auth_hmac; the version of Alpine's openssl-libs-static package in the build stage",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:apk/alpine/openssl@@OPENSSL_VERSION@"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-keepalived"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-keepalived",
+      "relationshipType": "STATIC_LINK",
+      "relatedSpdxElement": "SPDXRef-Package-openssl"
+    }
+  ]
+}

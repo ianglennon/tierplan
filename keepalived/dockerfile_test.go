@@ -8,6 +8,7 @@
 package keepalived_test
 
 import (
+	"encoding/json"
 	"os"
 	"regexp"
 	"strings"
@@ -161,6 +162,27 @@ func TestKeepalivedDockerfileShape(t *testing.T) {
 		}
 	}
 
+	// The evidence the image carries (D-27): the filled SBOM entry and the notice.
+	if !final.has(regexp.MustCompile(`^COPY --from=build /out/sbom/keepalived\.spdx\.json /usr/share/tierplan/sbom/keepalived\.spdx\.json$`)) {
+		t.Errorf("the final stage does not copy the filled SBOM to /usr/share/tierplan/sbom/keepalived.spdx.json")
+	}
+	if !final.has(regexp.MustCompile(`^COPY keepalived/image/doc/NOTICE\.md /usr/share/doc/tierplan-keepalived/NOTICE\.md$`)) {
+		t.Errorf("the final stage does not copy the notice to /usr/share/doc/tierplan-keepalived/")
+	}
+	// The build stage fills the template and fails if a placeholder is left.
+	if !build.has(regexp.MustCompile(`COPY keepalived/image/sbom/keepalived\.spdx\.json\.in `)) {
+		t.Errorf("the build stage does not copy the SBOM template")
+	}
+	if !build.has(regexp.MustCompile(`apk info -v openssl-libs-static`)) || !build.has(regexp.MustCompile(`@OPENSSL_VERSION@`)) {
+		t.Errorf("the build stage does not read OpenSSL's version from the installed openssl-libs-static package")
+	}
+	if !build.has(regexp.MustCompile(`@CREATED@`)) || !build.has(regexp.MustCompile(`SOURCE_DATE_EPOCH`)) {
+		t.Errorf("the build stage does not fill the created time from SOURCE_DATE_EPOCH")
+	}
+	if !build.has(regexp.MustCompile(`grep -Eq '@\[A-Z_\]\+@'`)) {
+		t.Errorf("the build stage does not fail when a placeholder is left in the SBOM")
+	}
+
 	// The helper is PID 1, there is no USER (VRRP needs root and raw sockets) and no HEALTHCHECK (A-08).
 	if !final.has(regexp.MustCompile(`^ENTRYPOINT \["/usr/local/bin/tierplan-ingress", "vip-entrypoint"\]$`)) {
 		t.Errorf(`the final stage's ENTRYPOINT is not ["/usr/local/bin/tierplan-ingress", "vip-entrypoint"]`)
@@ -191,5 +213,85 @@ func TestOnlyTheKeepalivedImageCarriesGPL(t *testing.T) {
 		if m := gplName.FindString(text); m != "" {
 			t.Errorf("%s names the GPL (%q); GPL code belongs in keepalived/Dockerfile alone", path, strings.TrimSpace(m))
 		}
+	}
+}
+
+// spdxDoc is the part of an SPDX 2.3 JSON document the template test reads.
+type spdxDoc struct {
+	SPDXVersion string `json:"spdxVersion"`
+	Packages    []struct {
+		Name             string `json:"name"`
+		VersionInfo      string `json:"versionInfo"`
+		DownloadLocation string `json:"downloadLocation"`
+		LicenseConcluded string `json:"licenseConcluded"`
+		LicenseDeclared  string `json:"licenseDeclared"`
+		Checksums        []struct {
+			Algorithm string `json:"algorithm"`
+			Value     string `json:"checksumValue"`
+		} `json:"checksums"`
+	} `json:"packages"`
+}
+
+// TestKeepalivedSBOMTemplate fills the two placeholders of the SBOM template as the build stage does and
+// checks the result is SPDX 2.3 JSON that lists keepalived 2.4.3 under GPL-2.0-or-later with the tarball's
+// URL and hash, and OpenSSL under Apache-2.0 (D-27).
+func TestKeepalivedSBOMTemplate(t *testing.T) {
+	text := readFile(t, "image/sbom/keepalived.spdx.json.in")
+	for _, p := range []string{"@OPENSSL_VERSION@", "@CREATED@"} {
+		if !strings.Contains(text, p) {
+			t.Errorf("the template has no %s placeholder", p)
+		}
+	}
+	filled := strings.NewReplacer("@OPENSSL_VERSION@", "3.5.4-r0", "@CREATED@", "2026-07-14T00:00:00Z").Replace(text)
+	if m := regexp.MustCompile(`@[A-Z_]+@`).FindString(filled); m != "" {
+		t.Errorf("a placeholder %s is left after the two are replaced", m)
+	}
+
+	var doc spdxDoc
+	if err := json.Unmarshal([]byte(filled), &doc); err != nil {
+		t.Fatalf("the filled template is not JSON: %v", err)
+	}
+	if doc.SPDXVersion != "SPDX-2.3" {
+		t.Errorf("spdxVersion is %q, want SPDX-2.3", doc.SPDXVersion)
+	}
+
+	var sawKeepalived, sawOpenSSL bool
+	for _, p := range doc.Packages {
+		switch p.Name {
+		case "keepalived":
+			sawKeepalived = true
+			if p.VersionInfo != "2.4.3" {
+				t.Errorf("keepalived versionInfo is %q, want 2.4.3", p.VersionInfo)
+			}
+			if p.LicenseConcluded != "GPL-2.0-or-later" || p.LicenseDeclared != "GPL-2.0-or-later" {
+				t.Errorf("keepalived licences are %q and %q, want GPL-2.0-or-later", p.LicenseConcluded, p.LicenseDeclared)
+			}
+			if p.DownloadLocation != keepalivedSource {
+				t.Errorf("keepalived downloadLocation is %q, want %s", p.DownloadLocation, keepalivedSource)
+			}
+			var hash bool
+			for _, c := range p.Checksums {
+				if c.Algorithm == "SHA256" && c.Value == keepalivedSHA256 {
+					hash = true
+				}
+			}
+			if !hash {
+				t.Errorf("keepalived has no SHA256 checksum equal to the D-26 hash")
+			}
+		case "openssl":
+			sawOpenSSL = true
+			if p.LicenseConcluded != "Apache-2.0" || p.LicenseDeclared != "Apache-2.0" {
+				t.Errorf("openssl licences are %q and %q, want Apache-2.0", p.LicenseConcluded, p.LicenseDeclared)
+			}
+			if p.VersionInfo != "3.5.4-r0" {
+				t.Errorf("openssl versionInfo is %q, want the filled version", p.VersionInfo)
+			}
+		}
+	}
+	if !sawKeepalived {
+		t.Error("the template lists no keepalived package")
+	}
+	if !sawOpenSSL {
+		t.Error("the template lists no openssl package")
 	}
 }
