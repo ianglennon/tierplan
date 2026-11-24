@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke ingress-image ingress-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke ingress-image ingress-image-smoke keepalived-image edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -159,13 +159,14 @@ test-summary:
 # dind (they need a network the in-process TierPlan is reachable on) and load the
 # agent image into it, so the image is built first. The ingress node tests run the
 # real tierplan-ingress image the same way (23-16), so that is built first too.
+# The virtual IP tests run the keepalived image (26-01), built first as well.
 #
 # Only the packages whose tests change under the tag run (D-05 shuffles them):
 # scripts/tagged-packages.sh derives the list, so a newly tagged package is never
 # missed, and an empty list fails the target. Every other internal package is the
 # unit suite, which `make test` already ran. $(shell) expands inside the recipe
 # only, so no other target pays for `go list`.
-test-int: agent-image ingress-image
+test-int: agent-image ingress-image keepalived-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh integration)"; \
 	if [ -z "$$pkgs" ]; then echo "test-int: no package has integration-tagged tests" >&2; exit 1; fi; \
 	echo "test-int: $$pkgs"; \
@@ -419,6 +420,26 @@ ingress-image:
 		-ldflags "-s -w $(if $(INGRESS_VERSION),-X $(INGRESS_VERSION_PKG).Version=$(INGRESS_VERSION))" \
 		-o $(abspath $(INGRESS_CTX))/linux/$(INGRESS_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
 	docker buildx build --platform linux/$(INGRESS_ARCH) -f ingress/Dockerfile -t $(INGRESS_TAG) --load $(INGRESS_CTX)
+
+# The keepalived image for this machine's architecture (D-26), tagged KEEPALIVED_TAG
+# (default tierplan-keepalived:dev) and loaded into the local engine. keepalived is
+# compiled in the build stage from the source tarball scripts/keepalived-source.sh
+# fetches and checks against the pinned sha256, so building needs the network once.
+# The context is laid out as goreleaser lays it out: $TARGETPLATFORM/tierplan-ingress
+# (the helper, the same plain build as ingress-image) and build/keepalived/ with the
+# tarball. KEEPALIVED_CTX is overridable (a relative path or an absolute one) so two
+# builds on one runner can use separate contexts. Needs Docker with buildx and curl.
+KEEPALIVED_ARCH ?= $(shell go env GOARCH)
+KEEPALIVED_CTX ?= .devdata/keepalived-image
+KEEPALIVED_TAG ?= tierplan-keepalived:dev
+keepalived-image:
+	scripts/keepalived-source.sh
+	rm -rf $(KEEPALIVED_CTX)
+	mkdir -p $(KEEPALIVED_CTX)/linux/$(KEEPALIVED_ARCH) $(KEEPALIVED_CTX)/build/keepalived
+	cp build/keepalived/keepalived-2.4.3.tar.gz $(KEEPALIVED_CTX)/build/keepalived/keepalived-2.4.3.tar.gz
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(KEEPALIVED_ARCH) go -C ingress build -trimpath -ldflags "-s -w" \
+		-o $(abspath $(KEEPALIVED_CTX))/linux/$(KEEPALIVED_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
+	docker buildx build --platform linux/$(KEEPALIVED_ARCH) -f keepalived/Dockerfile -t $(KEEPALIVED_TAG) --load $(KEEPALIVED_CTX)
 
 # Runs tierplan-ingress:dev as a node runs it, with and without the hardening
 # flags: UID and GID 1000, no capability, no-new-privileges set by the binary, no
