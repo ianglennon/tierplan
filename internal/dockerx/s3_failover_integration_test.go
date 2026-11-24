@@ -124,12 +124,14 @@ func TestS3StaleAddressCleared(t *testing.T) {
 // TestS3StaleAfterInterfaceChange is the case Pitfall 3 left open: a holder killed on eth0, then the configuration moved to
 // eth1 with the same address. The restart on the new interface cannot remove what the old one left, unless keepalived
 // looks at every interface. It records whether the address remains on eth0; it passes either way (26-17 reads the line).
-// The killed node's replacement is held back by a long restart delay, so that only the updated task, on eth1, ever runs
-// there.
+// The killed node's replacement is held back by a restart delay, so that only the updated task, on eth1, ever runs there.
+// The delay is 20 s, not longer: whether the update lands before swarm has made the replacement (a new task at once) or
+// after (the held-back task takes the new configuration and starts when its delay ends) is a race, and a delay of minutes
+// left the second case without a running task on that node for the whole wait.
 func TestS3StaleAfterInterfaceChange(t *testing.T) {
 	r := newS3Swarm(t)
 	r.secondNetwork()
-	r.start(s3Opts{restartDelay: 10 * time.Minute})
+	r.start(s3Opts{restartDelay: 20 * time.Second})
 	dockertest.WaitRunningTasks(t, r.sw.Managers[0], r.svcID, len(r.sw.Nodes()), s3Settle)
 
 	old, _ := r.waitOneHolder(s3FirstHolder, nil)
