@@ -94,6 +94,9 @@ func excluded(name string) bool {
 
 // Discover returns the one interface that has an IPv4 address inside p, after the excluded interfaces are
 // dropped (D-09). None is a DiscoverError with VIPReasonNoInterface, more than one VIPReasonAmbiguousInterface.
+//
+// The virtual address itself is not evidence: it sits inside p by construction, so an interface that holds only
+// a stale copy of it (the case after a move to another interface, A-15) must not count as a second match.
 func Discover(list Lister, p netip.Prefix) (string, error) {
 	ifaces, err := list()
 	if err != nil {
@@ -107,7 +110,7 @@ func Discover(list Lister, p netip.Prefix) (string, error) {
 		}
 		has4, in := false, false
 		for _, a := range ifc.Addrs {
-			if !a.Addr().Is4() {
+			if !a.Addr().Is4() || a.Addr() == p.Addr() {
 				continue
 			}
 			has4 = true

@@ -621,3 +621,72 @@ func TestRenderNamesTheScriptTheScannerWatches(t *testing.T) {
 		t.Fatalf("Render does not define the vrrp_script %q the stderr scanner watches", scriptName)
 	}
 }
+
+func TestVIPEntrypointRemovesStaleElsewhere(t *testing.T) {
+	type removal struct {
+		iface string
+		p     netip.Prefix
+	}
+	run := func(t *testing.T, ifs []Interface, removeErr error) (start ingressbundle.VIPEvent, removed []removal, stderr string) {
+		t.Helper()
+		r := newRig(t, "quiet")
+		r.deps.Interfaces = func() ([]Interface, error) { return ifs, nil }
+		var mu sync.Mutex
+		r.deps.RemoveAddr = func(iface string, p netip.Prefix) error {
+			mu.Lock()
+			defer mu.Unlock()
+			removed = append(removed, removal{iface, p})
+			return removeErr
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := r.run(ctx)
+		start = parseAll(t, r.out.waitLines(t, 1))[0]
+		cancel()
+		waitCode(t, done)
+		mu.Lock()
+		defer mu.Unlock()
+		return start, removed, r.errw.String()
+	}
+
+	t.Run("the address on another interface is removed before keepalived starts and reported", func(t *testing.T) {
+		start, removed, _ := run(t, []Interface{
+			nic("lo", "127.0.0.1/8"),
+			nic("eth0", "192.168.1.10/24"),
+			nic("eth1", "192.168.1.50/24"),
+			nic("docker0", "192.168.1.50/24"), // never a keepalived interface: left alone
+		}, nil)
+		if start.Event != ingressbundle.VIPEventStart || start.Iface != "eth0" || !start.Stale {
+			t.Fatalf("start = %+v, want eth0 and stale", start)
+		}
+		if len(removed) != 1 || removed[0].iface != "eth1" || removed[0].p != netip.MustParsePrefix("192.168.1.50/24") {
+			t.Fatalf("removals = %+v, want only the VIP on eth1 with its own prefix length", removed)
+		}
+	})
+
+	t.Run("the address on the chosen interface is reported and left to keepalived", func(t *testing.T) {
+		start, removed, _ := run(t, []Interface{
+			{Name: "eth0", Addrs: []netip.Prefix{netip.MustParsePrefix("192.168.1.10/24"), netip.MustParsePrefix("192.168.1.50/24")}},
+		}, nil)
+		if !start.Stale || len(removed) != 0 {
+			t.Fatalf("stale = %v, removals = %+v, want stale and no removal (A-02: keepalived clears the same interface)", start.Stale, removed)
+		}
+	})
+
+	t.Run("no stale address, no removal", func(t *testing.T) {
+		start, removed, _ := run(t, []Interface{nic("eth0", "192.168.1.10/24")}, nil)
+		if start.Stale || len(removed) != 0 {
+			t.Fatalf("stale = %v, removals = %+v", start.Stale, removed)
+		}
+	})
+
+	t.Run("a failed removal is one stderr line and the start goes on", func(t *testing.T) {
+		start, removed, stderr := run(t, []Interface{nic("eth0", "192.168.1.10/24"), nic("eth1", "192.168.1.50/24")}, syscall.EPERM)
+		if start.Event != ingressbundle.VIPEventStart || start.Stale || len(removed) != 1 {
+			t.Fatalf("start = %+v, removals = %+v", start, removed)
+		}
+		if !strings.Contains(stderr, "eth1") || strings.Count(stderr, "\n") != 1 {
+			t.Fatalf("stderr = %q, want one line naming eth1", stderr)
+		}
+	})
+}

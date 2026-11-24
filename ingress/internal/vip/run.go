@@ -88,6 +88,8 @@ type RunDeps struct {
 	WriteFile func(path string, data []byte, perm os.FileMode) error
 	// OpenFIFO opens the notify FIFO.
 	OpenFIFO func(path string) (io.ReadCloser, error)
+	// RemoveAddr deletes an address from an interface (A-15).
+	RemoveAddr func(iface string, p netip.Prefix) error
 }
 
 func (d RunDeps) withDefaults() RunDeps {
@@ -115,6 +117,9 @@ func (d RunDeps) withDefaults() RunDeps {
 	if d.OpenFIFO == nil {
 		d.OpenFIFO = openFIFO
 	}
+	if d.RemoveAddr == nil {
+		d.RemoveAddr = RemoveAddr
+	}
 	return d
 }
 
@@ -137,7 +142,7 @@ func Run(ctx context.Context, d RunDeps) int {
 		em.Emit(ingressbundle.VIPEvent{Event: ingressbundle.VIPEventState, State: ingressbundle.VIPStateStop})
 		return 0
 	}
-	stale := heldOn(d.Interfaces, iface, cfg.Address.Addr())
+	stale := clearStale(d, iface, cfg.Address.Addr())
 
 	if err := d.WriteFile(ConfPath, Render(cfg, iface), 0o600); err != nil {
 		fmt.Fprintln(d.Stderr, "tierplan-ingress: vip-entrypoint: write the keepalived configuration:", err)
@@ -300,15 +305,38 @@ func reportStates(clock Clock, em *Emitter, facts *probeFacts, lines <-chan stri
 	}
 }
 
-// heldOn reports whether the interface named iface holds addr now.
-func heldOn(list Lister, iface string, addr netip.Addr) bool {
-	ifaces, err := list()
+// clearStale handles an address a previous keepalived left behind (D-10, A-15) and reports whether it found one.
+// On the chosen interface the address is keepalived's to clear when it starts as BACKUP (measured, A-02), so it
+// is only reported. On any other interface the helper removes it: keepalived looks only at the interface it is
+// told about, so after a hard stop and a move to a different interface the node would otherwise answer for the
+// address on two. Only interfaces Discover could have chosen are touched, since keepalived never put the
+// address on a bridge, an overlay or the loopback, and it is only ever this node's own address that goes. A
+// failed removal is one line on standard error naming the interface, and the start goes on.
+func clearStale(d RunDeps, iface string, addr netip.Addr) bool {
+	ifaces, err := d.Interfaces()
 	if err != nil {
 		return false
 	}
-	return slices.ContainsFunc(ifaces, func(i Interface) bool {
-		return i.Name == iface && slices.ContainsFunc(i.Addrs, func(p netip.Prefix) bool { return p.Addr() == addr })
-	})
+	stale := false
+	for _, ifc := range ifaces {
+		i := slices.IndexFunc(ifc.Addrs, func(p netip.Prefix) bool { return p.Addr() == addr })
+		if i < 0 {
+			continue
+		}
+		if ifc.Name == iface {
+			stale = true
+			continue
+		}
+		if excluded(ifc.Name) {
+			continue
+		}
+		if err := d.RemoveAddr(ifc.Name, ifc.Addrs[i]); err != nil {
+			fmt.Fprintf(d.Stderr, "tierplan-ingress: vip-entrypoint: remove the stale address from %s: %v\n", ifc.Name, err)
+			continue
+		}
+		stale = true
+	}
+	return stale
 }
 
 // errChildExited is what openFIFOWithRetry returns when keepalived exited before it made its FIFO.
