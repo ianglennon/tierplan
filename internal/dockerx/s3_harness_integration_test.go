@@ -65,6 +65,13 @@ type s3Opts struct {
 	secretFile, keyPath string
 	// restartDelay is the restart policy's delay, so a test can keep a killed node's replacement from starting.
 	restartDelay time.Duration
+	// caps is the capability set added after dropping ALL (the four of the design when nil).
+	caps []string
+	// vip is the address the configuration names (the rig's when invalid), routerID the virtual router ID (51 when zero).
+	vip      netip.Prefix
+	routerID int
+	// timeWindow, when above zero, adds `anti_replay time` and `time_window <n>` to the auth_hmac block.
+	timeWindow int
 }
 
 func (o s3Opts) withDefaults() s3Opts {
@@ -76,6 +83,12 @@ func (o s3Opts) withDefaults() s3Opts {
 	}
 	if o.keyPath == "" {
 		o.keyPath = "/run/secrets/s3-key"
+	}
+	if o.routerID == 0 {
+		o.routerID = 51
+	}
+	if o.caps == nil {
+		o.caps = []string{"NET_ADMIN", "NET_RAW", "SETUID", "SETGID"}
 	}
 	return o
 }
@@ -93,6 +106,8 @@ type s3Rig struct {
 	key string
 	// secret is the swarm secret reference of the running service.
 	secret *swarm.SecretReference
+	// readyID is the readiness stand-in service.
+	readyID string
 }
 
 // with is the rig for a subtest: the same swarm and service, failing the subtest's t.
@@ -186,13 +201,18 @@ func newS3Swarm(t *testing.T) *s3Rig {
 	if err != nil {
 		t.Fatalf("create the readiness stand-in: %v", err)
 	}
+	r.readyID = ready.ID
 	dockertest.WaitRunningTasks(t, sw.Managers[0], ready.ID, len(sw.Nodes()), s3Settle)
 	return r
 }
 
 // s3Conf is keepalived's configuration for the test: RESEARCH Pattern 1 without the notify FIFO. The instance is named TP,
 // as the helper will name it, the key is read from a file, and the check is the existing healthcheck.
-func s3Conf(iface string, vip netip.Prefix, keyPath string) string {
+func s3Conf(iface string, vip netip.Prefix, keyPath string, routerID, timeWindow int) string {
+	window := ""
+	if timeWindow > 0 {
+		window = fmt.Sprintf("\n        anti_replay time\n        time_window %d", timeWindow)
+	}
 	return fmt.Sprintf(`global_defs {
     enable_script_security
     script_user root
@@ -208,21 +228,21 @@ vrrp_script chk_proxy {
 vrrp_instance TP {
     state BACKUP
     interface %[1]s
-    virtual_router_id 51
+    virtual_router_id %[4]d
     priority 100
     advert_int 1
     nopreempt
     auth_hmac {
         key 1 file:%[3]s
         active_key 1
-        mode enforce
+        mode enforce%[5]s
     }
     virtual_ipaddress {
         %[2]s dev %[1]s
     }
     track_script { chk_proxy }
 }
-`, iface, vip, keyPath)
+`, iface, vip, keyPath, routerID, window)
 }
 
 // config creates a swarm config holding the configuration for o and returns the reference that mounts it where
@@ -230,9 +250,13 @@ vrrp_instance TP {
 func (r *s3Rig) config(ctx context.Context, o s3Opts) *swarm.ConfigReference {
 	r.t.Helper()
 	name := fmt.Sprintf("s3-conf-%d", s3Seq.Add(1))
+	vip := r.vip
+	if o.vip.IsValid() {
+		vip = o.vip
+	}
 	res, err := r.mgr.ConfigCreate(ctx, client.ConfigCreateOptions{Spec: swarm.ConfigSpec{
 		Annotations: swarm.Annotations{Name: name},
-		Data:        []byte(s3Conf(o.iface, r.vip, o.keyPath)),
+		Data:        []byte(s3Conf(o.iface, vip, o.keyPath, o.routerID, o.timeWindow)),
 	}})
 	if err != nil {
 		r.t.Fatalf("create the config %s: %v", name, err)
@@ -261,7 +285,7 @@ func (r *s3Rig) spec(o s3Opts, cfg *swarm.ConfigReference) swarm.ServiceSpec {
 				Command:        []string{"/usr/sbin/keepalived"},
 				Args:           []string{"--dont-fork", "--log-console", "--log-detail", "--use-file", "/etc/keepalived/keepalived.conf"},
 				CapabilityDrop: []string{"ALL"},
-				CapabilityAdd:  []string{"NET_ADMIN", "NET_RAW", "SETUID", "SETGID"},
+				CapabilityAdd:  o.caps,
 				ReadOnly:       true,
 				Mounts: []mount.Mount{
 					{Type: mount.TypeTmpfs, Target: "/run"},
