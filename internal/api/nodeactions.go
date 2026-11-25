@@ -107,7 +107,9 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 			"so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs TierPlan or of the only connected manager agent) " +
 			"the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. " + changeErrors + " Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code. " +
 			"The answer is 204 with no body, except for a drain of the node that holds the environment's virtual IP: that first stops the node's keepalived through its agent so the address moves to another node (waiting at most 10 seconds for one to report MASTER), " +
-			"and the answer is then 200 with vipHandoff giving the outcome (moved with the new holder, no_candidate, agent_unreachable or timeout). The drain is made whatever the outcome, and each handoff is audited as ingress.vip_handoff with the node, the holder and the outcome.",
+			"and the answer is then 200 with vipHandoff giving the outcome (moved with the new holder, no_candidate, agent_unreachable or timeout). The drain is made whatever the outcome, and each handoff is audited as ingress.vip_handoff with the node, the holder and the outcome. " +
+			"A stale version is refused with 409 node_changed before the handoff, so nothing is stopped for it. A drain that is refused after the handoff (a read-only host, no connected manager, or another change that got in first) " +
+			"has still moved the address: the answer is then the error, with no vipHandoff, and the ingress.vip_handoff audit row is where the move is recorded.",
 		// 200 is the documented success with a body, and 204 the one without; the handler sets Status to say which.
 		Tags: []string{"environments"}, DefaultStatus: http.StatusOK,
 		Responses: map[string]*huma.Response{"204": {Description: "No Content: the drain, pause or activate was made and no virtual IP handoff ran"}},
@@ -320,8 +322,10 @@ type nodeChange struct {
 // setNode makes one availability or role change. It reads the node and judges the change as
 // nodeImpact does, refuses one that needs the node's name when it was not typed, and then writes
 // once on a manager with the version it was given. A drain of the node that holds the virtual IP first moves the address off
-// it (D-25): the handoff runs after the name check and before the write, is best-effort and bounded, and is returned so the
-// answer can say how it went; it never stops the drain. Every attempt on a node that exists is audited.
+// it (D-25): the handoff runs after the name check and the version check and before the write, is best-effort and bounded, and
+// is returned so the answer can say how it went; it never stops the drain. A write that is refused after the handoff (the host
+// is read-only, no manager is connected, the swarm saw another change first) leaves the address moved and the node not drained.
+// Every attempt on a node that exists is audited.
 func setNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, ch nodeChange) (*ingressdeploy.VIPHandoff, error) {
 	if err := requireSwarm(ctx, d.services(), envID); err != nil {
 		return nil, err
@@ -352,6 +356,14 @@ func setNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, 
 
 	var handoff *ingressdeploy.VIPHandoff
 	if ch.action == audit.ActionNodeAvailabilityChanged && ch.to == impactDrain && d.VIP != nil {
+		// A stale version is the commonest reason the write is refused afterwards, and it is known now: the node was read a
+		// moment ago. Refuse it here, so a drain that will not be made never stops the holder's keepalived.
+		if in.Version != ch.version {
+			code, problem := nodeActionProblem(d, envID, dockerx.ErrNodeChanged)
+			rec.code = code
+			auditNodeChange(ctx, d, p, envID, ch, rec)
+			return nil, problem
+		}
 		handoff = handOffVIP(ctx, d, p, envID, ch, impact.Hostname)
 	}
 

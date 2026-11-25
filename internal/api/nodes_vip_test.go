@@ -407,3 +407,38 @@ func TestNodeImpactHoldsVIP(t *testing.T) {
 		})
 	}
 }
+
+// TestDrainWithAStaleVersionRunsNoHandoff pins WR-07: the version a drain carries comes from an earlier read of the node, and
+// a stale one is the commonest reason the write is refused. It is refused with 409 node_changed before the hook runs, so no
+// keepalived is stopped and no address moved for a drain that was not made.
+func TestDrainWithAStaleVersionRunsNoHandoff(t *testing.T) {
+	t.Parallel()
+	vip := &fakeVIP{holder: "node-4", result: ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffMoved, Holder: "wrk-2"}}
+	f, e := naEnvVIP(t, vip)
+
+	// node-4 is at version 3; the drain was made on the strength of version 2.
+	rec := f.setAvailability(t, e, "node-4", `{"availability":"drain","version":2}`)
+	if rec.code != http.StatusConflict || rec.ptyp != "node_changed" {
+		t.Fatalf("stale drain = %d %s (%s), want 409 node_changed", rec.code, rec.body, rec.ptyp)
+	}
+	if calls := vip.called(); len(calls) != 0 {
+		t.Fatalf("handoff calls = %v, want none for a drain that is refused", calls)
+	}
+	if rows := f.vipAudits(t); len(rows) != 0 {
+		t.Errorf("handoff audit rows = %+v, want none", rows)
+	}
+	if ups := f.fake.NodeUpdates(); len(ups) != 0 {
+		t.Errorf("node updates = %+v, want none", ups)
+	}
+	if drain := f.nodeAudits(t); len(drain) != 1 || drain[0].Details["code"] != "node_changed" {
+		t.Errorf("drain audit rows = %+v, want the refused attempt recorded as node_changed", drain)
+	}
+
+	// The same drain with the current version still hands off first and is written after.
+	if r := f.setAvailability(t, e, "node-4", `{"availability":"drain","version":3}`); r.code != http.StatusOK {
+		t.Fatalf("current drain = %d %s, want 200 with the handoff", r.code, r.body)
+	}
+	if calls := vip.called(); len(calls) != 1 {
+		t.Fatalf("handoff calls = %v after the current drain, want one", calls)
+	}
+}
