@@ -67,6 +67,19 @@ func TestVIPFactsFromState(t *testing.T) {
 		}
 	})
 
+	t.Run("when the holder and any node were last heard", func(t *testing.T) {
+		s, now := factsRig(t)
+		lost, heard := now.Add(-3*time.Minute), now.Add(-2*time.Second)
+		s.svc.SeedVIPState(s.envID, []ingressdeploy.SeedNode{
+			{NodeID: vipNodeA, Hostname: "node-a", State: ingressbundle.VIPStateMaster, LastHeard: lost},
+			{NodeID: vipNodeB, Hostname: "node-b", State: ingressbundle.VIPStateFault, LastHeard: heard},
+		}, time.Time{})
+		f := s.mustFacts()
+		if len(f.Holders) != 1 || !f.Holders[0].LastHeard.Equal(lost) || !f.LastHeard.Equal(heard) {
+			t.Fatalf("holders = %+v, last heard %v; want node-a heard at %v and any node at %v", f.Holders, f.LastHeard, lost, heard)
+		}
+	})
+
 	t.Run("no holder, a node starting, a foreign router and a clock", func(t *testing.T) {
 		s, now := factsRig(t)
 		lost := now.Add(-time.Minute)

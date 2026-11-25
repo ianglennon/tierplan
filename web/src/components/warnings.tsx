@@ -793,6 +793,11 @@ function vipItemCopy(
         title: t("bell.vip.multipleHolders.title", { env }),
         body: t("bell.vip.multipleHolders.body", { count: w.count ?? 0, address }),
       };
+    case "vip_holder_unheard":
+      return {
+        title: t("bell.vip.holderUnheard.title", { env }),
+        body: tidy(t("bell.vip.holderUnheard.body", { node: w.node ?? "", address, time })),
+      };
     case "vip_moved": {
       const count = w.count ?? 1;
       const noNode = t("bell.vip.moved.noNode");
@@ -1333,6 +1338,7 @@ function EnvEntry({ w, close, finishSetup, canFinishSetup }: { w: EnvWarning } &
       );
     case "vip_no_holder":
     case "vip_multiple_holders":
+    case "vip_holder_unheard":
     case "vip_moved":
     case "vip_foreign_router":
     case "vip_clock_skew":

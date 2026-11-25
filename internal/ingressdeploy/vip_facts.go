@@ -39,6 +39,9 @@ func (s *Service) VIPFacts(ctx context.Context, envID string) (envs.VIPFacts, bo
 		if host == "" {
 			host = n.NodeID
 		}
+		if n.LastHeard.After(f.LastHeard) {
+			f.LastHeard = n.LastHeard
+		}
 		if n.Foreign {
 			f.ForeignRouter = true
 			if sender, err := netip.ParseAddr(n.ForeignSender); err == nil && f.ForeignSender == "" {
@@ -50,7 +53,7 @@ func (s *Service) VIPFacts(ctx context.Context, envID string) (envs.VIPFacts, bo
 		}
 		switch n.State {
 		case ingressbundle.VIPStateMaster:
-			f.Holders = append(f.Holders, envs.VIPHolderFact{NodeID: n.NodeID, Host: host})
+			f.Holders = append(f.Holders, envs.VIPHolderFact{NodeID: n.NodeID, Host: host, LastHeard: n.LastHeard})
 		case ingressbundle.VIPStateFault:
 			f.Faulting = append(f.Faulting, envs.VIPFaultFact{Host: host, TaskStarted: n.TaskStarted})
 		}

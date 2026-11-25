@@ -290,6 +290,10 @@
         "body_one": "{{count}} node reports holding {{address}}.",
         "body_other": "{{count}} nodes all report holding {{address}}. The nodes probably can't hear each other. Check that multicast traffic passes between them on the network."
       },
+      "holderUnheard": {
+        "title": "TierPlan can't hear the node that holds the virtual IP on {{env}}",
+        "body": "{{node}} was the last to hold {{address}}. TierPlan last heard from it {{time}}, and no other node has taken the address since. If {{node}} is down, ingress doesn't answer on {{address}}."
+      },
       "moved": {
         "title": "The virtual IP moved on {{env}}",
         "titleMany_other": "The virtual IP moved {{count}} times on {{env}}",

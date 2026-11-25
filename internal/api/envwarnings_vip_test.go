@@ -223,7 +223,20 @@ func TestVIPBellWireShape(t *testing.T) {
 		t.Fatalf("vip_privileged_lost = %+v, want count 1 and node-a", it)
 	}
 
-	// The sixth: nobody holds the address.
+	// The only holder has not been heard from for a while, and another node has.
+	facts.Holders, facts.LastHeard = []envs.VIPHolderFact{{NodeID: "n1", Host: "node-a", LastHeard: now.Add(-3 * time.Minute)}}, now
+	fake.set(env.ID, facts)
+	items, _ = f.bellRaw(t, f.cookie, f.csrf)
+	var unheard bool
+	for _, it := range items {
+		unheard = unheard || (it.ID == "vip_holder_unheard" && it.Severity == "warning" && it.Node == "node-a" &&
+			it.Since == utc(now.Add(-3*time.Minute)) && it.VIP != nil && it.VIP.Address == "192.168.10.250/24")
+	}
+	if !unheard {
+		t.Fatalf("items = %+v, want vip_holder_unheard about node-a", items)
+	}
+
+	// Nobody holds the address.
 	facts.Holders, facts.NoHolderSince = nil, now.Add(-time.Minute)
 	fake.set(env.ID, facts)
 	items, more := f.bellRaw(t, f.cookie, f.csrf)

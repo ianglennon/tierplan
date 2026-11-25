@@ -54,8 +54,8 @@ func vipBellIDs(t *testing.T) map[string]string {
 // switch is a TypeScript file, so this reads it: every WarnVIP* constant must have its case in warnings.tsx.
 func TestEveryVIPBellIDHasAWebCase(t *testing.T) {
 	ids := vipBellIDs(t)
-	if len(ids) < 6 {
-		t.Fatalf("found %d WarnVIP constants, expected the six of the virtual IP: the parse is wrong", len(ids))
+	if len(ids) < 7 {
+		t.Fatalf("found %d WarnVIP constants, expected the seven of the virtual IP: the parse is wrong", len(ids))
 	}
 	ts, err := os.ReadFile("../../web/src/components/warnings.tsx")
 	if err != nil {

@@ -164,6 +164,22 @@ describe("virtual IP bell items (each ID)", () => {
     expect((await itemOf("vip_multiple_holders")).body).toBe("1 node reports holding 10.0.0.9/24.");
   });
 
+  it("vip_holder_unheard names the holder, the address and when it was last heard", async () => {
+    envItems = [
+      item("vip_holder_unheard", {
+        node: "node-a",
+        vip: { address: "192.168.1.250/24" },
+        since: ago(5 * 60_000),
+      }),
+    ];
+    const { title, body, el } = await itemOf("vip_holder_unheard");
+    expect(title).toBe("TierPlan can't hear the node that holds the virtual IP on Prod swarm");
+    expect(body).toBe(
+      "node-a was the last to hold 192.168.1.250/24. TierPlan last heard from it 5 min ago, and no other node has taken the address since. If node-a is down, ingress doesn't answer on 192.168.1.250/24.",
+    );
+    expect(el.querySelector("a, button")).toBeNull();
+  });
+
   it("vip_moved names the latest move once, and counts several", async () => {
     envItems = [
       item("vip_moved", {

@@ -12,10 +12,13 @@ import (
 // The IDs of the virtual IP's bell items (Phase 26, A-07, UI-SPEC S4). They are environment warnings like the rest: derived
 // from live state, never stored, and gone with their cause.
 const (
-	// WarnVIPNoHolder is a virtual IP that no node holds for more than VIPNoHolderAfter. It is the one error of the six.
+	// WarnVIPNoHolder is a virtual IP that no node holds for more than VIPNoHolderAfter. It is the one error of them.
 	WarnVIPNoHolder = "vip_no_holder"
 	// WarnVIPMultipleHolders is a virtual IP that more than one node reports holding.
 	WarnVIPMultipleHolders = "vip_multiple_holders"
+	// WarnVIPHolderUnheard is a virtual IP whose only holder TierPlan has not heard from for more than VIPUnheardAfter while it
+	// hears another node: the holder is still shown, since not hearing it is no proof that it let go, but nothing confirms it.
+	WarnVIPHolderUnheard = "vip_holder_unheard"
 	// WarnVIPMoved is a virtual IP that moved in the last VIPMovedWindow, several moves collapsed into one item with a count.
 	WarnVIPMoved = "vip_moved"
 	// WarnVIPForeignRouter is another router sending adverts with this environment's router ID that fail authentication.
@@ -32,13 +35,17 @@ const (
 	// VIPFaultGrace is how long after its task started a node may sit in FAULT without the bell saying anything: the
 	// first start of a helper is a FAULT until its proxy answers (A-07).
 	VIPFaultGrace = 15 * time.Second
+	// VIPUnheardAfter is how long the only holder may go unheard before the bell says so. It is longer than an agent takes to
+	// come back after an update or a blip.
+	VIPUnheardAfter = time.Minute
 	// VIPMovedWindow is how far back a recorded move still raises a bell item (A-07).
 	VIPMovedWindow = time.Hour
 )
 
-// VIPHolderFact is one node that reports holding the address.
+// VIPHolderFact is one node that reports holding the address and when TierPlan last heard from it.
 type VIPHolderFact struct {
 	NodeID, Host string
+	LastHeard    time.Time
 }
 
 // VIPMoveFact is one recorded move of the address. An empty From or To means no node.
@@ -72,6 +79,8 @@ type VIPFacts struct {
 	RouterID int
 	// Holders are the nodes reporting MASTER.
 	Holders []VIPHolderFact
+	// LastHeard is when TierPlan last heard from any node of the virtual IP, the zero time when it never has.
+	LastHeard time.Time
 	// NoHolderSince is when the address last lost its holder; the zero time while a node holds it or when that is not known.
 	NoHolderSince time.Time
 	// Faulting are the nodes in FAULT now.
@@ -120,6 +129,9 @@ func VIPWarnings(envID, envName string, f VIPFacts, agents []AgentState, now tim
 		w.VIP = &VIPWarningFacts{Address: f.Address}
 		out = append(out, w)
 	}
+	if w, ok := vipHolderUnheard(base, f, now); ok {
+		out = append(out, w)
+	}
 	if w, ok := vipMoved(base, f, now); ok {
 		out = append(out, w)
 	}
@@ -156,6 +168,23 @@ func vipNoHolder(base EnvWarning, f VIPFacts, now time.Time) (EnvWarning, bool) 
 	}
 	w := base
 	w.ID, w.Severity, w.Since = WarnVIPNoHolder, SeverityError, f.NoHolderSince
+	w.VIP = &VIPWarningFacts{Address: f.Address}
+	return w, true
+}
+
+// vipHolderUnheard is the item for an address whose only holder cannot be heard: its host may be gone with no other node able
+// to take the address. While no node is heard at all there is nothing to compare with and the environment's own items say it.
+// Another node that takes the address ends it, since the silent one is then no holder.
+func vipHolderUnheard(base EnvWarning, f VIPFacts, now time.Time) (EnvWarning, bool) {
+	if len(f.Holders) != 1 {
+		return EnvWarning{}, false
+	}
+	h := f.Holders[0]
+	if h.LastHeard.IsZero() || now.Sub(h.LastHeard) <= VIPUnheardAfter || now.Sub(f.LastHeard) > VIPUnheardAfter {
+		return EnvWarning{}, false
+	}
+	w := base
+	w.ID, w.Severity, w.Since, w.Node = WarnVIPHolderUnheard, SeverityWarning, h.LastHeard, cleanText(h.Host, maxNodeLen)
 	w.VIP = &VIPWarningFacts{Address: f.Address}
 	return w, true
 }

@@ -54,6 +54,39 @@ func TestVIPBellItems(t *testing.T) {
 		}
 	})
 
+	t.Run("the only holder cannot be heard", func(t *testing.T) {
+		ago := func(d time.Duration) time.Time { return vipNow.Add(-d) }
+		cases := []struct {
+			name          string
+			holder, other time.Time
+			holders       int
+			want          bool
+		}{
+			{"unheard for longer than the limit, another node heard", ago(VIPUnheardAfter + time.Second), ago(2 * time.Second), 1, true},
+			{"unheard for exactly the limit", ago(VIPUnheardAfter), ago(2 * time.Second), 1, false},
+			{"heard", ago(2 * time.Second), ago(2 * time.Second), 1, false},
+			{"nobody is heard, which the environment's own items say", ago(5 * time.Minute), ago(5 * time.Minute), 1, false},
+			{"never heard", time.Time{}, ago(2 * time.Second), 1, false},
+			{"two holders are another item", ago(5 * time.Minute), ago(2 * time.Second), 2, false},
+		}
+		for _, c := range cases {
+			f := vipOn()
+			f.Holders[0].LastHeard, f.LastHeard = c.holder, c.other
+			if c.holders == 2 {
+				f.Holders = append(f.Holders, VIPHolderFact{NodeID: "n2", Host: "node-b", LastHeard: c.other})
+			}
+			got := vipByID(vipWarn(f), WarnVIPHolderUnheard)
+			if (len(got) == 1) != c.want {
+				t.Errorf("%s: got %+v, want the item: %v", c.name, got, c.want)
+				continue
+			}
+			if c.want && (got[0].Severity != SeverityWarning || got[0].Node != "node-a" || !got[0].Since.Equal(c.holder) ||
+				got[0].VIP == nil || got[0].VIP.Address != "192.168.10.250/24") {
+				t.Errorf("%s: item = %+v, want a warning about node-a since it was last heard, with the address", c.name, got[0])
+			}
+		}
+	})
+
 	t.Run("three moves collapse into one item about the newest", func(t *testing.T) {
 		f := vipOn()
 		newest := vipNow.Add(-5 * time.Minute)
