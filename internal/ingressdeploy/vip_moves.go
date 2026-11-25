@@ -321,6 +321,17 @@ func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvSta
 	return st, moves
 }
 
+// newRun forgets what the run before this one said, which is over. A run that ended without saying so while it held the address
+// was killed.
+func (n *vipNode) newRun(at time.Time) {
+	if n.State == ingressbundle.VIPStateMaster {
+		n.Lost, n.LostAt = VIPMoveHolderFailed, at
+	}
+	n.State, n.Superseded = "", false
+	n.Faults = map[string]bool{}
+	n.Foreign, n.ForeignSender, n.ForeignCounter, n.ClockSkew = false, "", "", false
+}
+
 // apply applies one event to its node and to when the address lost its holder.
 func (st *vipEnvState) apply(ev vipEvent) {
 	hadHolder := len(holders(st.Nodes)) > 0
@@ -332,6 +343,10 @@ func (st *vipEnvState) apply(ev vipEvent) {
 		if ev.RunCreated.Before(n.RunCreated) && !ev.RunOnly {
 			return
 		}
+		if n.Run != "" {
+			// A helper that waits for its interface writes fault lines before its start line.
+			n.newRun(ev.At)
+		}
 		n.Run, n.RunCreated = ev.Run, ev.RunCreated
 	}
 	if ev.Hostname != "" {
@@ -342,15 +357,8 @@ func (st *vipEnvState) apply(ev vipEvent) {
 	wasMaster := n.State == ingressbundle.VIPStateMaster
 	switch ev.Event {
 	case ingressbundle.VIPEventStart:
-		// The helper started: whatever the run before it said is over. A run that ended without saying so while it held
-		// the address was killed.
-		if wasMaster {
-			n.Lost, n.LostAt = VIPMoveHolderFailed, ev.At
-		}
+		n.newRun(ev.At)
 		n.TaskStarted = ev.At
-		n.State, n.Superseded = "", false
-		n.Faults = map[string]bool{}
-		n.Foreign, n.ForeignSender, n.ForeignCounter, n.ClockSkew = false, "", "", false
 	case ingressbundle.VIPEventState:
 		n.State, n.Superseded = ev.State, false
 		if ev.State == ingressbundle.VIPStateFault {

@@ -684,6 +684,12 @@ func TestVIPMovesWhatThePassKnows(t *testing.T) {
 				{run(1, startEv(n, 1000)), run(1, msEv(n, 2, 2000, b, "")), run(1, msEv(n, 3, 62500, stop, ""))},
 				{run(60, msEv(n, 3, 90000, f, ""))},
 			}, f},
+			{"a holder that rebooted and waits for its interface", [][]vipEvent{{run(1, msEv(n, 2, 2000, m, ""))}, {
+				run(60, faultEv(n, 1, 60, ingressbundle.VIPReasonNoInterface, true)),
+			}}, ""},
+			{"the same while the old one still stops", [][]vipEvent{{run(1, msEv(n, 2, 2000, m, "")),
+				run(60, faultEv(n, 1, 60, ingressbundle.VIPReasonNoInterface, true)), run(1, msEv(n, 3, 62500, stop, "")),
+			}}, ""},
 			{"a clock that stepped back, with one container running", [][]vipEvent{{run(500, msEv(n, 2, 501000, b, ""))}, {
 				only(run(60, startEv(n, 60000))), only(run(60, msEv(n, 2, 61000, f, ""))),
 			}}, f},

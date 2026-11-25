@@ -489,12 +489,14 @@ func (e *vipChangeRun) progress(ctx context.Context) (stackops.Convergence, []do
 	e.paused = nil
 	active := false
 	for _, n := range nodes {
-		active = active || n.Availability == "active"
+		active = active || (n.Availability == "active" && n.State == "ready")
 		if n.Availability != "pause" {
 			continue
 		}
 		if e.pv.Strategy == VIPChangeReplace {
-			e.paused = append(e.paused, n.Hostname)
+			if !slices.ContainsFunc(rows, func(r dockerx.TaskRow) bool { return r.NodeID == n.ID && r.DesiredState == stackops.TaskRunning }) {
+				e.paused = append(e.paused, n.Hostname)
+			}
 			continue
 		}
 		left := slices.DeleteFunc(slices.Clone(rows), func(r dockerx.TaskRow) bool {
@@ -509,7 +511,7 @@ func (e *vipChangeRun) progress(ctx context.Context) (stackops.Convergence, []do
 	if c.Live > c.Desired {
 		c.Desired, c.Want = c.Live, c.Live
 	}
-	if !active && len(e.paused) > 0 {
+	if !active && c.Desired == 0 && len(e.paused) > 0 {
 		// No node can take the new configuration now, so there is nothing to wait for: a service that wants no task is settled.
 		c.Mode, c.Want = "replicated", 0
 	}
