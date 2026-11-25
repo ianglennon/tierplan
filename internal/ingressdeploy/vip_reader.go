@@ -284,6 +284,12 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	env.mu.Unlock()
 
 	next, moves := detectMoves(prev, events, marks)
+	// A node that cannot be heard is not a holder, whatever its last line was: a holder killed without a STOP line, or lost
+	// with its host, left MASTER as its last word. Its state is kept, so it holds the address again when it is heard.
+	for id, n := range next.Nodes {
+		n.Unheard = silent[id]
+		next.Nodes[id] = n
+	}
 	for _, r := range reads {
 		if !r.ok || len(r.listed) == 0 {
 			continue
@@ -299,7 +305,10 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 		n.LastHeard = now
 		next.Nodes[n.NodeID] = n
 	}
-	if len(holders(next.Nodes)) == 0 && next.HolderlessSince.IsZero() {
+	switch {
+	case len(holders(next.Nodes)) > 0:
+		next.HolderlessSince = time.Time{}
+	case next.HolderlessSince.IsZero():
 		next.HolderlessSince = now
 	}
 
@@ -592,6 +601,10 @@ func (s *Service) vipNodeStates(envID string) []vipNode {
 	out := make([]vipNode, 0, len(e.view.Nodes))
 	for _, n := range e.view.Nodes {
 		n.Faults = cloneFaults(n.Faults)
+		if n.Unheard && n.State == ingressbundle.VIPStateMaster {
+			// What the status and the bell read: a MASTER that cannot be heard is not one.
+			n.State = ""
+		}
 		out = append(out, n)
 	}
 	slices.SortFunc(out, compareVIPNodes)

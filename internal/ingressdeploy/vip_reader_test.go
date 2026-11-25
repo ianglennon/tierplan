@@ -434,3 +434,70 @@ func TestVIPReaderWaitsForTheNodeID(t *testing.T) {
 		t.Fatalf("holders once the node ID is known = %v, want [node-b]: the MASTER line written before must still be read", got)
 	}
 }
+
+// TestVIPReaderDoesNotCountAHolderThatCannotBeHeard pins WR-04: a holder whose last line is MASTER and that can no longer
+// be heard (killed without a STOP line, or lost with its host) is not the holder, so the status says none and the clock of
+// the no-holder bell starts. Its last state is kept, so it holds the address again as soon as it can be heard.
+func TestVIPReaderDoesNotCountAHolderThatCannotBeHeard(t *testing.T) {
+	v := newVIPRig(t)
+	v.a.AppendLogs("ka-a", logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
+	v.b.AppendLogs("ka-b", logLine(t, vipT0, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateBackup, "")))
+	v.read()
+	if got := v.holderNames(); len(got) != 1 || got[0] != "node-a" {
+		t.Fatalf("holders after the first pass = %v, want [node-a]", got)
+	}
+	if since := v.svc.VIPHolderlessSince(v.envID); !since.IsZero() {
+		t.Fatalf("the address is held, but it is holderless since %s", since)
+	}
+
+	// The holder's agent goes: no STOP line was written, and nobody else claims the address.
+	lost := v.clock.Now().Add(time.Minute)
+	v.clock.set(lost)
+	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected = false })
+	v.read()
+	if got := v.holderNames(); len(got) != 0 {
+		t.Fatalf("holders after the holder fell silent = %v, want none", got)
+	}
+	if since := v.svc.VIPHolderlessSince(v.envID); !since.Equal(lost) {
+		t.Errorf("holderless since %s, want %s: the no-holder bell is timed from the pass that lost the holder", since, lost)
+	}
+	for _, n := range v.svc.VIPNodeStates(v.envID) {
+		if n.Hostname == "node-a" && n.State == ingressbundle.VIPStateMaster {
+			t.Errorf("node-a is shown as MASTER while it cannot be heard")
+		}
+	}
+	if n := len(v.moves()); n != 0 {
+		t.Errorf("%d moves stored, want none: nobody took the address", n)
+	}
+
+	// It comes back with nothing new in its log: it still holds the address.
+	v.clock.set(lost.Add(time.Minute))
+	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected = true })
+	v.read()
+	if got := v.holderNames(); len(got) != 1 || got[0] != "node-a" {
+		t.Fatalf("holders after the holder was heard again = %v, want [node-a]", got)
+	}
+	if since := v.svc.VIPHolderlessSince(v.envID); !since.IsZero() {
+		t.Errorf("the address is held again, but it is holderless since %s", since)
+	}
+}
+
+// TestVIPReaderHolderThatFellSilentIsReplacedAsFailed pins that the demotion leaves the reason of a move alone: a silent
+// MASTER replaced by another node's MASTER in the same pass is still a holder_failed move.
+func TestVIPReaderHolderThatFellSilentIsReplacedAsFailed(t *testing.T) {
+	v := newVIPRig(t)
+	v.a.AppendLogs("ka-a", logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
+	v.b.AppendLogs("ka-b", logLine(t, vipT0, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateBackup, "")))
+	v.read()
+
+	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected = false })
+	v.b.AppendLogs("ka-b", logLine(t, vipT0.Add(5*time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateMaster, "")))
+	v.read()
+	got := v.moves()
+	if len(got) != 1 || got[0].Reason != ingressdeploy.VIPMoveHolderFailed || got[0].ToNodeID != vipNodeB {
+		t.Fatalf("moves = %+v, want one holder_failed move to node-b", got)
+	}
+	if h := v.holderNames(); len(h) != 1 || h[0] != "node-b" {
+		t.Fatalf("holders = %v, want [node-b]", h)
+	}
+}

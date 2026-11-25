@@ -57,6 +57,11 @@ type vipNode struct {
 	HeldAt time.Time
 	// LastHeard is the last pass that read the node's engine without a failure.
 	LastHeard time.Time
+	// Unheard is true while the node cannot be heard: its agent is not connected, the last read failed, or no keepalived
+	// task runs there. The reader sets it at the end of every pass. A MASTER that is unheard is not a holder, since a
+	// helper that died without a STOP line left that line as its last word, but State is kept as it was so the node holds
+	// the address again the moment it can be heard.
+	Unheard bool
 }
 
 // vipEvent is one parsed line with the instant the engine stamped it with and the node it came from.
@@ -106,12 +111,12 @@ func cloneFaults(m map[string]bool) map[string]bool {
 	return out
 }
 
-// holders returns every node whose last state is MASTER, sorted by host name then ID. One is the healthy case; none and
-// several are what the status reports as a problem.
+// holders returns every node whose last state is MASTER and that can be heard, sorted by host name then ID. One is the
+// healthy case; none and several are what the status reports as a problem.
 func holders(nodes map[string]vipNode) []vipNode {
 	var out []vipNode
 	for _, n := range nodes {
-		if n.State == ingressbundle.VIPStateMaster {
+		if n.State == ingressbundle.VIPStateMaster && !n.Unheard {
 			out = append(out, n)
 		}
 	}
@@ -133,6 +138,12 @@ func compareVIPNodes(a, b vipNode) int {
 // came from. Two lines with the same node, sequence number and instant are one line read twice.
 func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvState, []ingressstore.VIPMove) {
 	st := prev.clone()
+	// Whether a node can be heard is the reader's to say after the events are applied; the events themselves are applied
+	// to what the nodes last said.
+	for id, n := range st.Nodes {
+		n.Unheard = false
+		st.Nodes[id] = n
+	}
 	ordered := slices.Clone(events)
 	slices.SortStableFunc(ordered, func(a, b vipEvent) int {
 		return cmp.Or(a.At.Compare(b.At), cmp.Compare(a.NodeID, b.NodeID), cmp.Compare(a.Seq, b.Seq))
