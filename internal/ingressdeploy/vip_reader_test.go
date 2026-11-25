@@ -647,6 +647,19 @@ func TestVIPReaderHolderUnheardBell(t *testing.T) {
 	if pass(time.Minute) {
 		t.Error("raised for the node that is last to come back after an outage")
 	}
+	v.clock.set(v.clock.Now().Add(10 * time.Minute)) // the reader, or the server's host, stood still
+	if pass(10 * time.Second) {
+		t.Error("raised after a standstill of the reader, before the nodes had time to come back")
+	}
+	if !pass(2 * time.Minute) {
+		t.Error("not raised two minutes after the standstill")
+	}
+	connected(false, false)
+	pass(10 * time.Second)
+	connected(false, true)
+	if !pass(10 * time.Second) {
+		t.Error("one missed read of the other node took the bell away")
+	}
 	v.setKeepalivedState(v.b, "ka-b", "exited")
 	if !pass(2 * time.Minute) {
 		t.Error("not raised while the other node answers without a running keepalived")
@@ -941,8 +954,8 @@ func TestVIPReaderIgnoresAReplacedContainersLastWords(t *testing.T) {
 	v := newVIPRig(t)
 	labels := map[string]string{ingress.LabelComponent: ingress.ComponentKeepalived, "com.docker.swarm.service.name": ingress.ServiceNameKeepalived}
 	v.b.Reconfigure(dockertest.FakeConfig{Containers: []dockertest.FakeContainer{
-		{ID: "ka-b2", Names: []string{"/ka-b2"}, State: "running", Labels: labels},
-		{ID: "ka-b", Names: []string{"/ka-b"}, State: "exited", Labels: labels},
+		{ID: "ka-b2", Names: []string{"/ka-b2"}, State: "running", Labels: labels, Created: vipT0.Add(10 * time.Second).Unix()},
+		{ID: "ka-b", Names: []string{"/ka-b"}, State: "exited", Labels: labels, Created: vipT0.Unix()},
 	}})
 	line := func(id string, s int, ev ingressbundle.VIPEvent) {
 		v.b.AppendLogs(id, logLine(t, vipT0.Add(time.Duration(s)*time.Second), ev))

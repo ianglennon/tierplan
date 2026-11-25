@@ -646,6 +646,29 @@ func TestEnsureGoesOnWithAStoppedRollback(t *testing.T) {
 	}
 }
 
+// TestChangeVIPWithEveryNodePaused: no node can take the change now, so there is nothing to wait for.
+func TestChangeVIPWithEveryNodePaused(t *testing.T) {
+	for _, req := range []ingressdeploy.VIPRequest{{Address: "10.9.0.60/24"}, {Address: vipTestAddress, RouterID: intp(77)}} {
+		f := newVIPDisableFix(t, vipDisableOpts{config: func(c *dockertest.FakeConfig) {
+			for i := range c.NodeRows {
+				c.NodeRows[i].Availability = "pause"
+			}
+		}})
+		f.enabled()
+		f.rolling(false, false, false)
+		if req.RouterID != nil {
+			// The service is made again and swarm makes no task on a paused node.
+			f.fake.SetServiceTasks(ingress.ServiceNameKeepalived, dockertest.FakeServiceTask{ID: "gone", Node: "node-1", State: "shutdown", Desired: "shutdown", Old: true})
+		}
+		job := f.changeVIP(req)
+		wantChangeDone(t, job)
+		lines, _ := f.hub.Output(job.ID)
+		if f.clock.waited() != 0 || !slices.ContainsFunc(lines, func(l jobs.Output) bool { return strings.Contains(l.Text, "manager-1, manager-2, manager-3") }) {
+			t.Errorf("%d waits, output %v; want none and the three nodes named", f.clock.waited(), lines)
+		}
+	}
+}
+
 // TestChangeVIPDoesNotWaitForAPausedNode: swarm leaves a paused node's task alone, so the change is done without it and the job
 // names it. A node that is not paused is waited for.
 func TestChangeVIPDoesNotWaitForAPausedNode(t *testing.T) {

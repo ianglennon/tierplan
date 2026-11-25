@@ -76,15 +76,16 @@ const (
 
 // The sentences of the preview and of a failed change, built here and never from an engine's answer.
 const (
-	vipChangeRollText    = "The address moves. The nodes restart one at a time, so it may be briefly unanswered while it does."
-	vipChangeReplaceText = "The virtual IP is unanswered for a few seconds while the keepalived service is removed and created again."
-	vipChangeNoneText    = "No node is touched."
-	vipChangeKeyGoneText = "The virtual IP key is not in the swarm, so the service cannot be built. Switch the virtual IP off and on again to make a new key."
-	vipChangeUndoneText  = "A node could not run the new configuration, so swarm stopped the update. The new address was not saved and the previous one is put back."
-	vipChangeStuckText   = "A node could not run the new configuration, and swarm stopped putting the previous one back. The new address was not saved, and nodes may serve different addresses until TierPlan has put the previous one back."
-	vipChangePausedText  = "These paused nodes keep the previous configuration until they are active again: "
-	vipChangeSlowText    = "The new address is saved. Swarm carries on with the nodes that have not restarted yet."
-	vipChangeLeftText    = "The change did not finish and the keepalived service may be missing or old. Change the virtual IP again to finish it."
+	vipChangeRollText       = "The address moves. The nodes restart one at a time, so it may be briefly unanswered while it does."
+	vipChangeReplaceText    = "The virtual IP is unanswered for a few seconds while the keepalived service is removed and created again."
+	vipChangeNoneText       = "No node is touched."
+	vipChangeKeyGoneText    = "The virtual IP key is not in the swarm, so the service cannot be built. Switch the virtual IP off and on again to make a new key."
+	vipChangeUndoneText     = "A node could not run the new configuration, so swarm stopped the update. The new address was not saved and the previous one is put back."
+	vipChangeStuckText      = "A node could not run the new configuration, and swarm stopped putting the previous one back. The new address was not saved, and nodes may serve different addresses until TierPlan has put the previous one back."
+	vipChangePausedText     = "These paused nodes keep the previous configuration until they are active again: "
+	vipChangePausedGoneText = "These paused nodes run no keepalived until they are active again: "
+	vipChangeSlowText       = "The new address is saved. Swarm carries on with the nodes that have not restarted yet."
+	vipChangeLeftText       = "The change did not finish and the keepalived service may be missing or old. Change the virtual IP again to finish it."
 )
 
 var (
@@ -486,8 +487,14 @@ func (e *vipChangeRun) progress(ctx context.Context) (stackops.Convergence, []do
 		return stackops.Convergence{}, nil, err
 	}
 	e.paused = nil
+	active := false
 	for _, n := range nodes {
+		active = active || n.Availability == "active"
 		if n.Availability != "pause" {
+			continue
+		}
+		if e.pv.Strategy == VIPChangeReplace {
+			e.paused = append(e.paused, n.Hostname)
 			continue
 		}
 		left := slices.DeleteFunc(slices.Clone(rows), func(r dockerx.TaskRow) bool {
@@ -501,6 +508,10 @@ func (e *vipChangeRun) progress(ctx context.Context) (stackops.Convergence, []do
 	c := stackops.Progress(d, rows).IgnoringUpdate(e.prior)
 	if c.Live > c.Desired {
 		c.Desired, c.Want = c.Live, c.Live
+	}
+	if !active && len(e.paused) > 0 {
+		// No node can take the new configuration now, so there is nothing to wait for: a service that wants no task is settled.
+		c.Mode, c.Want = "replicated", 0
 	}
 	return c, rows, nil
 }
@@ -539,7 +550,11 @@ func (e *vipChangeRun) wait(ctx context.Context) error {
 		}
 	}
 	if len(e.paused) > 0 {
-		e.r.Output(vipChangePausedText + strings.Join(e.paused, ", "))
+		text := vipChangePausedText
+		if e.pv.Strategy == VIPChangeReplace {
+			text = vipChangePausedGoneText
+		}
+		e.r.Output(text + strings.Join(e.paused, ", "))
 	}
 	nodes := map[string]string{"running": strconv.Itoa(last.Running), "wanted": strconv.Itoa(last.Want)}
 	if err == nil {

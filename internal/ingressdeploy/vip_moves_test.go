@@ -5,6 +5,7 @@ package ingressdeploy
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -652,21 +653,49 @@ func TestVIPMovesWhatThePassKnows(t *testing.T) {
 			t.Fatalf("holders = %v, want none", got)
 		}
 	})
-	t.Run("the last words of a container that was replaced before it ended", func(t *testing.T) {
-		run := func(id string, ev vipEvent) vipEvent { ev.Run = id; return ev }
-		events := []vipEvent{
-			run("old", startEv(movesNodeB, 1000)), run("old", msEv(movesNodeB, 2, 2000, b, "")),
-			run("new", startEv(movesNodeB, 60000)), run("new", msEv(movesNodeB, 2, 60900, b, "")),
-			run("old", msEv(movesNodeB, 3, 62500, ingressbundle.VIPStateStop, "")),
+	t.Run("the lines of containers that follow each other on a node", func(t *testing.T) {
+		stop := ingressbundle.VIPStateStop
+		// run gives a line to a container, named by the second it was made in.
+		run := func(made int, ev vipEvent) vipEvent {
+			ev.Run, ev.RunCreated = "c"+strconv.Itoa(made), movesT0.Add(time.Duration(made)*time.Second)
+			return ev
 		}
-		st, moves := apply(settle(t), vipMarks{}, events...)
-		if got := st.Nodes[movesNodeB].State; got != b || len(moves) != 0 {
-			t.Fatalf("state = %q, moves %q; want BACKUP and none", got, moveText(moves))
-		}
-		// The next container is heard like any other, also when its start line is no longer in its log.
-		st, _ = apply(st, vipMarks{}, run("next", msEv(movesNodeB, 9, 90000, f, "")))
-		if got := st.Nodes[movesNodeB].State; got != f {
-			t.Fatalf("state = %q, want FAULT", got)
+		only := func(ev vipEvent) vipEvent { ev.RunOnly = true; return ev }
+		n := movesNodeB
+		for _, c := range []struct {
+			name   string
+			passes [][]vipEvent
+			want   string
+		}{
+			{"the old one's STOP after the new one's BACKUP", [][]vipEvent{{
+				run(1, startEv(n, 1000)), run(1, msEv(n, 2, 2000, b, "")),
+				run(60, startEv(n, 60000)), run(60, msEv(n, 2, 60900, b, "")), run(1, msEv(n, 3, 62500, stop, "")),
+			}}, b},
+			{"a third one after a second that crashed", [][]vipEvent{{
+				run(1, startEv(n, 1000)), run(1, msEv(n, 2, 2000, b, "")), run(60, startEv(n, 60000)),
+				run(63, startEv(n, 63000)), run(63, msEv(n, 2, 64000, b, "")), run(1, msEv(n, 3, 69000, stop, "")),
+			}}, b},
+			{"a new one whose start line is no longer in its log", [][]vipEvent{{run(1, msEv(n, 2, 2000, b, ""))}, {run(60, msEv(n, 9, 90000, f, ""))}}, f},
+			{"a fault line before the start line", [][]vipEvent{{run(1, msEv(n, 2, 2000, b, ""))}, {
+				run(60, faultEv(n, 1, 60, ingressbundle.VIPReasonNoInterface, true)), run(60, startEv(n, 70000)), run(60, msEv(n, 3, 71000, m, "")),
+			}, {run(60, msEv(n, 4, 80000, f, ""))}}, f},
+			{"the old one's lines read after the new one's", [][]vipEvent{
+				{run(60, startEv(n, 60000)), run(60, msEv(n, 2, 60900, b, ""))},
+				{run(1, startEv(n, 1000)), run(1, msEv(n, 2, 2000, b, "")), run(1, msEv(n, 3, 62500, stop, ""))},
+				{run(60, msEv(n, 3, 90000, f, ""))},
+			}, f},
+			{"a clock that stepped back, with one container running", [][]vipEvent{{run(500, msEv(n, 2, 501000, b, ""))}, {
+				only(run(60, startEv(n, 60000))), only(run(60, msEv(n, 2, 61000, f, ""))),
+			}}, f},
+			{"a container started again in place", [][]vipEvent{{run(1, msEv(n, 5, 2000, b, "")), run(1, startEv(n, 60000))}, {run(1, msEv(n, 2, 61000, f, ""))}}, f},
+		} {
+			var st vipEnvState
+			for _, p := range c.passes {
+				st, _ = apply(st, vipMarks{}, p...)
+			}
+			if got := st.Nodes[n].State; got != c.want {
+				t.Errorf("%s: state = %q, want %q", c.name, got, c.want)
+			}
 		}
 	})
 	t.Run("a node whose container is gone", func(t *testing.T) {

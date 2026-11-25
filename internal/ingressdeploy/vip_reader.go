@@ -224,6 +224,8 @@ type nodeRead struct {
 	skipped uint64
 	// more is true when a container's read stopped at a cap, so lines it has not taken yet are waiting for the next pass.
 	more bool
+	// only is the ID of the one keepalived container that runs on the node, "" when none or several do.
+	only string
 }
 
 // readVIPOnce takes one pass over one environment: it reads the new lines of every connected node's keepalived
@@ -343,6 +345,17 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	}
 	marks.Gone = gone
 
+	// What runs alone now is judged by this pass, for the lines kept from earlier passes of the replay too.
+	only := map[string]string{}
+	for _, r := range reads {
+		only[r.node.SwarmNodeID] = r.only
+	}
+	for _, list := range [][]vipEvent{events, replay} {
+		for i := range list {
+			list[i].RunOnly = list[i].Run != "" && list[i].Run == only[list[i].NodeID]
+		}
+	}
+
 	next, moves := detectMoves(prev, events, marks)
 	if !replayed {
 		replay = append(slices.Clone(replay), events...)
@@ -375,14 +388,14 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 		read[r.node.SwarmNodeID] = r.ok
 	}
 	for id, n := range next.Nodes {
-		switch {
-		case !read[id]:
-			n.ReadSince = time.Time{}
-		case n.ReadSince.IsZero():
-			n.ReadSince, n.ReadAt = now, now
-		default:
-			n.ReadAt = now
+		if !read[id] {
+			continue
 		}
+		// A read missed here and there is no break; a reader that stood still is one.
+		if n.ReadSince.IsZero() || now.Sub(n.ReadAt) > vipReadFresh {
+			n.ReadSince = now
+		}
+		n.ReadAt = now
 		next.Nodes[id] = n
 	}
 	switch {
@@ -474,6 +487,15 @@ func (s *Service) readVIPNode(ctx context.Context, envID string, n NodeInfo, cur
 			return err
 		}
 		out.ok = true
+		var live []string
+		for _, row := range rows {
+			if row.Labels[swarmServiceLabel] == ingress.ServiceNameKeepalived && row.State == "running" {
+				live = append(live, row.ID)
+			}
+		}
+		if len(live) == 1 {
+			out.only = live[0]
+		}
 		for _, row := range rows {
 			// The component label is one anyone with Docker access on the node can put on a container; a task of TierPlan's
 			// service also carries the swarm's service name, which is what the API's ownership rules require too.
@@ -537,7 +559,8 @@ func (s *Service) readVIPContainer(ctx context.Context, cli *dockerx.Client, row
 		s.takeVIPLine(rl, cur, out)
 	}
 	for i := range out.events[taken:] {
-		out.events[taken+i].Run = row.ID
+		ev := &out.events[taken+i]
+		ev.Run, ev.RunCreated = row.ID, row.Created
 	}
 	if !failed && !capped && row.State != "running" && row.State != "restarting" && row.State != "created" && !hitLimit && !sink.partial {
 		// The container had stopped before the read began, and the read reached its end: nothing more will be written.
