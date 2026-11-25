@@ -76,8 +76,9 @@ type vipEnv struct {
 	// handoff and disabling are the marks (markVIPHandoff, markVIPDisabling).
 	handoff   map[string]time.Time
 	disabling bool
-	// settled is false until a pass has stored what it found: the first pass after a start, and the first after a failed
-	// store, store only moves newer than the newest stored one (D-21).
+	// settled is false until a pass has stored what it found and has read every container to its end: the passes that
+	// replay the logs after a start, and the first after a failed store, store only moves newer than the newest stored
+	// one (D-21).
 	settled bool
 	// skipped counts the lines refused or dropped, never their text.
 	skipped uint64
@@ -204,6 +205,8 @@ type nodeRead struct {
 	// ok is true when the node's engine answered every call.
 	ok      bool
 	skipped uint64
+	// more is true when a container's read stopped at a cap, so lines it has not taken yet are waiting for the next pass.
+	more bool
 }
 
 // readVIPOnce takes one pass over one environment: it reads the new lines of every connected node's keepalived
@@ -256,9 +259,13 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	var events []vipEvent
 	silent := map[string]bool{}
 	skipped := uint64(0)
+	caughtUp := true
 	for _, r := range reads {
 		events = append(events, r.events...)
 		skipped += r.skipped
+		if r.more {
+			caughtUp = false
+		}
 		if !r.ok || !r.running {
 			silent[r.node.SwarmNodeID] = true
 		}
@@ -336,7 +343,9 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	env.mu.Lock()
 	defer env.mu.Unlock()
 	env.view = next
-	env.settled = true
+	// The replay of a log longer than one pass takes is not over until a pass has read to the end of every container. Until
+	// then the moves it rebuilds are still filtered against the newest stored one, or an old move would be stored twice.
+	env.settled = env.settled || caughtUp
 	env.skipped += skipped
 	for _, r := range reads {
 		if !r.ok {
@@ -424,6 +433,9 @@ func (s *Service) readVIPContainer(ctx context.Context, cli *dockerx.Client, row
 	sink.finish()
 	hitLimit := src.N <= 0
 	capped := errors.Is(copyErr, errVIPEnough)
+	if capped || hitLimit {
+		out.more = true
+	}
 	failed := copyErr != nil && !capped && !errors.Is(copyErr, io.ErrUnexpectedEOF)
 	for _, rl := range sink.lines {
 		s.takeVIPLine(rl, cur, out)

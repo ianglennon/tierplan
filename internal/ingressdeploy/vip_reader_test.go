@@ -530,3 +530,47 @@ func TestVIPReaderReadsOnlyTasksOfTheService(t *testing.T) {
 		}
 	}
 }
+
+// TestVIPReaderLongReplayStoresNothingTwice pins IN-06: a log with more lines than one pass takes (500) is replayed over
+// several passes after a restart, and the moves the later passes rebuild from lines older than the newest stored move are
+// not stored again.
+func TestVIPReaderLongReplayStoresNothingTwice(t *testing.T) {
+	v := newVIPRig(t)
+	t1, t2 := vipT0.Add(1000*time.Millisecond), vipT0.Add(2000*time.Millisecond)
+	// node-a's log is longer than a pass reads: it holds the address, yields at once, and after 600 lines of filler takes the
+	// address back at t2. node-b holds it in between, from t1 to 1.8 s.
+	lines := []dockertest.FakeLogLine{
+		logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")),
+		logLine(t, vipT0.Add(time.Millisecond), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")),
+	}
+	for i := range 600 {
+		lines = append(lines, logLine(t, vipT0.Add(time.Duration(i+2)*time.Millisecond), ingressbundle.VIPEvent{
+			Event: ingressbundle.VIPEventClockSkew, Node: vipNodeA, Seq: uint64(i + 3), Active: i%2 == 0,
+		}))
+	}
+	lines = append(lines, logLine(t, t2, vipStateEvent(vipNodeA, 603, ingressbundle.VIPStateMaster, "")))
+	v.a.AppendLogs("ka-a", lines...)
+	v.b.AppendLogs("ka-b",
+		logLine(t, t1, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateMaster, "")),
+		logLine(t, vipT0.Add(1800*time.Millisecond), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, "")),
+	)
+	for _, m := range []ingressstore.VIPMove{
+		{EnvID: v.envID, At: t1, FromNodeID: vipNodeA, FromNodeName: "node-a", ToNodeID: vipNodeB, ToNodeName: "node-b", Reason: ingressdeploy.VIPMoveUnknown},
+		{EnvID: v.envID, At: t2, FromNodeID: vipNodeB, FromNodeName: "node-b", ToNodeID: vipNodeA, ToNodeName: "node-a", Reason: ingressdeploy.VIPMoveUnknown},
+	} {
+		if err := v.istore.InsertVIPMove(testsupport.Context(t), m); err != nil {
+			t.Fatalf("InsertVIPMove: %v", err)
+		}
+	}
+
+	fresh := ingressdeploy.New(v.deps)
+	for pass := 1; pass <= 4; pass++ {
+		fresh.ReadVIPOnce(testsupport.Context(t), v.envID)
+		if n := len(v.moves()); n != 2 {
+			t.Fatalf("%d moves stored after replay pass %d, want the 2 that were stored before the restart: %+v", n, pass, v.moves())
+		}
+	}
+	if h := fresh.VIPHolders(v.envID); len(h) != 1 || h[0].Hostname != "node-a" {
+		t.Fatalf("holders after the replay = %v, want [node-a]", h)
+	}
+}
