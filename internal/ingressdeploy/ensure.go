@@ -735,6 +735,10 @@ func (s *Service) vipSurvey(ctx context.Context, envID string, cfg ingressstore.
 		}
 		p.held = true
 	}
+	if st := p.service.UpdateStatus; st != nil && st.State == updateRollbackPaused {
+		// The spec is the wanted one again, but swarm gave up putting it back, so nodes may still run the refused one.
+		p.held = true
+	}
 	p.work = serviceSettled(p.service) && len(staleVIPSecrets(p.secrets, envID, name, liveSecretNames(p.service)...)) > 0
 	return p, ""
 }

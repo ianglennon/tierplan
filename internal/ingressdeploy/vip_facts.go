@@ -7,11 +7,15 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
+
+// vipReadFresh is how old the last read of a node may be for it to count as heard now. A reader that stands still hears nobody.
+const vipReadFresh = 30 * time.Second
 
 // VIPFacts reads what the header bell needs to know of an environment's virtual IP (A-07): the configuration row, what the
 // reader knows of each node, the instant the address lost its holder, the moves of the last hour and the manager table. The
@@ -33,14 +37,15 @@ func (s *Service) VIPFacts(ctx context.Context, envID string) (envs.VIPFacts, bo
 		RouterID: cfg.RouterID,
 	}
 	f.AuthWindow = ingressbundle.VIPAuthWindow
+	now := s.d.Clock.Now()
 	states := s.vipNodeStates(envID)
 	for _, n := range states {
 		host := n.Hostname
 		if host == "" {
 			host = n.NodeID
 		}
-		if n.LastHeard.After(f.LastHeard) {
-			f.LastHeard = n.LastHeard
+		if !n.ReadSince.IsZero() && now.Sub(n.ReadAt) <= vipReadFresh && (f.HeardSince.IsZero() || n.ReadSince.Before(f.HeardSince)) {
+			f.HeardSince = n.ReadSince
 		}
 		if n.Foreign {
 			f.ForeignRouter = true
@@ -66,7 +71,7 @@ func (s *Service) VIPFacts(ctx context.Context, envID string) (envs.VIPFacts, bo
 		return f, true, nil
 	}
 
-	moves, err := s.d.Store.VIPMovesSince(ctx, envID, s.d.Clock.Now().Add(-envs.VIPMovedWindow))
+	moves, err := s.d.Store.VIPMovesSince(ctx, envID, now.Add(-envs.VIPMovedWindow))
 	if err != nil {
 		return envs.VIPFacts{}, false, err
 	}

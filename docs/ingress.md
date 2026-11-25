@@ -411,8 +411,10 @@ has no virtual IP. The change is audited as `ingress.vip_changed`. The key and i
 The job waits until every node runs the new configuration, about half a minute for three nodes and at most ten minutes, and only
 then saves the new address. Until it is done the status shows the previous one and no other operation starts on the environment.
 A wait that runs out of time, or is cancelled, still saves the new address, because swarm carries on with the nodes that are left.
-An update that swarm stopped, because a node could not run it, is not saved: swarm or the ensure loop puts the previous address
-back. So does the loop when TierPlan is stopped or crashes in the middle of a change, which you then make again.
+An update that swarm stopped, because a node could not run it, is not saved and swarm puts the previous address back. If a node
+cannot run that either, swarm gives up: nodes may then serve different addresses, `lastEnsure` reports `update_failed`, and
+switching the virtual IP off and on again is the way out. When TierPlan crashes or is killed while it waits, nothing is saved and
+the ensure loop puts the previous address back, so make the change again. A normal stop of TierPlan saves the new address.
 
 If a change does not finish, the next `PUT` with the same body finishes it.
 
@@ -470,8 +472,8 @@ Two things about that history may surprise you:
 
 Bell items, for a caller who manages the environment's ingress: `vip_no_holder` (an error: no node has held the address for more
 than ten seconds, except while a node's keepalived has run for under fifteen seconds, which is a normal first start),
-`vip_multiple_holders`, `vip_holder_unheard` (TierPlan has not heard from the only holder for more than a minute while it hears
-another node; the holder is still shown, because a lost agent does not prove that it let go of the address), `vip_moved` (one item per environment however many moves there were in the last hour, with the count; a
+`vip_multiple_holders`, `vip_holder_unheard` (TierPlan has not heard from the only holder for more than two minutes and has
+heard another node all that time; the holder is still shown, because a lost agent does not prove that it let go of the address), `vip_moved` (one item per environment however many moves there were in the last hour, with the count; a
 `disabled` move raises none), `vip_foreign_router`, `vip_clock_skew` and `vip_privileged_lost` (a manager whose agent allowed
 privileged services now refuses).
 

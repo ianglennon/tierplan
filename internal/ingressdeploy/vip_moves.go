@@ -71,8 +71,11 @@ type vipNode struct {
 	// Superseded is true for a MASTER that cannot be heard while a node that can took the address after it did: it can no
 	// longer say that it does not hold it, so it is not counted as a holder until it can be heard or writes a line again.
 	Superseded bool
-	// LastHeard is the last pass that read the node's engine without a failure.
+	// LastHeard is the last pass that read the node's engine without a failure and found a keepalived container.
 	LastHeard time.Time
+	// ReadSince is since when every pass read the node's engine without a failure, the zero time when the last one did not,
+	// and ReadAt the last pass that did.
+	ReadSince, ReadAt time.Time
 	// Gone is true while the last pass read the node's engine successfully and found no running keepalived container
 	// there: positive evidence that the helper is dead, whatever its last line said. It is set after the lines of every
 	// pass. A MASTER that is gone is not a holder, since a helper killed without a STOP line left MASTER as its last word,
@@ -100,6 +103,8 @@ type vipMarks struct {
 	Silent map[string]bool
 	// Gone is the set of nodes the pass asked and found running no keepalived container (vipNode.Gone).
 	Gone map[string]bool
+	// Heard is when an earlier pass last heard each node.
+	Heard map[string]time.Time
 	// Now is the instant of the pass, by the server's clock.
 	Now time.Time
 }
@@ -184,22 +189,26 @@ func compareVIPNodes(a, b vipNode) int {
 }
 
 // supersede marks every MASTER that cannot be heard while a node that can be heard took the address after it, and takes the
-// mark off a node that is heard: a running helper whose last line says MASTER holds the address. Silence is a fact of the pass
-// and not of the lines, so it is applied after them and never to a line of the past.
-func (st *vipEnvState) supersede(silent map[string]bool) {
-	var newest time.Time
+// mark off a node that is heard: a running helper whose last line says MASTER holds the address. A node that had the address
+// for a while and gave it up again took it all the same, when it took it after the silent node was last heard; before that the
+// silent node still said it held the address itself, as it does when two nodes did not hear each other for a moment. A lost
+// election is neither. Silence is a fact of the pass and not of the lines, so it is applied after them and never to a line of
+// the past.
+func (st *vipEnvState) supersede(marks vipMarks) {
 	for id, n := range st.Nodes {
-		// A node that had the address for a while and gave it up again took it all the same; a lost election did not.
-		took := n.State == ingressbundle.VIPStateMaster || n.LostAt.Sub(n.HeldAt) >= vipSettleWindow
-		if took && !silent[id] && n.HeldAt.After(newest) {
-			newest = n.HeldAt
-		}
-	}
-	for id, n := range st.Nodes {
-		if n.State != ingressbundle.VIPStateMaster || !silent[id] {
+		if n.State != ingressbundle.VIPStateMaster || !marks.Silent[id] {
 			n.Superseded = false
-		} else if newest.After(n.HeldAt) {
-			n.Superseded = true
+			st.Nodes[id] = n
+			continue
+		}
+		for other, o := range st.Nodes {
+			if marks.Silent[other] || !o.HeldAt.After(n.HeldAt) {
+				continue
+			}
+			if o.State == ingressbundle.VIPStateMaster ||
+				(o.LostAt.Sub(o.HeldAt) >= vipSettleWindow && o.HeldAt.After(marks.Heard[id])) {
+				n.Superseded = true
+			}
 		}
 		st.Nodes[id] = n
 	}
@@ -293,7 +302,7 @@ func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvSta
 		n.Gone = marks.Gone[id]
 		st.Nodes[id] = n
 	}
-	st.supersede(marks.Silent)
+	st.supersede(marks)
 	st.track(time.Time{}, marks)
 	// While the virtual IP is being switched off the reader may not come back to the environment, so nothing is held back.
 	if st.claimOpen() && (marks.Disabling || marks.Now.Sub(st.Claim.Seen) >= vipSettleWindow) {

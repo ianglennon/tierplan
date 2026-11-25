@@ -601,6 +601,62 @@ func TestVIPReaderKeepsAHolderItCannotAsk(t *testing.T) {
 	})
 }
 
+// TestVIPReaderHolderUnheardBell: the bell about a holder nobody can hear needs another node that was read all that time, with
+// or without a keepalived container, so it is not raised for the node that is last to come back after an outage.
+func TestVIPReaderHolderUnheardBell(t *testing.T) {
+	v := newVIPRig(t)
+	ctx := testsupport.Context(t)
+	v.a.AppendLogs("ka-a", logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
+	v.b.AppendLogs("ka-b", logLine(t, vipT0, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateFault, ingressbundle.VIPReasonProbeFailing)))
+	connected := func(a, b bool) {
+		v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected, i.Nodes[1].Connected = a, b })
+	}
+	// pass reads every 10 seconds for d, and tells whether the bell is raised at the end.
+	pass := func(d time.Duration) bool {
+		for end := v.clock.Now().Add(d); v.clock.Now().Before(end); {
+			v.clock.set(v.clock.Now().Add(10 * time.Second))
+			v.read()
+		}
+		f, ok, err := v.svc.VIPFacts(ctx, v.envID)
+		if err != nil || !ok {
+			t.Fatalf("VIPFacts = %v, %v", ok, err)
+		}
+		for _, w := range envs.VIPWarnings(v.envID, "e", f, nil, v.clock.Now()) {
+			if w.ID == envs.WarnVIPHolderUnheard {
+				return true
+			}
+		}
+		return false
+	}
+	connected(true, true)
+	if pass(5 * time.Minute) {
+		t.Error("raised while both nodes are heard")
+	}
+	connected(false, true)
+	if pass(envs.VIPUnheardAfter - 10*time.Second) {
+		t.Error("raised before the holder was unheard long enough")
+	}
+	if !pass(30 * time.Second) {
+		t.Error("not raised for a holder that is not heard")
+	}
+	connected(false, false)
+	if pass(5 * time.Minute) {
+		t.Error("raised while no node is heard")
+	}
+	connected(false, true)
+	if pass(time.Minute) {
+		t.Error("raised for the node that is last to come back after an outage")
+	}
+	v.setKeepalivedState(v.b, "ka-b", "exited")
+	if !pass(2 * time.Minute) {
+		t.Error("not raised while the other node answers without a running keepalived")
+	}
+	connected(true, true)
+	if pass(10 * time.Second) {
+		t.Error("raised after the holder was heard again")
+	}
+}
+
 // TestVIPReaderHolderThatFellSilentIsReplacedAsFailed pins that the demotion leaves the reason of a move alone: a silent
 // MASTER replaced by another node's MASTER in the same pass is still a holder_failed move.
 func TestVIPReaderHolderThatFellSilentIsReplacedAsFailed(t *testing.T) {

@@ -224,7 +224,7 @@ func TestVIPBellWireShape(t *testing.T) {
 	}
 
 	// The only holder has not been heard from for a while, and another node has.
-	facts.Holders, facts.LastHeard = []envs.VIPHolderFact{{NodeID: "n1", Host: "node-a", LastHeard: now.Add(-3 * time.Minute)}}, now
+	facts.Holders, facts.HeardSince = []envs.VIPHolderFact{{NodeID: "n1", Host: "node-a", LastHeard: now.Add(-3 * time.Minute)}}, now.Add(-time.Hour)
 	fake.set(env.ID, facts)
 	items, _ = f.bellRaw(t, f.cookie, f.csrf)
 	var unheard bool

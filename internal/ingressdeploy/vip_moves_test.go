@@ -638,6 +638,20 @@ func TestVIPMovesWhatThePassKnows(t *testing.T) {
 			t.Fatalf("holders = %v, want none", got)
 		}
 	})
+	t.Run("a split that healed while the holder was heard does not unseat it later", func(t *testing.T) {
+		// Two nodes did not hear each other for five seconds; A never left MASTER. It falls silent an hour later.
+		split, _ := apply(settle(t), vipMarks{}, stateEv(movesNodeB, 2, 10, m, ""), stateEv(movesNodeB, 3, 15, b, ""))
+		silent := vipMarks{Silent: silentA.Silent, Heard: map[string]time.Time{movesNodeA: movesT0.Add(time.Hour)}}
+		st, moves := apply(split, silent)
+		if got := holderIDs(st); len(got) != 1 || got[0] != movesNodeA || len(moves) != 0 {
+			t.Fatalf("holders = %v, moves %q, want [A] and none", got, moveText(moves))
+		}
+		// A successor of the silence does unseat it, also one that gave the address up again.
+		st, _ = apply(split, silent, stateEv(movesNodeB, 4, 3601, m, ""), stateEv(movesNodeB, 5, 3610, f, ""))
+		if got := holderIDs(st); len(got) != 0 {
+			t.Fatalf("holders = %v, want none", got)
+		}
+	})
 	t.Run("a node whose container is gone", func(t *testing.T) {
 		gone := vipMarks{Silent: silentA.Silent, Gone: map[string]bool{movesNodeA: true}}
 		// A's MASTER is the newer by its clock, which must not keep B's claim from settling.

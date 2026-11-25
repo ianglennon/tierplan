@@ -67,16 +67,17 @@ func TestVIPFactsFromState(t *testing.T) {
 		}
 	})
 
-	t.Run("when the holder and any node were last heard", func(t *testing.T) {
+	t.Run("when the holder was last heard and since when another node is", func(t *testing.T) {
 		s, now := factsRig(t)
-		lost, heard := now.Add(-3*time.Minute), now.Add(-2*time.Second)
+		lost, since, heard := now.Add(-3*time.Minute), now.Add(-10*time.Minute), now.Add(-2*time.Second)
 		s.svc.SeedVIPState(s.envID, []ingressdeploy.SeedNode{
-			{NodeID: vipNodeA, Hostname: "node-a", State: ingressbundle.VIPStateMaster, LastHeard: lost},
-			{NodeID: vipNodeB, Hostname: "node-b", State: ingressbundle.VIPStateFault, LastHeard: heard},
+			{NodeID: vipNodeA, Hostname: "node-a", State: ingressbundle.VIPStateMaster, LastHeard: lost, ReadAt: lost},
+			{NodeID: vipNodeB, Hostname: "node-b", State: ingressbundle.VIPStateFault, ReadSince: since, ReadAt: heard},
+			{NodeID: "node-c-id", Hostname: "node-c", State: ingressbundle.VIPStateFault, ReadSince: now.Add(-time.Hour), ReadAt: now.Add(-time.Minute)},
 		}, time.Time{})
 		f := s.mustFacts()
-		if len(f.Holders) != 1 || !f.Holders[0].LastHeard.Equal(lost) || !f.LastHeard.Equal(heard) {
-			t.Fatalf("holders = %+v, last heard %v; want node-a heard at %v and any node at %v", f.Holders, f.LastHeard, lost, heard)
+		if len(f.Holders) != 1 || !f.Holders[0].LastHeard.Equal(lost) || !f.HeardSince.Equal(since) {
+			t.Fatalf("holders = %+v, heard since %v; want node-a heard at %v and, node-c's read being too old, node-b since %v", f.Holders, f.HeardSince, lost, since)
 		}
 	})
 

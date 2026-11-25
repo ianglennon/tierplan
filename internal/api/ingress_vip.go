@@ -264,8 +264,9 @@ func registerIngressVIPWrites(r *httpx.Router, d IngressDeployDeps) {
 		Path:        "/api/env/{envId}/ingress/vip",
 		Summary:     "Change the address or the router ID of a swarm's virtual IP",
 		Description: "The body is the whole configuration, as the preview takes it: an address, and a router ID or none to derive it from the cluster ID again. Takes the environment's operation lock, " +
-			"runs every check of the preview again on the new request and answers 202 with a job's ID at once. The job updates the keepalived service and stores the new address with its audit entry " +
-			"(ingress.vip_changed). The key and its secret are kept: a change never rotates them. An address change rolls one node at a time and a router ID change removes the service and creates it again, " +
+			"runs every check of the preview again on the new request and answers 202 with a job's ID at once. The job updates the keepalived service, waits until every node runs it and only then stores the new address with its audit entry " +
+			"(ingress.vip_changed). A wait that runs out of time (10 minutes) or is cancelled ends its item failed or cancelled and the address is stored all the same, since swarm carries on; " +
+			"an update that swarm stopped or rolled back is not stored. The key and its secret are kept: a change never rotates them. An address change rolls one node at a time and a router ID change removes the service and creates it again, " +
 			"which the preview says first. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. " +
 			"404 " + problemVIPNotEnabled + " when the environment has no virtual IP. A refusal is 409 with the finding's code as the type and the server's sentence as the detail, as for the enable, " +
 			"and an address that is not an address with its prefix length (from /8 to /32) is 422 vip_address_invalid; a virtual IP whose switch-off failed part way is 409 vip_removal_pending, " +

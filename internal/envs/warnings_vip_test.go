@@ -58,22 +58,24 @@ func TestVIPBellItems(t *testing.T) {
 		ago := func(d time.Duration) time.Time { return vipNow.Add(-d) }
 		cases := []struct {
 			name          string
-			holder, other time.Time
+			holder, since time.Time
 			holders       int
 			want          bool
 		}{
-			{"unheard for longer than the limit, another node heard", ago(VIPUnheardAfter + time.Second), ago(2 * time.Second), 1, true},
-			{"unheard for exactly the limit", ago(VIPUnheardAfter), ago(2 * time.Second), 1, false},
-			{"heard", ago(2 * time.Second), ago(2 * time.Second), 1, false},
-			{"nobody is heard, which the environment's own items say", ago(5 * time.Minute), ago(5 * time.Minute), 1, false},
-			{"never heard", time.Time{}, ago(2 * time.Second), 1, false},
-			{"two holders are another item", ago(5 * time.Minute), ago(2 * time.Second), 2, false},
+			{"unheard for longer than the limit, another node heard", ago(VIPUnheardAfter + time.Second), ago(time.Hour), 1, true},
+			{"unheard for exactly the limit", ago(VIPUnheardAfter), ago(time.Hour), 1, false},
+			{"heard", ago(2 * time.Second), ago(time.Hour), 1, false},
+			{"nobody is heard, which the environment's own items say", ago(5 * time.Minute), time.Time{}, 1, false},
+			{"another node is only just heard again after an outage", ago(5 * time.Minute), ago(VIPUnheardAfter - time.Second), 1, false},
+			{"another node is heard for exactly the limit", ago(5 * time.Minute), ago(VIPUnheardAfter), 1, true},
+			{"never heard", time.Time{}, ago(time.Hour), 1, false},
+			{"two holders are another item", ago(5 * time.Minute), ago(time.Hour), 2, false},
 		}
 		for _, c := range cases {
 			f := vipOn()
-			f.Holders[0].LastHeard, f.LastHeard = c.holder, c.other
+			f.Holders[0].LastHeard, f.HeardSince = c.holder, c.since
 			if c.holders == 2 {
-				f.Holders = append(f.Holders, VIPHolderFact{NodeID: "n2", Host: "node-b", LastHeard: c.other})
+				f.Holders = append(f.Holders, VIPHolderFact{NodeID: "n2", Host: "node-b", LastHeard: vipNow})
 			}
 			got := vipByID(vipWarn(f), WarnVIPHolderUnheard)
 			if (len(got) == 1) != c.want {

@@ -300,7 +300,9 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	}
 	// A node the state knows that the engine no longer lists is as silent as one that is not connected.
 	prev := env.view
-	for id := range prev.Nodes {
+	marks.Heard = make(map[string]time.Time, len(prev.Nodes))
+	for id, n := range prev.Nodes {
+		marks.Heard[id] = n.LastHeard
 		if !slices.ContainsFunc(info.Nodes, func(n NodeInfo) bool { return n.SwarmNodeID == id }) {
 			silent[id] = true
 		}
@@ -367,6 +369,21 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 		}
 		n.LastHeard = now
 		next.Nodes[n.NodeID] = n
+	}
+	read := map[string]bool{}
+	for _, r := range reads {
+		read[r.node.SwarmNodeID] = r.ok
+	}
+	for id, n := range next.Nodes {
+		switch {
+		case !read[id]:
+			n.ReadSince = time.Time{}
+		case n.ReadSince.IsZero():
+			n.ReadSince, n.ReadAt = now, now
+		default:
+			n.ReadAt = now
+		}
+		next.Nodes[id] = n
 	}
 	switch {
 	case len(holders(next.Nodes)) > 0:
@@ -435,7 +452,7 @@ func (st *vipEnvState) keepHeard(prev vipEnvState, silent map[string]bool) {
 			st.Nodes[id] = p
 			continue
 		}
-		n.LastHeard = p.LastHeard
+		n.LastHeard, n.ReadSince, n.ReadAt = p.LastHeard, p.ReadSince, p.ReadAt
 		// A node that was superseded stays so while it cannot be heard, also when the node that took the address has gone.
 		if p.Superseded && silent[id] && n.State == p.State && n.HeldAt.Equal(p.HeldAt) {
 			n.Superseded = true

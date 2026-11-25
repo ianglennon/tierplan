@@ -4,6 +4,7 @@
 package ingressdeploy_test
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -517,5 +518,116 @@ func TestChangeVIPCancelledWhileItWaitsIsSaved(t *testing.T) {
 	}
 	if _, held := f.locks.Held(f.envID); held {
 		t.Error("the operation lock is still held after the job")
+	}
+}
+
+// TestChangeVIPTheSwarmIsRollingBackIsNotSaved: a wait that ends for another reason, a cancel or the deadline, while swarm puts
+// the previous configuration back does not save the refused address, or the ensure loop would roll it out again.
+func TestChangeVIPTheSwarmIsRollingBackIsNotSaved(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, detail string
+		cancel              bool
+	}{
+		{"cancelled while it rolls back", "rollback_started", "put back", true},
+		{"out of time while it rolls back", "rollback_started", "put back", false},
+		{"cancelled as the rollback ends", "rollback_completed", "put back", true},
+		{"the rollback stopped too", "rollback_paused", "off and on again", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newVIPDisableFix(t, vipDisableOpts{})
+			ctx := testsupport.Context(t)
+			f.enabled()
+			before, _ := f.istore.GetVIP(ctx, f.envID)
+			f.rolling(false, false, false)
+			var id string
+			started := make(chan struct{})
+			f.clock.hook = func(n int) {
+				if n != 1 {
+					return
+				}
+				<-started
+				f.fake.SetUpdateState(ingress.ServiceNameKeepalived, tc.state, "rollback")
+				if tc.cancel {
+					if err := f.hub.Cancel(id); err != nil {
+						t.Errorf("cancel: %v", err)
+					}
+				}
+			}
+			id, err := f.svc.ChangeVIP(ctx, testActor, testOwner, f.envID, ingressdeploy.VIPRequest{Address: "10.9.0.60/24"})
+			if err != nil {
+				t.Fatalf("ChangeVIP: %v", err)
+			}
+			close(started)
+			job := f.wait(id)
+			if it := itemOf(job, ingressdeploy.ItemVIPChangeWait); it.State != jobs.ItemFailed || !strings.Contains(it.Detail, tc.detail) {
+				t.Errorf("wait item = %+v, want failed, saying %q", it, tc.detail)
+			}
+			if it := itemOf(job, ingressdeploy.ItemVIPChangeSave); it.State != jobs.ItemSkipped {
+				t.Errorf("save item = %+v, want not run", it)
+			}
+			if after, _ := f.istore.GetVIP(ctx, f.envID); after != before {
+				t.Errorf("the row was touched: %+v, was %+v", after, before)
+			}
+			if got := f.auditCount("ingress.vip_changed"); got != 0 {
+				t.Errorf("audit rows = %d, want none", got)
+			}
+		})
+	}
+}
+
+// TestChangeVIPWaitsForANodeThatKeepsFailing: between two tries of a node's task swarm wants nothing of it running, so the
+// nodes that do run read as all of them. The wait counts the task that waits for its restart.
+func TestChangeVIPWaitsForANodeThatKeepsFailing(t *testing.T) {
+	f := newVIPDisableFix(t, vipDisableOpts{})
+	f.enabled()
+	f.fake.SetServiceTasks(ingress.ServiceNameKeepalived,
+		dockertest.FakeServiceTask{ID: "k1", Node: "node-1", State: "running"},
+		dockertest.FakeServiceTask{ID: "k2", Node: "node-2", State: "running"},
+		dockertest.FakeServiceTask{ID: "k3b", Node: "node-3", State: "ready", Desired: "ready"},
+		dockertest.FakeServiceTask{ID: "k3a", Node: "node-3", State: "rejected", Desired: "shutdown", Err: "No such image"})
+	job := f.changeVIP(ingressdeploy.VIPRequest{Address: vipTestAddress, RouterID: intp(77)})
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeWait); it.State != jobs.ItemFailed || it.Result["running"] != "2" || it.Result["wanted"] != "3" {
+		t.Errorf("wait item = %+v, want failed with 2 of 3", it)
+	}
+	if row, _ := f.istore.GetVIP(testsupport.Context(t), f.envID); row.RouterID != 77 {
+		t.Errorf("router ID = %d, want 77 saved: the swarm carries on", row.RouterID)
+	}
+}
+
+// TestChangeVIPRolledBackAfterTheSaveIsNotRepeated: a change saved after a wait that was too long, which swarm rolls back later,
+// is not written again at once by the ensure loop.
+func TestChangeVIPRolledBackAfterTheSaveIsNotRepeated(t *testing.T) {
+	f := newVIPDisableFix(t, vipDisableOpts{})
+	f.enabled()
+	d, ok := f.keepalivedService()
+	if !ok {
+		t.Fatal("no keepalived service")
+	}
+	var before swarm.ServiceSpec
+	if err := json.Unmarshal(d.Spec, &before); err != nil {
+		t.Fatal(err)
+	}
+	f.rolling(true, true, false)
+	f.changeVIP(ingressdeploy.VIPRequest{Address: "10.9.0.60/24"})
+	f.fake.ReplaceServiceSpec(ingress.ServiceNameKeepalived, before)
+	f.fake.SetUpdateState(ingress.ServiceNameKeepalived, "rollback_completed", "rollback completed")
+	ups := len(f.fake.ServiceUpdates())
+	f.round()
+	if got := len(f.fake.ServiceUpdates()); got != ups {
+		t.Errorf("the ensure loop wrote the refused configuration again: %d updates, were %d", got, ups)
+	}
+	if row, _ := f.istore.GetVIP(testsupport.Context(t), f.envID); row.EnsureError != ingressdeploy.EnsureUpdateFailed {
+		t.Errorf("ensure class = %q, want %q", row.EnsureError, ingressdeploy.EnsureUpdateFailed)
+	}
+}
+
+// TestEnsureReportsAStoppedRollback: the service names the wanted configuration again, but swarm gave up putting it back.
+func TestEnsureReportsAStoppedRollback(t *testing.T) {
+	f := newVIPDisableFix(t, vipDisableOpts{})
+	f.enabled()
+	f.fake.SetUpdateState(ingress.ServiceNameKeepalived, "rollback_paused", "rollback paused")
+	f.round()
+	if row, _ := f.istore.GetVIP(testsupport.Context(t), f.envID); row.EnsureError != ingressdeploy.EnsureUpdateFailed {
+		t.Errorf("ensure class = %q, want %q", row.EnsureError, ingressdeploy.EnsureUpdateFailed)
 	}
 }
