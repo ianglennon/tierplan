@@ -235,7 +235,9 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	g.SetLimit(vipReadParallel)
 	for i, n := range info.Nodes {
 		reads[i] = nodeRead{node: n}
-		if !n.Connected || n.AgentID == "" {
+		// A node whose swarm node ID is not known yet is not read: every line would be judged against an empty ID, refused as
+		// another node's, and its cursor moved past it, so the events of the first read would be lost for good.
+		if !n.Connected || n.AgentID == "" || n.SwarmNodeID == "" {
 			continue
 		}
 		g.Go(func() error {

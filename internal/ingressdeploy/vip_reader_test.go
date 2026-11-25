@@ -408,3 +408,29 @@ func TestVIPReaderFollowsNoStream(t *testing.T) {
 		t.Errorf("the second read of node-a asked %v, want a since and no tail", last)
 	}
 }
+
+// TestVIPReaderWaitsForTheNodeID pins WR-03: an agent that is connected before it has reported its swarm node ID is not
+// read, because every line would be refused as another node's and the cursor moved past it. Once the ID is known the node's
+// whole log is read, including the MASTER line written before.
+func TestVIPReaderWaitsForTheNodeID(t *testing.T) {
+	v := newVIPRig(t)
+	v.b.AppendLogs("ka-b",
+		logLine(t, vipT0, ingressbundle.VIPEvent{Event: ingressbundle.VIPEventStart, Node: vipNodeB, Seq: 1, Iface: "eth0"}),
+		logLine(t, vipT0.Add(time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateMaster, "")),
+	)
+	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[1].SwarmNodeID = "" })
+
+	v.read()
+	if n := len(v.b.LogQueries()); n != 0 {
+		t.Fatalf("node-b's log was read %d times before its node ID was known, want 0", n)
+	}
+	if n := v.svc.VIPSkipped(v.envID); n != 0 {
+		t.Fatalf("%d lines were refused before the node ID was known, want 0", n)
+	}
+
+	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[1].SwarmNodeID = vipNodeB })
+	v.read()
+	if got := v.holderNames(); len(got) != 1 || got[0] != "node-b" {
+		t.Fatalf("holders once the node ID is known = %v, want [node-b]: the MASTER line written before must still be read", got)
+	}
+}
