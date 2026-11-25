@@ -209,10 +209,15 @@ func checkOverlapsDocker(in VIPAddressInput) []Finding {
 	return out
 }
 
-// checkInsidePool warns about each address pool or host route the prefix overlaps (A-11).
+// checkInsidePool warns about each address pool or host route the prefix overlaps (A-11), once however many nodes report it.
 func checkInsidePool(in VIPAddressInput) []Finding {
 	network := in.Prefix.Masked()
-	pools := slices.Clone(in.Pools)
+	pools := make([]netip.Prefix, 0, len(in.Pools))
+	for _, p := range in.Pools {
+		if p.IsValid() {
+			pools = append(pools, p.Masked())
+		}
+	}
 	slices.SortFunc(pools, func(a, b netip.Prefix) int {
 		if c := a.Addr().Compare(b.Addr()); c != 0 {
 			return c
@@ -220,13 +225,13 @@ func checkInsidePool(in VIPAddressInput) []Finding {
 		return a.Bits() - b.Bits()
 	})
 	var out []Finding
-	for _, pool := range pools {
-		if !pool.IsValid() || !network.Overlaps(pool.Masked()) {
+	for _, pool := range slices.Compact(pools) {
+		if !network.Overlaps(pool) {
 			continue
 		}
 		out = append(out, Finding{
-			Code: CodeVIPInsidePool, Message: vipInsidePoolText(network, pool.Masked()),
-			Items: []string{pool.Masked().String()}, Severity: SeverityWarning,
+			Code: CodeVIPInsidePool, Message: vipInsidePoolText(network, pool),
+			Items: []string{pool.String()}, Severity: SeverityWarning,
 		})
 	}
 	return out

@@ -6,6 +6,7 @@ package ingressdeploy_test
 import (
 	"math/rand/v2"
 	"net/netip"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -295,6 +296,21 @@ func TestVIPAddressChecks(t *testing.T) {
 		want := "192.168.1.0/24 sits inside a range Docker may hand to networks (192.168.0.0/16). A network created later could take this address range."
 		if f.Message != want {
 			t.Errorf("message = %q, want %q", f.Message, want)
+		}
+	})
+
+	t.Run("a range several nodes report is listed once", func(t *testing.T) {
+		in := base()
+		// The same host route as three nodes report it, one of them with host bits set, and another range.
+		in.Pools = []netip.Prefix{pfx("192.168.1.0/24"), pfx("192.168.0.0/16"), netip.MustParsePrefix("192.168.1.7/24"), pfx("192.168.1.0/24"), {}}
+		var got []string
+		for _, f := range ingressdeploy.CheckVIPAddress(in) {
+			if f.Code == ingressdeploy.CodeVIPInsidePool {
+				got = append(got, f.Items...)
+			}
+		}
+		if want := []string{"192.168.0.0/16", "192.168.1.0/24"}; !slices.Equal(got, want) {
+			t.Errorf("ranges = %v, want each once: %v", got, want)
 		}
 	})
 
