@@ -114,7 +114,10 @@ func newVIPFix(t *testing.T, noRow bool, stateA, stateB string) *vipFix {
 	v.deployFix = newDeployFixDeps(t, false, func(c *dockertest.FakeConfig) {
 		c.ServiceRows = []dockertest.FakeService{{ID: "ka-svc", Name: ingress.ServiceNameKeepalived, Mode: "global"}}
 		c.Tasks = []swarm.Task{task("task-a", vipNodeA, stateA), task("task-b", vipNodeB, stateB)}
-		c.Containers = []dockertest.FakeContainer{{ID: "ka-a", Names: []string{"/ka-a"}, State: "running", Labels: ingress.KeepalivedLabels()}}
+		// A task container carries the swarm's service name as well as the service's own labels; the reader reads no other.
+		labels := ingress.KeepalivedLabels()
+		labels["com.docker.swarm.service.name"] = ingress.ServiceNameKeepalived
+		c.Containers = []dockertest.FakeContainer{{ID: "ka-a", Names: []string{"/ka-a"}, State: "running", Labels: labels}}
 	}, func(_ *deployFix, d *ingressdeploy.Deps) {
 		d.Envs = vipEnvs{}
 		d.Clock = v.clock
