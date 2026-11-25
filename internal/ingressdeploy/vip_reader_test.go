@@ -94,7 +94,7 @@ type vipRig struct {
 // ("ka-a" and "ka-b") whose log is empty.
 func newVIPRig(t *testing.T) *vipRig {
 	t.Helper()
-	labels := map[string]string{ingress.LabelComponent: ingress.ComponentKeepalived}
+	labels := map[string]string{ingress.LabelComponent: ingress.ComponentKeepalived, "com.docker.swarm.service.name": ingress.ServiceNameKeepalived}
 	newNode := func(id string) (*dockertest.Fake, *dockerx.Client) {
 		f := dockertest.NewFake(t, dockertest.FakeConfig{Containers: []dockertest.FakeContainer{{
 			ID: id, Names: []string{"/" + id}, State: "running", Labels: labels,
@@ -499,5 +499,34 @@ func TestVIPReaderHolderThatFellSilentIsReplacedAsFailed(t *testing.T) {
 	}
 	if h := v.holderNames(); len(h) != 1 || h[0] != "node-b" {
 		t.Fatalf("holders = %v, want [node-b]", h)
+	}
+}
+
+// TestVIPReaderReadsOnlyTasksOfTheService pins IN-03: a container that carries only the component label is not read, since
+// anyone with Docker access on the node can set it, and it could write lines for the node's own ID.
+func TestVIPReaderReadsOnlyTasksOfTheService(t *testing.T) {
+	v := newVIPRig(t)
+	forged := dockertest.NewFake(t, dockertest.FakeConfig{Containers: []dockertest.FakeContainer{{
+		ID: "forged", Names: []string{"/forged"}, State: "running",
+		Labels: map[string]string{ingress.LabelComponent: ingress.ComponentKeepalived},
+	}}})
+	cli, err := dockerx.New(forged)
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+	forged.AppendLogs("forged", logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
+	d := v.deps
+	d.Engine = &vipNodeEngine{clis: map[string]*dockerx.Client{"agent-a": cli, "agent-b": cli}}
+	svc := ingressdeploy.New(d)
+
+	svc.ReadVIPOnce(testsupport.Context(t), v.envID)
+	if n := len(forged.LogQueries()); n != 0 {
+		t.Errorf("the log of a container with only the component label was read %d times, want 0", n)
+	}
+	for _, n := range svc.VIPNodeStates(v.envID) {
+		if n.State != "" {
+			t.Errorf("node %s has state %q from a forged container's log", n.Hostname, n.State)
+		}
 	}
 }

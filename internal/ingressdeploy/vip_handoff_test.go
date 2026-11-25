@@ -89,7 +89,7 @@ type handoffRig struct {
 // newHandoffRig builds the rig. aWriteError, when set, is what node A's engine answers to every write.
 func newHandoffRig(t *testing.T, aWriteError string) *handoffRig {
 	t.Helper()
-	labels := map[string]string{ingress.LabelComponent: ingress.ComponentKeepalived}
+	labels := map[string]string{ingress.LabelComponent: ingress.ComponentKeepalived, "com.docker.swarm.service.name": ingress.ServiceNameKeepalived}
 	newNode := func(id, writeError string) (*dockertest.Fake, *dockerx.Client) {
 		f := dockertest.NewFake(t, dockertest.FakeConfig{WriteError: writeError, Containers: []dockertest.FakeContainer{{
 			ID: id, Names: []string{"/" + id}, State: "running", Labels: labels,

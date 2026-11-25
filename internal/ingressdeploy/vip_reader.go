@@ -370,6 +370,11 @@ func (s *Service) readVIPNode(ctx context.Context, envID string, n NodeInfo, cur
 		}
 		out.ok = true
 		for _, row := range rows {
+			// The component label is one anyone with Docker access on the node can put on a container; a task of TierPlan's
+			// service also carries the swarm's service name, which is what the API's ownership rules require too.
+			if row.Labels[swarmServiceLabel] != ingress.ServiceNameKeepalived {
+				continue
+			}
 			out.listed = append(out.listed, row.ID)
 			if row.State == "running" {
 				out.running = true

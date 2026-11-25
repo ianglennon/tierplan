@@ -409,7 +409,9 @@ func (e *vipAgentEngine) OnNode(ctx context.Context, envID, agentID string, fn f
 // disabled and reads the nodes while it waits, so the holder's STOP and the address landing on node-b are one move recorded
 // with the reason disabled, and not as a failure of the holder.
 func TestDisableVIPRecordsTheLastMove(t *testing.T) {
+	// A task container carries the swarm's service name as well as the service's own labels.
 	labels := ingress.KeepalivedLabels()
+	labels["com.docker.swarm.service.name"] = ingress.ServiceNameKeepalived
 	newNode := func(id string) (*dockertest.Fake, *dockerx.Client) {
 		fake := dockertest.NewFake(t, dockertest.FakeConfig{Containers: []dockertest.FakeContainer{{
 			ID: id, Names: []string{"/" + id}, State: "running", Labels: labels,
