@@ -40,6 +40,13 @@ const (
 	vipMaxBytes = 4 << 20
 	// vipReadParallel is how many nodes of one environment are read at once.
 	vipReadParallel = 8
+	// vipNodeReadTimeout is the longest one node's read (list, inspect, logs) may take. An agent that is connected but whose
+	// engine accepts a call and never answers would otherwise hold the environment's pass, and so every later pass, for as
+	// long as the server runs.
+	vipNodeReadTimeout = 8 * time.Second
+	// vipPassReadTimeout is the longest the loop lets one environment's pass take: a few batches of nodes at the per-node
+	// bound.
+	vipPassReadTimeout = 30 * time.Second
 )
 
 // errVIPEnough ends a read that has the lines it may take.
@@ -59,7 +66,9 @@ type vipCursor struct {
 
 // vipEnv is the memory of one environment's virtual IP. pass serialises reads of the environment; mu guards the rest.
 type vipEnv struct {
-	pass sync.Mutex
+	// pass holds one slot, taken for the length of a pass. It is a channel and not a mutex so that a caller with a deadline
+	// (a drain's handoff, a switch-off's wait) gives up when its context ends instead of waiting for a stuck pass.
+	pass chan struct{}
 	mu   sync.Mutex
 	// view is the state the events have built; cursors are by container ID.
 	view    vipEnvState
@@ -89,6 +98,7 @@ func (v *vipState) env(envID string) *vipEnv {
 	e := v.envs[envID]
 	if e == nil {
 		e = &vipEnv{
+			pass:    make(chan struct{}, 1),
 			view:    vipEnvState{Nodes: map[string]vipNode{}},
 			cursors: map[string]vipCursor{},
 			handoff: map[string]time.Time{},
@@ -97,6 +107,22 @@ func (v *vipState) env(envID string) *vipEnv {
 	}
 	return e
 }
+
+// lockPass takes the environment's pass slot. It reports false, taking nothing, when ctx ends first.
+func (e *vipEnv) lockPass(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case e.pass <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// unlockPass gives the slot back.
+func (e *vipEnv) unlockPass() { <-e.pass }
 
 // find returns the environment's memory without making any.
 func (v *vipState) find(envID string) *vipEnv {
@@ -153,7 +179,10 @@ func (s *Service) vipRound(ctx context.Context) {
 	g.SetLimit(ensureParallel)
 	for _, id := range ids {
 		g.Go(func() error {
-			s.readVIPOnce(ctx, id)
+			// One environment's pass never holds the round for longer than this, whatever its engines do.
+			pctx, cancel := context.WithTimeout(ctx, s.vipPassTimeout)
+			defer cancel()
+			s.readVIPOnce(pctx, id)
 			return nil
 		})
 	}
@@ -183,8 +212,10 @@ type nodeRead struct {
 // What a pass finds is kept only when its moves are stored, so a failed store is read again.
 func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	env := s.vip.env(envID)
-	env.pass.Lock()
-	defer env.pass.Unlock()
+	if !env.lockPass(ctx) {
+		return
+	}
+	defer env.unlockPass()
 	info, err := s.d.Envs.Info(ctx, envID)
 	if err != nil {
 		s.log().Warn("the virtual IP reader could not read an environment", "environment", envID, "error", err)
@@ -208,7 +239,10 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 			continue
 		}
 		g.Go(func() error {
-			reads[i] = s.readVIPNode(ctx, envID, n, cursors)
+			// A node that does not answer in time is read as not heard (it is silent), and the pass goes on without it.
+			nctx, cancel := context.WithTimeout(ctx, s.vipNodeTimeout)
+			defer cancel()
+			reads[i] = s.readVIPNode(nctx, envID, n, cursors)
 			return nil
 		})
 	}

@@ -94,3 +94,9 @@ func (s *Service) SeedVIPState(envID string, nodes []SeedNode, holderlessSince t
 
 // VIPIsDisabling reports whether the reader is marked as watching a switch-off of the environment's virtual IP.
 func (s *Service) VIPIsDisabling(envID string) bool { return s.vipIsDisabling(envID) }
+
+// SetVIPReadTimeouts shortens the bounds of one node's read and of one environment's pass, so a test of a node that never
+// answers need not wait for the real ones.
+func (s *Service) SetVIPReadTimeouts(node, pass time.Duration) {
+	s.vipNodeTimeout, s.vipPassTimeout = node, pass
+}

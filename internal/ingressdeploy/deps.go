@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
@@ -225,6 +226,9 @@ type Service struct {
 	vip *vipState
 	// vipHook, when set, is called after every round of the virtual IP reader. Only a test sets it (export_test.go).
 	vipHook func()
+	// vipNodeTimeout and vipPassTimeout bound one node's read and one environment's pass of the virtual IP reader. A test
+	// shortens them (export_test.go).
+	vipNodeTimeout, vipPassTimeout time.Duration
 }
 
 // New builds the deployer.
@@ -235,7 +239,10 @@ func New(d Deps) *Service {
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{d: d, wake: make(chan struct{}, 1), vip: newVIPState()}
+	return &Service{
+		d: d, wake: make(chan struct{}, 1), vip: newVIPState(),
+		vipNodeTimeout: vipNodeReadTimeout, vipPassTimeout: vipPassReadTimeout,
+	}
 }
 
 func (s *Service) log() *slog.Logger { return s.d.Log }
