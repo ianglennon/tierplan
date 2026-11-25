@@ -547,3 +547,62 @@ func TestVIPMovesWhileTwoNodesClaim(t *testing.T) {
 		t.Fatalf("the move is at %s, want A's MASTER line", moves[0].At)
 	}
 }
+
+// TestVIPMovesSilenceIsNotHistory pins the review of 26-35: that a node cannot be heard now says nothing of the lines of the
+// past, and a node that cannot be heard is replaced only by one that took the address after it did.
+func TestVIPMovesSilenceIsNotHistory(t *testing.T) {
+	m, b, stop := ingressbundle.VIPStateMaster, ingressbundle.VIPStateBackup, ingressbundle.VIPStateStop
+	silentA := vipMarks{Silent: map[string]bool{movesNodeA: true}}
+
+	t.Run("a drained holder's replayed election", func(t *testing.T) {
+		_, moves := apply(vipEnvState{}, silentA,
+			msEv(movesNodeA, 1, 0, m, ""), msEv(movesNodeB, 1, 100, m, ""), msEv(movesNodeB, 2, 900, b, ""),
+			msEv(movesNodeA, 2, 1000000, stop, ""), msEv(movesNodeB, 3, 1001000, m, ""))
+		if got := moveText(moves); got != "a>b unknown" {
+			t.Fatalf("moves = %q, want a>b unknown", got)
+		}
+	})
+	t.Run("a lost claim does not hide a holder that missed one read", func(t *testing.T) {
+		st, _ := applyOnce(settle(t), vipMarks{}, msEv(movesNodeA, 2, 9000, stop, ""), msEv(movesNodeB, 2, 10000, m, ""))
+		silentB := vipMarks{Silent: map[string]bool{movesNodeB: true}}
+		st, first := applyOnce(st, silentB, msEv(movesNodeC, 1, 10100, m, ""))
+		st, second := applyOnce(st, vipMarks{}, msEv(movesNodeC, 2, 10900, b, ""))
+		if got := holderIDs(st); len(got) != 1 || got[0] != movesNodeB {
+			t.Fatalf("holders = %v, want [B]", got)
+		}
+		_, third := apply(st, vipMarks{})
+		if got := moveText(append(append(first, second...), third...)); got != "a>b unknown" {
+			t.Fatalf("moves = %q, want a>b unknown", got)
+		}
+	})
+	t.Run("an older MASTER line does not hide a newer holder", func(t *testing.T) {
+		st, _ := apply(settle(t), vipMarks{}, msEv(movesNodeA, 2, 20000, stop, ""), msEv(movesNodeA, 3, 21000, m, ""))
+		st, moves := apply(st, silentA, msEv(movesNodeB, 2, 11000, m, ""))
+		st2, more := apply(st, silentA, msEv(movesNodeB, 3, 12000, b, ""))
+		if got := holderIDs(st2); len(moves)+len(more) != 0 || len(got) != 1 || got[0] != movesNodeA {
+			t.Fatalf("holders = %v, moves %q, want [A] and none", got, moveText(append(moves, more...)))
+		}
+	})
+	t.Run("a holder that is heard again and says MASTER is a holder again", func(t *testing.T) {
+		st, _ := apply(settle(t), silentA, msEv(movesNodeB, 2, 10000, m, ""))
+		st, _ = apply(st, vipMarks{}, msEv(movesNodeB, 3, 60000, b, ""))
+		if got := holderIDs(st); len(got) != 1 || got[0] != movesNodeA {
+			t.Fatalf("holders = %v, want [A]", got)
+		}
+	})
+	t.Run("a holder that stays silent is not one again when its successor goes", func(t *testing.T) {
+		st, _ := apply(settle(t), silentA, msEv(movesNodeB, 2, 10000, m, ""))
+		st, _ = apply(st, silentA, msEv(movesNodeB, 3, 60000, stop, ""))
+		if got := holderIDs(st); len(got) != 0 {
+			t.Fatalf("holders = %v, want none", got)
+		}
+	})
+	t.Run("one missed read of a holder moves nothing", func(t *testing.T) {
+		st, _ := apply(settle(t), vipMarks{}, msEv(movesNodeB, 2, 10000, m, ""))
+		st, first := applyOnce(st, silentA)
+		_, second := apply(st, vipMarks{}, msEv(movesNodeB, 3, 90000, m, ""))
+		if got := moveText(append(first, second...)); got != "" {
+			t.Fatalf("moves = %q, want none", got)
+		}
+	})
+}

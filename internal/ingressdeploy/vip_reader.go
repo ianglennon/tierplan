@@ -48,6 +48,9 @@ const (
 	// connect one after another, each within its longest reconnect delay of a minute by default, and the history one node's log
 	// tells alone is not what happened.
 	vipReplayGrace = 90 * time.Second
+	// vipReplayMax is the most lines the replay holds; at the cap it ends early. The first read of a container takes 2000, so
+	// it is far more than the logs of a swarm that is not hostile.
+	vipReplayMax = 50000
 	// vipPassReadTimeout is the longest the loop lets one environment's pass take: a few batches of nodes at the per-node
 	// bound.
 	vipPassReadTimeout = 30 * time.Second
@@ -213,7 +216,7 @@ type nodeRead struct {
 	events []vipEvent
 	// cursors are the cursors of the containers read, to be kept if the pass is.
 	cursors map[string]vipCursor
-	// listed are the IDs of every keepalived container of the node; running is true when one of them runs.
+	// listed are the IDs of every keepalived container of the node; running is true when one of them runs and has written.
 	listed  []string
 	running bool
 	// ok is true when the node's engine answered every call.
@@ -288,7 +291,8 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	env.mu.Lock()
 	marks := vipMarks{Handoff: map[string]time.Time{}, Disabling: env.disabling, Silent: silent, Now: now}
 	for id, at := range env.handoff {
-		if now.Sub(at) > 2*vipHandoffWindow {
+		// The moves of the replay are judged when it ends, and an open claim when it settles, so marks are kept until then.
+		if env.replayed && !env.view.claimOpen() && now.Sub(at) > 2*vipHandoffWindow {
 			delete(env.handoff, id)
 			continue
 		}
@@ -328,8 +332,9 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	if !replayed {
 		replay = append(slices.Clone(replay), events...)
 		next, moves = detectMoves(vipEnvState{}, replay, marks)
-		next.keepHeard(prev)
-		if (allHeard && caughtUp) || now.Sub(replayFrom) >= vipReplayGrace {
+		next.keepHeard(prev, silent)
+		// A switch-off does not wait either: the reader may not come back to the environment after it.
+		if (allHeard && caughtUp) || now.Sub(replayFrom) >= vipReplayGrace || len(replay) >= vipReplayMax || marks.Disabling {
 			replayed, replay = true, nil
 		} else {
 			moves = nil
@@ -424,8 +429,8 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 }
 
 // keepHeard carries over what a rebuild of the state from the lines alone does not know: when each node was last heard, the
-// nodes that wrote nothing, and since when no node holds the address when the lines do not say.
-func (st *vipEnvState) keepHeard(prev vipEnvState) {
+// nodes that wrote nothing, which were superseded, and since when no node holds the address when the lines do not say.
+func (st *vipEnvState) keepHeard(prev vipEnvState, silent map[string]bool) {
 	for id, p := range prev.Nodes {
 		n, ok := st.Nodes[id]
 		if !ok {
@@ -433,6 +438,10 @@ func (st *vipEnvState) keepHeard(prev vipEnvState) {
 			continue
 		}
 		n.LastHeard = p.LastHeard
+		// A node that was superseded stays so while it cannot be heard, also when the node that took the address has gone.
+		if p.Superseded && silent[id] && n.State == p.State && n.HeldAt.Equal(p.HeldAt) {
+			n.Superseded = true
+		}
 		st.Nodes[id] = n
 	}
 	if st.HolderlessSince.IsZero() {
@@ -457,19 +466,18 @@ func (s *Service) readVIPNode(ctx context.Context, envID string, n NodeInfo, cur
 				continue
 			}
 			out.listed = append(out.listed, row.ID)
-			if row.State == "running" {
-				out.running = true
-			}
 			cur, have := cursors[row.ID]
-			if have && cur.Done {
-				out.cursors[row.ID] = cur
-				continue
-			}
-			cur.NodeID = n.SwarmNodeID
-			if !s.readVIPContainer(ctx, cli, row, have, &cur, &out) {
-				out.ok = false
+			if !have || !cur.Done {
+				cur.NodeID = n.SwarmNodeID
+				if !s.readVIPContainer(ctx, cli, row, have, &cur, &out) {
+					out.ok = false
+				}
 			}
 			out.cursors[row.ID] = cur
+			// A container that has not written a line yet says nothing of the run before it, which is over.
+			if row.State == "running" && !cur.LastTime.IsZero() {
+				out.running = true
+			}
 		}
 		return nil
 	})

@@ -66,8 +66,8 @@ type vipNode struct {
 	// or VIPMoveUnknown. It is kept when the node leaves, so nothing the node does afterwards changes it, and is "" while the
 	// node holds the address.
 	Lost string
-	// Superseded is true for a MASTER that could not be heard when another node took the address: it can no longer say that
-	// it does not hold it, so it is not counted as a holder until it writes a line again.
+	// Superseded is true for a MASTER that cannot be heard while a node that can took the address after it did: it can no
+	// longer say that it does not hold it, so it is not counted as a holder until it can be heard or writes a line again.
 	Superseded bool
 	// LastHeard is the last pass that read the node's engine without a failure.
 	LastHeard time.Time
@@ -105,8 +105,9 @@ type vipClaim struct {
 	NodeID string
 	// At is when the node reported MASTER, which is the instant of the move if the claim settles.
 	At time.Time
-	// Since is when it became the only claimant, by the lines' own time; Seen is the pass that first saw that, by the
-	// server's clock. Either one settles the claim once vipSettleWindow has passed.
+	// Since is when it became the only claimant, by the lines' own time, the zero time when that was concluded from another
+	// node's silence, which no line dates; Seen is the pass that first saw it, by the server's clock. Either one settles the
+	// claim once vipSettleWindow has passed.
 	Since, Seen time.Time
 }
 
@@ -177,27 +178,37 @@ func compareVIPNodes(a, b vipNode) int {
 	return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.NodeID, b.NodeID))
 }
 
-// claimants is the nodes that claim the address as far as the pass can tell: the holders that can be heard, and when there
-// is none, the ones that cannot.
-func claimants(nodes map[string]vipNode, silent map[string]bool) []vipNode {
-	all := holders(nodes)
-	heard := slices.DeleteFunc(slices.Clone(all), func(n vipNode) bool { return silent[n.NodeID] })
-	if len(heard) > 0 {
-		return heard
+// supersede marks every MASTER that cannot be heard while a node that can be heard took the address after it, and takes the
+// mark off a node that is heard: a running helper whose last line says MASTER holds the address. Silence is a fact of the pass
+// and not of the lines, so it is applied after them and never to a line of the past.
+func (st *vipEnvState) supersede(silent map[string]bool) {
+	var newest time.Time
+	for id, n := range st.Nodes {
+		if n.State == ingressbundle.VIPStateMaster && !silent[id] && n.HeldAt.After(newest) {
+			newest = n.HeldAt
+		}
 	}
-	return all
+	for id, n := range st.Nodes {
+		if n.State != ingressbundle.VIPStateMaster || !silent[id] {
+			n.Superseded = false
+		} else if newest.After(n.HeldAt) {
+			n.Superseded = true
+		}
+		st.Nodes[id] = n
+	}
 }
 
-// track opens, keeps or drops the claim after something changed at the instant. Only a sole claimant that is not the settled
-// holder has one: while two nodes claim the address the election is not over, and a node that gave it up lost.
-func (st *vipEnvState) track(at time.Time, marks vipMarks) {
-	now := claimants(st.Nodes, marks.Silent)
+// track opens, keeps or drops the claim after something changed, since is when by the lines' own time, the zero time when no
+// line says it. Only a sole claimant that is not the settled holder has a claim: while two nodes claim the address the
+// election is not over, and a node that gave it up lost.
+func (st *vipEnvState) track(since time.Time, marks vipMarks) {
+	now := holders(st.Nodes)
 	if len(now) != 1 || now[0].NodeID == st.LastHolder {
 		st.Claim = vipClaim{}
 		return
 	}
 	if n := now[0]; st.Claim.NodeID != n.NodeID || !st.Claim.At.Equal(n.HeldAt) {
-		st.Claim = vipClaim{NodeID: n.NodeID, At: n.HeldAt, Since: at, Seen: marks.Now}
+		st.Claim = vipClaim{NodeID: n.NodeID, At: n.HeldAt, Since: since, Seen: marks.Now}
 	}
 }
 
@@ -255,18 +266,15 @@ func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvSta
 			continue
 		}
 		seen[k] = true
-		if st.claimOpen() && ev.At.Sub(st.Claim.Since) >= vipSettleWindow {
+		if st.claimOpen() && !st.Claim.Since.IsZero() && ev.At.Sub(st.Claim.Since) >= vipSettleWindow {
 			settle()
 		}
-		st.apply(ev, marks)
+		st.apply(ev)
 		st.track(ev.At, marks)
 	}
-	// A node that fell silent since the last pass changes who claims the address without a line of its own.
-	if c := claimants(st.Nodes, marks.Silent); len(c) == 1 {
-		st.track(c[0].HeldAt, marks)
-	} else {
-		st.track(time.Time{}, marks)
-	}
+	// A node that fell silent changes who claims the address without a line of its own.
+	st.supersede(marks.Silent)
+	st.track(time.Time{}, marks)
 	// While the virtual IP is being switched off the reader may not come back to the environment, so nothing is held back.
 	if st.claimOpen() && (marks.Disabling || marks.Now.Sub(st.Claim.Seen) >= vipSettleWindow) {
 		settle()
@@ -275,7 +283,7 @@ func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvSta
 }
 
 // apply applies one event to its node and to when the address lost its holder.
-func (st *vipEnvState) apply(ev vipEvent, marks vipMarks) {
+func (st *vipEnvState) apply(ev vipEvent) {
 	hadHolder := len(holders(st.Nodes)) > 0
 	n, ok := st.Nodes[ev.NodeID]
 	if !ok {
@@ -309,14 +317,6 @@ func (st *vipEnvState) apply(ev vipEvent, marks vipMarks) {
 		switch {
 		case ev.State == ingressbundle.VIPStateMaster:
 			n.HeldAt, n.Lost = ev.At, ""
-			// A node that cannot be heard and was MASTER can no longer say it is not, so the new holder takes its
-			// place. A node that can be heard and still says MASTER stays one: two holders are reported as they are.
-			for id, other := range st.Nodes {
-				if id != ev.NodeID && other.State == ingressbundle.VIPStateMaster && marks.Silent[id] {
-					other.Superseded = true
-					st.Nodes[id] = other
-				}
-			}
 		case wasMaster && n.Faults[ingressbundle.VIPReasonProbeFailing]:
 			n.Lost = VIPMoveProbeFailing
 		case wasMaster:

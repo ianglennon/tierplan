@@ -834,3 +834,46 @@ func TestVIPReaderRestartWithAgentsConnectingOneByOne(t *testing.T) {
 		}
 	})
 }
+
+// TestVIPReaderMarksDuringTheReplay: while one agent is still offline after a restart, a drain's mark is kept until the replay
+// is judged, and a switch-off ends the replay, so neither loses its reason nor its move.
+func TestVIPReaderMarksDuringTheReplay(t *testing.T) {
+	setup := func(t *testing.T) (*vipRig, *ingressdeploy.Service) {
+		t.Helper()
+		v := newVIPRig(t)
+		v.envs.set(func(i *ingressdeploy.EnvInfo) {
+			i.Nodes = append(i.Nodes, ingressdeploy.NodeInfo{SwarmNodeID: strings.Repeat("c", 25), AgentID: "agent-c", Name: "node-c", Role: "manager"})
+		})
+		now := v.clock.Now()
+		v.a.AppendLogs("ka-a", logLine(t, now.Add(-time.Hour), vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
+		v.b.AppendLogs("ka-b", logLine(t, now.Add(-time.Hour), vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateBackup, "")))
+		fresh := ingressdeploy.New(v.deps)
+		v.settle(fresh)
+		return v, fresh
+	}
+	moved := func(t *testing.T, v *vipRig) {
+		t.Helper()
+		v.a.AppendLogs("ka-a", logLine(t, v.clock.Now(), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateStop, "")))
+		v.b.AppendLogs("ka-b", logLine(t, v.clock.Now().Add(time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateMaster, "")))
+	}
+	t.Run("a drain", func(t *testing.T) {
+		v, fresh := setup(t)
+		fresh.MarkVIPHandoff(v.envID, vipNodeA)
+		moved(t, v)
+		for range 40 {
+			v.settle(fresh)
+		}
+		if got := v.moves(); len(got) != 1 || got[0].Reason != ingressdeploy.VIPMoveDrainHandoff {
+			t.Fatalf("moves = %+v, want one drain_handoff", got)
+		}
+	})
+	t.Run("a switch-off", func(t *testing.T) {
+		v, fresh := setup(t)
+		fresh.MarkVIPDisabling(v.envID, true)
+		moved(t, v)
+		v.settle(fresh)
+		if got := v.moves(); len(got) != 1 || got[0].Reason != ingressdeploy.VIPMoveDisabled {
+			t.Fatalf("moves = %+v, want one disabled", got)
+		}
+	})
+}
