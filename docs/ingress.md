@@ -459,7 +459,8 @@ Two things about that history may surprise you:
 - **A move is stored a few seconds after the holder changes.** Every node has the same priority, so when a holder goes away all
   the backups can claim the address in the same second, and the one with the highest address keeps it. TierPlan stores the move
   once one node has been the only claimant for two seconds, so a failover is one move to the node that kept the address. The
-  first election after you switch the virtual IP on stores none. The status shows the holder at once.
+  first election after you switch the virtual IP on stores none. The status shows the holder at once. After TierPlan
+  restarts it stores moves once every node's agent has been read, or after 90 seconds when one stays offline.
 
 Bell items, for a caller who manages the environment's ingress: `vip_no_holder` (an error: no node has held the address for more
 than ten seconds, except while a node's keepalived has run for under fifteen seconds, which is a normal first start),
