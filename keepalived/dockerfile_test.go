@@ -176,6 +176,9 @@ func TestKeepalivedDockerfileShape(t *testing.T) {
 	if !build.has(regexp.MustCompile(`apk list -I openssl-libs-static`)) || !build.has(regexp.MustCompile(`@OPENSSL_VERSION@`)) {
 		t.Errorf("the build stage does not read OpenSSL's version from the installed openssl-libs-static package")
 	}
+	if !build.has(regexp.MustCompile(`apk list -I musl-dev`)) || !build.has(regexp.MustCompile(`@MUSL_VERSION@`)) {
+		t.Errorf("the build stage does not read musl's version from the installed musl-dev package")
+	}
 	if !build.has(regexp.MustCompile(`@CREATED@`)) || !build.has(regexp.MustCompile(`SOURCE_DATE_EPOCH`)) {
 		t.Errorf("the build stage does not fill the created time from SOURCE_DATE_EPOCH")
 	}
@@ -230,6 +233,11 @@ type spdxDoc struct {
 			Value     string `json:"checksumValue"`
 		} `json:"checksums"`
 	} `json:"packages"`
+	Relationships []struct {
+		Element string `json:"spdxElementId"`
+		Type    string `json:"relationshipType"`
+		Related string `json:"relatedSpdxElement"`
+	} `json:"relationships"`
 }
 
 // TestKeepalivedSBOMTemplate fills the two placeholders of the SBOM template as the build stage does and
@@ -237,14 +245,14 @@ type spdxDoc struct {
 // URL and hash, and OpenSSL under Apache-2.0 (D-27).
 func TestKeepalivedSBOMTemplate(t *testing.T) {
 	text := readFile(t, "image/sbom/keepalived.spdx.json.in")
-	for _, p := range []string{"@OPENSSL_VERSION@", "@CREATED@"} {
+	for _, p := range []string{"@OPENSSL_VERSION@", "@MUSL_VERSION@", "@CREATED@"} {
 		if !strings.Contains(text, p) {
 			t.Errorf("the template has no %s placeholder", p)
 		}
 	}
-	filled := strings.NewReplacer("@OPENSSL_VERSION@", "3.5.4-r0", "@CREATED@", "2026-07-14T00:00:00Z").Replace(text)
+	filled := strings.NewReplacer("@OPENSSL_VERSION@", "3.5.4-r0", "@MUSL_VERSION@", "1.2.6-r3", "@CREATED@", "2026-07-14T00:00:00Z").Replace(text)
 	if m := regexp.MustCompile(`@[A-Z_]+@`).FindString(filled); m != "" {
-		t.Errorf("a placeholder %s is left after the two are replaced", m)
+		t.Errorf("a placeholder %s is left after the three are replaced", m)
 	}
 
 	var doc spdxDoc
@@ -255,7 +263,7 @@ func TestKeepalivedSBOMTemplate(t *testing.T) {
 		t.Errorf("spdxVersion is %q, want SPDX-2.3", doc.SPDXVersion)
 	}
 
-	var sawKeepalived, sawOpenSSL bool
+	var sawKeepalived, sawOpenSSL, sawMusl bool
 	for _, p := range doc.Packages {
 		switch p.Name {
 		case "keepalived":
@@ -286,6 +294,14 @@ func TestKeepalivedSBOMTemplate(t *testing.T) {
 			if p.VersionInfo != "3.5.4-r0" {
 				t.Errorf("openssl versionInfo is %q, want the filled version", p.VersionInfo)
 			}
+		case "musl":
+			sawMusl = true
+			if p.LicenseConcluded != "MIT" || p.LicenseDeclared != "MIT" {
+				t.Errorf("musl licences are %q and %q, want MIT", p.LicenseConcluded, p.LicenseDeclared)
+			}
+			if p.VersionInfo != "1.2.6-r3" {
+				t.Errorf("musl versionInfo is %q, want the filled version", p.VersionInfo)
+			}
 		}
 	}
 	if !sawKeepalived {
@@ -293,5 +309,20 @@ func TestKeepalivedSBOMTemplate(t *testing.T) {
 	}
 	if !sawOpenSSL {
 		t.Error("the template lists no openssl package")
+	}
+	if !sawMusl {
+		t.Error("the template lists no musl package: it is linked statically into the binary")
+	}
+	// Both libraries are linked into keepalived, and the SBOM says how.
+	linked := map[string]bool{}
+	for _, r := range doc.Relationships {
+		if r.Element == "SPDXRef-Package-keepalived" && r.Type == "STATIC_LINK" {
+			linked[r.Related] = true
+		}
+	}
+	for _, want := range []string{"SPDXRef-Package-openssl", "SPDXRef-Package-musl"} {
+		if !linked[want] {
+			t.Errorf("no STATIC_LINK relationship from keepalived to %s", want)
+		}
 	}
 }

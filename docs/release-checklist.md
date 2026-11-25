@@ -120,7 +120,7 @@ Work through this in order for every release. TierPlan follows Semantic Versioni
       | jq -e -r '[.. | .packages? // empty | .[] | .externalRefs[]? | .referenceLocator | select(startswith("pkg:golang/github.com/traefik/traefik/v3@"))] | unique | .[]'
     ```
 
-  - The keepalived image SBOM is the helper's Go modules merged with a hand-written entry for keepalived and OpenSSL (`keepalived/image/sbom/keepalived.spdx.json.in`, filled by the build and shipped in the image at `/usr/share/tierplan/sbom/keepalived.spdx.json`). The filter below must print `pkg:generic/keepalived@2.4.3` and exits non-zero with no output when the entry is absent. Its licence is GPL-2.0-or-later, and the notice and `/licenses/keepalived/COPYING` in the image say so too:
+  - The keepalived image SBOM is the helper's Go modules merged with a hand-written entry for keepalived, OpenSSL and musl (`keepalived/image/sbom/keepalived.spdx.json.in`, filled by the build and shipped in the image at `/usr/share/tierplan/sbom/keepalived.spdx.json`). The filter below must print `pkg:generic/keepalived@2.4.3` and exits non-zero with no output when the entry is absent. Its licence is GPL-2.0-or-later, and the notice and `/licenses/keepalived/COPYING` in the image say so too:
 
     ```sh
     docker buildx imagetools inspect ghcr.io/ianglennon/tierplan-keepalived:X.Y.Z --format '{{ json .SBOM }}' \

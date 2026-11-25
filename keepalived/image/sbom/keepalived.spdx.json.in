@@ -57,6 +57,25 @@
           "referenceLocator": "pkg:apk/alpine/openssl@@OPENSSL_VERSION@"
         }
       ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-musl",
+      "name": "musl",
+      "versionInfo": "@MUSL_VERSION@",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "homepage": "https://musl.libc.org/",
+      "description": "libc, linked statically into keepalived; the version of Alpine's musl-dev package, which provides libc.a, in the build stage",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:apk/alpine/musl@@MUSL_VERSION@"
+        }
+      ]
     }
   ],
   "relationships": [
@@ -69,6 +88,11 @@
       "spdxElementId": "SPDXRef-Package-keepalived",
       "relationshipType": "STATIC_LINK",
       "relatedSpdxElement": "SPDXRef-Package-openssl"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-keepalived",
+      "relationshipType": "STATIC_LINK",
+      "relatedSpdxElement": "SPDXRef-Package-musl"
     }
   ]
 }

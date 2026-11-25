@@ -47,18 +47,21 @@ RUN echo "a0faef8e401c143487b131b526df7541c1e33d9b8814642fa9dfe8bb250a9632  /src
  && make -j"$(nproc)" \
  && make DESTDIR=/out install-strip
 
-# The SBOM entry for keepalived and OpenSSL (D-27) is a hand-written SPDX template
-# with two placeholders: OpenSSL's version, read from the package installed above (it
-# is what got linked), and a created time taken from SOURCE_DATE_EPOCH (the epoch when
-# unset) so a rebuild is identical. The build fails if a placeholder is left. BuildKit's
-# SBOM scanner merges this file with the helper's Go SBOM.
+# The SBOM entry for keepalived, OpenSSL and musl (D-27) is a hand-written SPDX template
+# with three placeholders: OpenSSL's and musl's versions, read from the packages installed
+# above (they are what got linked; musl-dev provides the static libc), and a created time
+# taken from SOURCE_DATE_EPOCH (the epoch when unset) so a rebuild is identical. The build
+# fails if a placeholder is left. BuildKit's SBOM scanner merges this file with the
+# helper's Go SBOM.
 ARG SOURCE_DATE_EPOCH=0
 COPY keepalived/image/sbom/keepalived.spdx.json.in /src/keepalived.spdx.json.in
 RUN mkdir -p /out/sbom \
  && OPENSSL_VERSION="$(apk list -I openssl-libs-static | sed -nE 's/^openssl-libs-static-([^ ]+) .*/\1/p' | head -n 1)" \
  && [ -n "${OPENSSL_VERSION}" ] \
+ && MUSL_VERSION="$(apk list -I musl-dev | sed -nE 's/^musl-dev-([^ ]+) .*/\1/p' | head -n 1)" \
+ && [ -n "${MUSL_VERSION}" ] \
  && CREATED="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)" \
- && sed -e "s/@OPENSSL_VERSION@/${OPENSSL_VERSION}/g" -e "s/@CREATED@/${CREATED}/g" /src/keepalived.spdx.json.in >/out/sbom/keepalived.spdx.json \
+ && sed -e "s/@OPENSSL_VERSION@/${OPENSSL_VERSION}/g" -e "s/@MUSL_VERSION@/${MUSL_VERSION}/g" -e "s/@CREATED@/${CREATED}/g" /src/keepalived.spdx.json.in >/out/sbom/keepalived.spdx.json \
  && ! grep -Eq '@[A-Z_]+@' /out/sbom/keepalived.spdx.json
 
 FROM gcr.io/distroless/static-debian13@sha256:58133991db06659feaabe0f4e97a35cebf15ef4ea08f8a4c6d2ee5f75e4aa6a0
