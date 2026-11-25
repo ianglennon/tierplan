@@ -30,9 +30,45 @@ func stateEv(node string, seq uint64, s int, state, reason string) vipEvent {
 	}
 }
 
-// apply runs events over a state.
+// movesPass is the instant of the pass that reads the events in apply; the pass that follows it is a settle window later.
+var movesPass = movesT0.Add(time.Hour)
+
+// apply runs events over a state in one pass, and then takes the pass after it, which reads nothing new: what the events left
+// open is settled, as it is in the running reader.
 func apply(prev vipEnvState, marks vipMarks, events ...vipEvent) (vipEnvState, []ingressstore.VIPMove) {
+	st, moves := applyOnce(prev, marks, events...)
+	marks.Now = movesPass.Add(vipSettleWindow)
+	st, more := detectMoves(st, nil, marks)
+	return st, append(moves, more...)
+}
+
+// applyOnce runs events over a state in one pass and no more.
+func applyOnce(prev vipEnvState, marks vipMarks, events ...vipEvent) (vipEnvState, []ingressstore.VIPMove) {
+	marks.Now = movesPass
 	return detectMoves(prev, events, marks)
+}
+
+// moveText is the moves as "a>b reason", in order.
+func moveText(moves []ingressstore.VIPMove) string {
+	var out []string
+	for _, m := range moves {
+		out = append(out, m.FromNodeID[:1]+">"+m.ToNodeID[:1]+" "+m.Reason)
+	}
+	return strings.Join(out, ", ")
+}
+
+// msEv is a state event of a node, `ms` milliseconds after movesT0.
+func msEv(node string, seq uint64, ms int, state, reason string) vipEvent {
+	ev := stateEv(node, seq, 0, state, reason)
+	ev.At = movesT0.Add(time.Duration(ms) * time.Millisecond)
+	return ev
+}
+
+// startEv is a start line of a node, `ms` milliseconds after movesT0.
+func startEv(node string, ms int) vipEvent {
+	ev := msEv(node, 1, ms, "", "")
+	ev.VIPEvent = ingressbundle.VIPEvent{Event: ingressbundle.VIPEventStart, Node: node, Seq: 1, Iface: "eth0"}
+	return ev
 }
 
 // settle returns the state of A holding the address and B backing it up, with no move recorded.
@@ -60,7 +96,7 @@ func TestVIPMovesAdjacency(t *testing.T) {
 	t.Run("a line read twice is one event", func(t *testing.T) {
 		st := settle(t)
 		master := stateEv(movesNodeB, 2, 10, ingressbundle.VIPStateMaster, "")
-		_, moves := apply(st, vipMarks{}, master, master)
+		_, moves := apply(st, vipMarks{}, stateEv(movesNodeA, 2, 9, ingressbundle.VIPStateStop, ""), master, master)
 		if len(moves) != 1 {
 			t.Fatalf("%d moves for a line seen twice, want 1: %+v", len(moves), moves)
 		}
@@ -70,9 +106,12 @@ func TestVIPMovesAdjacency(t *testing.T) {
 		// A helper that restarted in a new container starts its numbering again, so the number alone does not name a line.
 		st := settle(t)
 		_, moves := apply(st, vipMarks{},
+			stateEv(movesNodeA, 2, 9, ingressbundle.VIPStateStop, ""),
 			stateEv(movesNodeB, 1, 10, ingressbundle.VIPStateMaster, ""),
-			stateEv(movesNodeA, 2, 11, ingressbundle.VIPStateMaster, ""),
-			stateEv(movesNodeB, 1, 12, ingressbundle.VIPStateMaster, ""),
+			stateEv(movesNodeB, 2, 15, ingressbundle.VIPStateStop, ""),
+			stateEv(movesNodeA, 1, 16, ingressbundle.VIPStateMaster, ""),
+			stateEv(movesNodeA, 2, 25, ingressbundle.VIPStateStop, ""),
+			stateEv(movesNodeB, 1, 26, ingressbundle.VIPStateMaster, ""),
 		)
 		if len(moves) != 3 {
 			t.Fatalf("%d moves, want 3: %+v", len(moves), moves)
@@ -93,19 +132,17 @@ func TestVIPMovesAdjacency(t *testing.T) {
 		}
 	})
 
-	t.Run("two moves at one instant are two moves in node order", func(t *testing.T) {
+	t.Run("claims at one instant are applied in node order, whatever order they are given in", func(t *testing.T) {
 		st := settle(t)
-		// Given in the wrong order on purpose: the order is the node's, not the input's.
-		_, moves := apply(st, vipMarks{},
+		events := []vipEvent{
 			stateEv(movesNodeC, 1, 10, ingressbundle.VIPStateMaster, ""),
 			stateEv(movesNodeB, 2, 10, ingressbundle.VIPStateMaster, ""),
-		)
-		if len(moves) != 2 {
-			t.Fatalf("%d moves, want 2: %+v", len(moves), moves)
+			stateEv(movesNodeA, 2, 9, ingressbundle.VIPStateStop, ""),
+			stateEv(movesNodeB, 3, 11, ingressbundle.VIPStateBackup, ""),
 		}
-		if moves[0].FromNodeID != movesNodeA || moves[0].ToNodeID != movesNodeB ||
-			moves[1].FromNodeID != movesNodeB || moves[1].ToNodeID != movesNodeC {
-			t.Fatalf("moves = %+v, want A to B then B to C", moves)
+		_, moves := apply(st, vipMarks{}, events...)
+		if got := moveText(moves); got != "a>c unknown" {
+			t.Fatalf("moves = %q, want a>c unknown: the node that kept the address", got)
 		}
 	})
 
@@ -173,11 +210,6 @@ func TestVIPMoveReasons(t *testing.T) {
 			before: []vipEvent{stateEv(movesNodeA, 2, 10, ingressbundle.VIPStateStop, "")},
 			want:   VIPMoveUnknown,
 		},
-		{
-			name:  "a holder that still says MASTER and can be heard is unknown",
-			marks: vipMarks{},
-			want:  VIPMoveUnknown,
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,8 +239,11 @@ func TestVIPMoveReasons(t *testing.T) {
 		}
 	})
 
-	t.Run("a holder that can be heard and still says MASTER stays one", func(t *testing.T) {
-		st, _ := apply(settle(t), vipMarks{}, masterB)
+	t.Run("a holder that can be heard and still says MASTER stays one, and nothing moved", func(t *testing.T) {
+		st, moves := apply(settle(t), vipMarks{}, masterB)
+		if len(moves) != 0 {
+			t.Fatalf("moves = %q, want none while both nodes say they hold it", moveText(moves))
+		}
 		if got := holderIDs(st); len(got) != 2 {
 			t.Fatalf("holders = %v, want both nodes reported", got)
 		}
@@ -300,8 +335,8 @@ func TestVIPMovesFollowTheNodeThatKeepsTheAddress(t *testing.T) {
 		stateEv(movesNodeB, 2, 10, ingressbundle.VIPStateMaster, ""),
 		stateEv(movesNodeB, 3, 11, ingressbundle.VIPStateBackup, ""),
 	)
-	if len(moves) != 1 || moves[0].FromNodeID != movesNodeA || moves[0].ToNodeID != movesNodeB {
-		t.Fatalf("the double claim stores %+v, want the one move A to B", moves)
+	if len(moves) != 0 {
+		t.Fatalf("the double claim stores %q, want no move: the address stayed with A (WR-05)", moveText(moves))
 	}
 	if st.LastHolder != movesNodeA {
 		t.Fatalf("the node that held it last is %q after B gave it up, want A", st.LastHolder)
@@ -373,5 +408,142 @@ func TestVIPFaultLineThatClearsRecordsNoFault(t *testing.T) {
 	)
 	if b := st.Nodes[movesNodeB]; b.Reason != "" || len(b.Faults) != 0 {
 		t.Errorf("reason = %q, faults = %v after the fault was cleared, want none", b.Reason, b.Faults)
+	}
+}
+
+// TestVIPMovesOneFailoverIsOneMove pins what the LAN dry run of 2026-11-25 showed wrong (VIP-03, WR-05): with two backups both
+// claim the address when the holder goes and the one with the higher address keeps it. Whichever claims first, and whatever
+// instant the reader's pass falls at, the history holds one move, to the node that kept it, with the old holder's own reason.
+func TestVIPMovesOneFailoverIsOneMove(t *testing.T) {
+	m, b := ingressbundle.VIPStateMaster, ingressbundle.VIPStateBackup
+	probe := msEv(movesNodeA, 2, 10000, ingressbundle.VIPStateFault, ingressbundle.VIPReasonProbeFailing)
+	cases := []struct {
+		name   string
+		events []vipEvent
+		marks  vipMarks
+		want   string
+	}{
+		{"the winner claims first", []vipEvent{probe, msEv(movesNodeC, 2, 13000, m, ""), msEv(movesNodeB, 2, 13010, m, ""), msEv(movesNodeB, 3, 13020, b, "")}, vipMarks{}, "a>c probe_failing"},
+		{"the loser claims first", []vipEvent{probe, msEv(movesNodeB, 2, 13000, m, ""), msEv(movesNodeC, 2, 13010, m, ""), msEv(movesNodeB, 3, 13900, b, "")}, vipMarks{}, "a>c probe_failing"},
+		{"the loser gives up before the winner claims", []vipEvent{probe, msEv(movesNodeB, 2, 13000, m, ""), msEv(movesNodeB, 3, 13300, b, ""), msEv(movesNodeC, 2, 13310, m, "")}, vipMarks{}, "a>c probe_failing"},
+		{"the old holder is back as a backup before the claim is settled", []vipEvent{probe, msEv(movesNodeC, 2, 13000, m, ""), msEv(movesNodeA, 3, 13500, b, "")}, vipMarks{}, "a>c probe_failing"},
+		{"a killed holder whose node is not heard", []vipEvent{msEv(movesNodeB, 2, 13000, m, ""), msEv(movesNodeC, 2, 13010, m, ""), msEv(movesNodeB, 3, 13020, b, "")}, vipMarks{Silent: map[string]bool{movesNodeA: true}}, "a>c holder_failed"},
+		{"a killed holder whose new container started before the claims", []vipEvent{startEv(movesNodeA, 12000), msEv(movesNodeB, 2, 13000, m, ""), msEv(movesNodeC, 2, 13010, m, ""), msEv(movesNodeB, 3, 13020, b, "")}, vipMarks{}, "a>c holder_failed"},
+		{"a killed holder whose new container started after the claims", []vipEvent{msEv(movesNodeB, 2, 13000, m, ""), msEv(movesNodeC, 2, 13010, m, ""), msEv(movesNodeB, 3, 13020, b, ""), startEv(movesNodeA, 15000)}, vipMarks{}, "a>c holder_failed"},
+		{"a holder that stopped in order and started again", []vipEvent{msEv(movesNodeA, 2, 10000, ingressbundle.VIPStateStop, ""), startEv(movesNodeA, 12000), msEv(movesNodeC, 2, 13000, m, "")}, vipMarks{}, "a>c unknown"},
+		{"a drained holder", []vipEvent{msEv(movesNodeA, 2, 10000, ingressbundle.VIPStateStop, ""), msEv(movesNodeB, 2, 10500, m, ""), msEv(movesNodeC, 2, 10510, m, ""), msEv(movesNodeB, 3, 10520, b, "")}, vipMarks{Handoff: map[string]time.Time{movesNodeA: movesT0.Add(10 * time.Second)}}, "a>c drain_handoff"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, moves := apply(settle(t), tc.marks, tc.events...); moveText(moves) != tc.want {
+				t.Errorf("read in one pass: moves = %q, want %q", moveText(moves), tc.want)
+			}
+			// The same lines read in two passes, cut at every place, are the same one move.
+			for cut := 1; cut < len(tc.events); cut++ {
+				st, first := applyOnce(settle(t), tc.marks, tc.events[:cut]...)
+				_, rest := apply(st, tc.marks, tc.events[cut:]...)
+				if got := moveText(append(first, rest...)); got != tc.want {
+					t.Errorf("read in two passes cut at %d: moves = %q, want %q", cut, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestVIPMovesAFirstElectionIsNoMove pins WR-05: however many nodes claim the address at the first election, and whoever keeps
+// it, nothing moved, and the node that kept it is the one a later move is from.
+func TestVIPMovesAFirstElectionIsNoMove(t *testing.T) {
+	st, moves := apply(vipEnvState{}, vipMarks{},
+		msEv(movesNodeA, 1, 0, ingressbundle.VIPStateMaster, ""),
+		msEv(movesNodeB, 1, 10, ingressbundle.VIPStateMaster, ""),
+		msEv(movesNodeC, 1, 20, ingressbundle.VIPStateMaster, ""),
+		msEv(movesNodeA, 2, 30, ingressbundle.VIPStateBackup, ""),
+		msEv(movesNodeB, 2, 1030, ingressbundle.VIPStateBackup, ""),
+	)
+	if len(moves) != 0 {
+		t.Fatalf("the first election stores %q, want no move", moveText(moves))
+	}
+	if st.LastHolder != movesNodeC {
+		t.Fatalf("the settled holder is %q, want C", st.LastHolder)
+	}
+}
+
+// TestVIPMovesSettleByTheLinesOwnTime: lines read together long after they were written (the server was down) give the moves
+// they show. An address that stayed two seconds or longer with a node was there; a shorter claim was a lost election.
+func TestVIPMovesSettleByTheLinesOwnTime(t *testing.T) {
+	_, moves := apply(settle(t), vipMarks{},
+		msEv(movesNodeA, 2, 10000, ingressbundle.VIPStateStop, ""),
+		msEv(movesNodeB, 2, 11000, ingressbundle.VIPStateMaster, ""),
+		msEv(movesNodeB, 3, 13000, ingressbundle.VIPStateStop, ""),
+		msEv(movesNodeC, 2, 14000, ingressbundle.VIPStateMaster, ""),
+	)
+	if got := moveText(moves); got != "a>b unknown, b>c unknown" {
+		t.Fatalf("moves = %q, want a>b unknown, b>c unknown", got)
+	}
+	if !moves[0].At.Equal(movesT0.Add(11*time.Second)) || !moves[1].At.Equal(movesT0.Add(14*time.Second)) {
+		t.Fatalf("moves are at %s and %s, want the instants of the MASTER lines", moves[0].At, moves[1].At)
+	}
+}
+
+// TestVIPMovesAClaimIsNotSettledAtOnce: the pass that first reads a MASTER line stores nothing, since the line of a node that
+// claims the address too may be in a log that has not been read yet.
+func TestVIPMovesAClaimIsNotSettledAtOnce(t *testing.T) {
+	st, moves := applyOnce(settle(t), vipMarks{},
+		stateEv(movesNodeA, 2, 10, ingressbundle.VIPStateStop, ""),
+		stateEv(movesNodeB, 2, 11, ingressbundle.VIPStateMaster, ""),
+	)
+	if len(moves) != 0 || !st.claimOpen() {
+		t.Fatalf("moves = %q, claim open %v, want none stored and the claim open", moveText(moves), st.claimOpen())
+	}
+	early, moves := detectMoves(st, nil, vipMarks{Now: movesPass.Add(vipSettleWindow - time.Millisecond)})
+	if len(moves) != 0 || !early.claimOpen() {
+		t.Fatalf("settled before the window ended: %q", moveText(moves))
+	}
+	// A switch-off ends the reader's work on the environment, so a claim is not held back while one runs.
+	if _, moves := applyOnce(settle(t), vipMarks{Disabling: true}, stateEv(movesNodeA, 2, 10, ingressbundle.VIPStateStop, ""), stateEv(movesNodeB, 2, 11, ingressbundle.VIPStateMaster, "")); moveText(moves) != "a>b disabled" {
+		t.Fatalf("while switching off: moves = %q, want a>b disabled", moveText(moves))
+	}
+}
+
+// TestVIPFaultShowsTheCause pins what the LAN dry run of 2026-11-25 showed wrong (D-11, A-05): the address_in_use check makes
+// the probe fail, so keepalived's FAULT line says probe_failing after it; the fault shown is the cause and not its effect.
+func TestVIPFaultShowsTheCause(t *testing.T) {
+	st, _ := apply(vipEnvState{}, vipMarks{},
+		startEv(movesNodeA, 0),
+		faultEv(movesNodeA, 2, 1, ingressbundle.VIPReasonAddressInUse, true),
+		stateEv(movesNodeA, 3, 2, ingressbundle.VIPStateFault, ingressbundle.VIPReasonProbeFailing),
+	)
+	if got := st.Nodes[movesNodeA].Reason; got != ingressbundle.VIPReasonAddressInUse {
+		t.Fatalf("reason = %q, want address_in_use while it stands", got)
+	}
+	// Once the other machine is gone, what is left is the probe, until the node is a backup.
+	st, _ = apply(st, vipMarks{}, faultEv(movesNodeA, 4, 20, ingressbundle.VIPReasonAddressInUse, false))
+	if got := st.Nodes[movesNodeA].Reason; got != ingressbundle.VIPReasonProbeFailing {
+		t.Fatalf("reason = %q after the clear, want probe_failing", got)
+	}
+	st, _ = apply(st, vipMarks{}, stateEv(movesNodeA, 5, 22, ingressbundle.VIPStateBackup, ""))
+	if n := st.Nodes[movesNodeA]; n.Reason != "" || len(n.Faults) != 0 {
+		t.Fatalf("reason = %q, faults %v on a backup, want none", n.Reason, n.Faults)
+	}
+}
+
+// TestVIPMovesWhileTwoNodesClaim: two nodes that both go on saying they hold the address are shown as two holders, and nothing
+// has moved whichever of them is listed first. When the old holder is no longer heard, the one that is heard has the address.
+func TestVIPMovesWhileTwoNodesClaim(t *testing.T) {
+	st, moves := apply(vipEnvState{}, vipMarks{},
+		stateEv(movesNodeC, 1, 0, ingressbundle.VIPStateMaster, ""),
+		stateEv(movesNodeA, 1, 10, ingressbundle.VIPStateMaster, ""),
+		stateEv(movesNodeB, 1, 30, ingressbundle.VIPStateBackup, ""),
+	)
+	if len(moves) != 0 || st.LastHolder != movesNodeC || len(holderIDs(st)) != 2 {
+		t.Fatalf("moves = %q, settled holder %q, holders %v; want no move, C settled and both shown", moveText(moves), st.LastHolder, holderIDs(st))
+	}
+
+	_, moves = apply(st, vipMarks{Silent: map[string]bool{movesNodeC: true}})
+	if got := moveText(moves); got != "c>a holder_failed" {
+		t.Fatalf("moves = %q, want c>a holder_failed once C is not heard", got)
+	}
+	if !moves[0].At.Equal(movesT0.Add(10 * time.Second)) {
+		t.Fatalf("the move is at %s, want A's MASTER line", moves[0].At)
 	}
 }

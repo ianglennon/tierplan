@@ -149,6 +149,13 @@ func vipStateEvent(node string, seq uint64, state, reason string) ingressbundle.
 // read takes one pass over the environment.
 func (v *vipRig) read() { v.svc.ReadVIPOnce(testsupport.Context(v.t), v.envID) }
 
+// settle takes the pass that settles what the pass before read: the server's clock has moved on by more than the settle
+// window and there is nothing new in the logs.
+func (v *vipRig) settle(svc *ingressdeploy.Service) {
+	v.clock.set(v.clock.Now().Add(3 * time.Second))
+	svc.ReadVIPOnce(testsupport.Context(v.t), v.envID)
+}
+
 // moves lists the moves stored for the environment, oldest first.
 func (v *vipRig) moves() []ingressstore.VIPMove {
 	v.t.Helper()
@@ -197,8 +204,9 @@ func TestVIPReaderRecordsAMove(t *testing.T) {
 	v.b.AppendLogs("ka-b", logLine(t, vipT0.Add(11*time.Second), vipStateEvent(vipNodeB, 3, ingressbundle.VIPStateMaster, "")))
 	v.read()
 	if got := v.holderNames(); len(got) != 1 || got[0] != "node-b" {
-		t.Fatalf("holders after the move = %v, want [node-b]", got)
+		t.Fatalf("holders after the move = %v, want [node-b]: the holder shows at once, before the move is settled", got)
 	}
+	v.settle(v.svc)
 	want := ingressstore.VIPMove{
 		EnvID: v.envID, At: vipT0.Add(11 * time.Second), FromNodeID: vipNodeA, FromNodeName: "node-a",
 		ToNodeID: vipNodeB, ToNodeName: "node-b", Reason: ingressdeploy.VIPMoveProbeFailing,
@@ -239,10 +247,13 @@ func TestVIPReaderRunsOnTheClock(t *testing.T) {
 		t.Fatalf("holders after the first round = %v, want [node-a]", got)
 	}
 
-	v.a.AppendLogs("ka-a", logLine(t, vipT0.Add(time.Second), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")))
-	v.b.AppendLogs("ka-b", logLine(t, vipT0.Add(2*time.Second), vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateMaster, "")))
+	v.a.AppendLogs("ka-a", logLine(t, vipT0.Add(10*time.Second), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")))
+	v.b.AppendLogs("ka-b", logLine(t, vipT0.Add(11*time.Second), vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateMaster, "")))
 	v.clock.ticks <- v.clock.Now()
 	testsupport.Await(t, "the second round", rounds)
+	v.clock.set(v.clock.Now().Add(3 * time.Second))
+	v.clock.ticks <- v.clock.Now()
+	testsupport.Await(t, "the third round", rounds)
 	if got := v.holderNames(); len(got) != 1 || got[0] != "node-b" {
 		t.Fatalf("holders after the tick = %v, want [node-b]", got)
 	}
@@ -271,17 +282,17 @@ func (v *vipRig) nodeState(host string) (st struct {
 // log from its start, rebuilds every node's state, and stores only the moves newer than the newest one the store holds.
 func TestVIPReaderRestartStoresNothingTwice(t *testing.T) {
 	v := newVIPRig(t)
-	t1, t3 := vipT0.Add(1*time.Second), vipT0.Add(3*time.Second)
+	t1, t3 := vipT0.Add(10*time.Second), vipT0.Add(30*time.Second)
 	v.a.AppendLogs("ka-a",
 		logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")),
 		// A yields to B and, after B has let go too, takes the address back: a node that stays in MASTER is the one that
 		// held it last, so a second MASTER with no BACKUP between would not be a move.
-		logLine(t, vipT0.Add(1500*time.Millisecond), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")),
+		logLine(t, vipT0.Add(9*time.Second), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")),
 		logLine(t, t3, vipStateEvent(vipNodeA, 3, ingressbundle.VIPStateMaster, "")),
 	)
 	v.b.AppendLogs("ka-b",
 		logLine(t, t1, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateMaster, "")),
-		logLine(t, vipT0.Add(2*time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, "")),
+		logLine(t, vipT0.Add(29*time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, "")),
 	)
 	// The move of t1 is stored already, by the server that ran before the restart.
 	err := v.istore.InsertVIPMove(testsupport.Context(t), ingressstore.VIPMove{
@@ -294,6 +305,7 @@ func TestVIPReaderRestartStoresNothingTwice(t *testing.T) {
 
 	fresh := ingressdeploy.New(v.deps)
 	fresh.ReadVIPOnce(testsupport.Context(t), v.envID)
+	v.settle(fresh)
 	got := v.moves()
 	if len(got) != 2 {
 		t.Fatalf("%d moves after the first pass of a fresh server, want 2 (the stored one and the later one): %+v", len(got), got)
@@ -305,14 +317,17 @@ func TestVIPReaderRestartStoresNothingTwice(t *testing.T) {
 		t.Fatalf("holders after the restart = %v, want [node-a]", h)
 	}
 
-	fresh.ReadVIPOnce(testsupport.Context(t), v.envID)
+	v.settle(fresh)
 	if n := len(v.moves()); n != 2 {
 		t.Fatalf("a second pass left %d moves, want 2", n)
 	}
 
-	// A third server with the same store and logs stores nothing either.
+	// A third server with the same store and logs stores nothing either: the last move of the replay is settled by a later pass
+	// than the one that read it, and it is still the one that is stored.
 	third := ingressdeploy.New(v.deps)
 	third.ReadVIPOnce(testsupport.Context(t), v.envID)
+	v.settle(third)
+	v.settle(third)
 	if n := len(v.moves()); n != 2 {
 		t.Fatalf("a second restart left %d moves, want 2", n)
 	}
@@ -596,6 +611,7 @@ func TestVIPReaderHolderThatFellSilentIsReplacedAsFailed(t *testing.T) {
 	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected = false })
 	v.b.AppendLogs("ka-b", logLine(t, vipT0.Add(5*time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateMaster, "")))
 	v.read()
+	v.settle(v.svc)
 	got := v.moves()
 	if len(got) != 1 || got[0].Reason != ingressdeploy.VIPMoveHolderFailed || got[0].ToNodeID != vipNodeB {
 		t.Fatalf("moves = %+v, want one holder_failed move to node-b", got)
@@ -639,15 +655,15 @@ func TestVIPReaderReadsOnlyTasksOfTheService(t *testing.T) {
 // not stored again.
 func TestVIPReaderLongReplayStoresNothingTwice(t *testing.T) {
 	v := newVIPRig(t)
-	t1, t2 := vipT0.Add(1000*time.Millisecond), vipT0.Add(2000*time.Millisecond)
-	// node-a's log is longer than a pass reads: it holds the address, yields at once, and after 600 lines of filler takes the
-	// address back at t2. node-b holds it in between, from t1 to 1.8 s.
+	t1, t2 := vipT0.Add(10*time.Second), vipT0.Add(20*time.Second)
+	// node-a's log is longer than a pass reads: it holds the address, yields after 3 s, and after 600 lines of filler takes the
+	// address back at t2. node-b holds it in between, from t1 to 18 s.
 	lines := []dockertest.FakeLogLine{
 		logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")),
-		logLine(t, vipT0.Add(time.Millisecond), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")),
+		logLine(t, vipT0.Add(3*time.Second), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")),
 	}
 	for i := range 600 {
-		lines = append(lines, logLine(t, vipT0.Add(time.Duration(i+2)*time.Millisecond), ingressbundle.VIPEvent{
+		lines = append(lines, logLine(t, vipT0.Add(3*time.Second+time.Duration(i+1)*time.Millisecond), ingressbundle.VIPEvent{
 			Event: ingressbundle.VIPEventClockSkew, Node: vipNodeA, Seq: uint64(i + 3), Active: i%2 == 0,
 		}))
 	}
@@ -655,7 +671,7 @@ func TestVIPReaderLongReplayStoresNothingTwice(t *testing.T) {
 	v.a.AppendLogs("ka-a", lines...)
 	v.b.AppendLogs("ka-b",
 		logLine(t, t1, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateMaster, "")),
-		logLine(t, vipT0.Add(1800*time.Millisecond), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, "")),
+		logLine(t, vipT0.Add(18*time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, "")),
 	)
 	for _, m := range []ingressstore.VIPMove{
 		{EnvID: v.envID, At: t1, FromNodeID: vipNodeA, FromNodeName: "node-a", ToNodeID: vipNodeB, ToNodeName: "node-b", Reason: ingressdeploy.VIPMoveUnknown},
@@ -668,7 +684,7 @@ func TestVIPReaderLongReplayStoresNothingTwice(t *testing.T) {
 
 	fresh := ingressdeploy.New(v.deps)
 	for pass := 1; pass <= 4; pass++ {
-		fresh.ReadVIPOnce(testsupport.Context(t), v.envID)
+		v.settle(fresh)
 		if n := len(v.moves()); n != 2 {
 			t.Fatalf("%d moves stored after replay pass %d, want the 2 that were stored before the restart: %+v", n, pass, v.moves())
 		}
@@ -676,4 +692,59 @@ func TestVIPReaderLongReplayStoresNothingTwice(t *testing.T) {
 	if h := fresh.VIPHolders(v.envID); len(h) != 1 || h[0].Hostname != "node-a" {
 		t.Fatalf("holders after the replay = %v, want [node-a]", h)
 	}
+}
+
+// TestVIPReaderOneFailoverIsOneMove plays the two faults of the LAN dry run of 2026-11-25 through the logs: the holder's
+// container is killed, its replacement starts before the reader looks, and the move is one holder_failed row; and a claim that
+// loses its election in a later pass than the one that read it stores nothing.
+func TestVIPReaderOneFailoverIsOneMove(t *testing.T) {
+	v := newVIPRig(t)
+	v.a.AppendLogs("ka-a", logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
+	v.b.AppendLogs("ka-b", logLine(t, vipT0, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateBackup, "")))
+	v.read()
+	v.settle(v.svc)
+
+	// The lost claim of an election.
+	v.b.AppendLogs("ka-b", logLine(t, vipT0.Add(10*time.Second), vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateMaster, "")))
+	v.read()
+	v.b.AppendLogs("ka-b", logLine(t, vipT0.Add(10500*time.Millisecond), vipStateEvent(vipNodeB, 3, ingressbundle.VIPStateBackup, "")))
+	v.settle(v.svc)
+	v.settle(v.svc)
+	if n := len(v.moves()); n != 0 {
+		t.Fatalf("a claim that lost stored %+v, want no move", v.moves())
+	}
+
+	v.a.AppendLogs("ka-a", logLine(t, vipT0.Add(22*time.Second), ingressbundle.VIPEvent{Event: ingressbundle.VIPEventStart, Node: vipNodeA, Seq: 1, Iface: "eth0"}))
+	v.b.AppendLogs("ka-b", logLine(t, vipT0.Add(23*time.Second), vipStateEvent(vipNodeB, 4, ingressbundle.VIPStateMaster, "")))
+	v.read()
+	v.settle(v.svc)
+	got := v.moves()
+	if len(got) != 1 || got[0].Reason != ingressdeploy.VIPMoveHolderFailed || got[0].FromNodeID != vipNodeA || got[0].ToNodeID != vipNodeB {
+		t.Fatalf("moves = %+v, want one holder_failed move from node-a to node-b", got)
+	}
+}
+
+// TestVIPStatusShowsAddressInUse pins the status half of D-11: the last fault of a node held out by another machine's answer
+// is address_in_use, although the FAULT line that follows says probe_failing.
+func TestVIPStatusShowsAddressInUse(t *testing.T) {
+	v := newVIPRig(t)
+	v.a.AppendLogs("ka-a",
+		logLine(t, vipT0, ingressbundle.VIPEvent{Event: ingressbundle.VIPEventStart, Node: vipNodeA, Seq: 1, Iface: "eth0"}),
+		logLine(t, vipT0.Add(time.Second), ingressbundle.VIPEvent{Event: ingressbundle.VIPEventFault, Reason: ingressbundle.VIPReasonAddressInUse, Active: true, Node: vipNodeA, Seq: 2}),
+		logLine(t, vipT0.Add(2*time.Second), vipStateEvent(vipNodeA, 3, ingressbundle.VIPStateFault, ingressbundle.VIPReasonProbeFailing)),
+	)
+	v.read()
+	st, err := v.svc.VIPStatus(testsupport.Context(t), v.envID)
+	if err != nil {
+		t.Fatalf("VIPStatus: %v", err)
+	}
+	for _, c := range st.Candidates {
+		if c.NodeID == vipNodeA {
+			if c.LastFault != ingressbundle.VIPReasonAddressInUse || c.VRRPState != ingressbundle.VIPStateFault {
+				t.Fatalf("node-a = %+v, want FAULT with the last fault address_in_use", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("node-a is no candidate: %+v", st.Candidates)
 }

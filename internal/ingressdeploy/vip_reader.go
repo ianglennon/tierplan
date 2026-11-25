@@ -76,9 +76,9 @@ type vipEnv struct {
 	// handoff and disabling are the marks (markVIPHandoff, markVIPDisabling).
 	handoff   map[string]time.Time
 	disabling bool
-	// settled is false until a pass has stored what it found and has read every container to its end: the passes that
-	// replay the logs after a start, and the first after a failed store, store only moves newer than the newest stored
-	// one (D-21).
+	// settled is false until a pass has stored what it found, has read every container to its end and has left no claim
+	// open: the passes that replay the logs after a start, and the first after a failed store, store only moves newer than
+	// the newest stored one (D-21).
 	settled bool
 	// skipped counts the lines refused or dropped, never their text.
 	skipped uint64
@@ -272,7 +272,7 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	}
 
 	env.mu.Lock()
-	marks := vipMarks{Handoff: map[string]time.Time{}, Disabling: env.disabling, Silent: silent}
+	marks := vipMarks{Handoff: map[string]time.Time{}, Disabling: env.disabling, Silent: silent, Now: now}
 	for id, at := range env.handoff {
 		if now.Sub(at) > 2*vipHandoffWindow {
 			delete(env.handoff, id)
@@ -354,7 +354,8 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	env.view = next
 	// The replay of a log longer than one pass takes is not over until a pass has read to the end of every container. Until
 	// then the moves it rebuilds are still filtered against the newest stored one, or an old move would be stored twice.
-	env.settled = env.settled || caughtUp
+	// A claim the replay left open becomes a move in a later pass, so the replay is not over before it is settled either.
+	env.settled = env.settled || (caughtUp && !next.claimOpen())
 	env.skipped += skipped
 	for _, r := range reads {
 		if !r.ok {
@@ -627,8 +628,9 @@ func (s *Service) vipNodeStates(envID string) []vipNode {
 	out := make([]vipNode, 0, len(e.view.Nodes))
 	for _, n := range e.view.Nodes {
 		n.Faults = cloneFaults(n.Faults)
-		if n.Gone && n.State == ingressbundle.VIPStateMaster {
-			// What the status and the bell read: a MASTER whose keepalived is no longer running is not one.
+		if (n.Gone || n.Superseded) && n.State == ingressbundle.VIPStateMaster {
+			// What the status and the bell read: a MASTER whose keepalived is no longer running is not one, and neither is
+			// one that could not be heard when another node took the address.
 			n.State = ""
 		}
 		out = append(out, n)

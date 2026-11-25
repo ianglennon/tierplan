@@ -451,15 +451,15 @@ with `next` as the cursor to pass as `before`. Each move has the time, the node 
 `drain_handoff` (TierPlan handed it over before a drain), `disabled` or `unknown` (none of these explains it). The last 500
 moves of each environment are kept.
 
-Two things in that history are normal and may surprise you:
+Two things about that history may surprise you:
 
 - **A switch-off usually stores no `disabled` move.** Removing the service stops keepalived on every node at about the same
   moment, so the other nodes are usually stopped before they could report taking the address. Any move stored while a switch-off
   runs has the reason `disabled`, but do not expect one.
-- **During an election the address can pass through more than one node.** Every node has the same priority, so when a holder
-  goes away all the backups can claim the address in the same second, and the one with the highest address keeps it. Each step is
-  one move, and the later steps have the reason `unknown`. A first election can store one too, so a new virtual IP can show
-  one move in the bell. The address and the history are correct; wait for the holder to settle before you read it.
+- **A move is stored a few seconds after the holder changes.** Every node has the same priority, so when a holder goes away all
+  the backups can claim the address in the same second, and the one with the highest address keeps it. TierPlan stores the move
+  once one node has been the only claimant for two seconds, so a failover is one move to the node that kept the address. The
+  first election after you switch the virtual IP on stores none. The status shows the holder at once.
 
 Bell items, for a caller who manages the environment's ingress: `vip_no_holder` (an error: no node has held the address for more
 than ten seconds, except while a node's keepalived has run for under fifteen seconds, which is a normal first start),

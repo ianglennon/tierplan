@@ -458,8 +458,7 @@ func sharedVirtualIP(t *testing.T, f *swarmFix) {
 	}
 	sh(t, holder, "docker stop "+proxy)
 	f.srv.WaitFor("a probe_failing move away from "+holder.Hostname, vipMoveWait, func() (bool, string) {
-		// The history is searched for who and why, wherever the move sits: the first election can store a move of its own late
-		// (two helpers claim the address at once, reason unknown).
+		// The history is searched for who and why, wherever the move sits.
 		all := f.vipMoves(t)
 		for _, m := range all {
 			if m.Reason == "probe_failing" && m.FromNode == holder.Hostname && m.ToNode != "" {

@@ -232,15 +232,12 @@ func TestVIPEnableHoldsOnSwarm(t *testing.T) {
 
 // TestVIPMovesWhenTheHolderProxyStops is D-29, VIP-02 and VIP-03: stopping the holder's proxy container makes the other node
 // hold the address within vipMoveBound, the reader stores the move with the reason probe_failing, and when swarm runs a proxy
-// on the old holder again the old holder stays BACKUP and the address stays where it moved (nopreempt). The moves stored
-// before the proxy is stopped are counted and left out: two helpers that both claim the address at the first election are
-// stored as a move, which is not what this test is about.
+// on the old holder again the old holder stays BACKUP and the address stays where it moved (nopreempt). That is
+// the only move in the history: two helpers that both claim the address at the first election store none (WR-05).
 func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 	e := startVIPEnv(t)
 	_, holder := e.awaitHeld()
 	other := e.otherThan(holder)
-	first := len(e.moves())
-
 	stopped := e.proxyContainer(holder)
 	if stopped == "" {
 		t.Fatalf("%s runs no proxy container", holder.Hostname)
@@ -254,7 +251,7 @@ func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 
 	dockertest.Wait(t, vipReadBound, "the reader to store the move from "+holder.Hostname+" to "+other.Hostname, func() (bool, string) {
 		rows := e.moves()
-		return len(rows) == first+1, fmt.Sprintf("%d moves, %d before the proxy was stopped", len(rows), first)
+		return len(rows) > 0, fmt.Sprintf("%d moves", len(rows))
 	})
 	mv := e.moves()[0]
 	if mv.FromNodeID != e.ids[holder] || mv.ToNodeID != e.ids[other] || mv.FromNodeName != holder.Hostname || mv.ToNodeName != other.Hostname || mv.Reason != "probe_failing" {
@@ -292,8 +289,8 @@ func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 	}); v != "" {
 		t.Fatalf("nopreempt violated: %s", v)
 	}
-	if rows := e.moves(); len(rows) != first+1 {
-		t.Errorf("%d moves after the old holder came back, want %d: the one the stop made", len(rows), first+1)
+	if rows := e.moves(); len(rows) != 1 {
+		t.Errorf("%d moves after the old holder came back, want the one the stop made and none for the first election: %+v", len(rows), rows)
 	}
 }
 
@@ -304,8 +301,7 @@ func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 // Whether any move is stored during the switch-off is not asserted: the service's removal stops every node's keepalived
 // together, so the other node is sometimes stopped before the holder's priority-0 advert promotes it, and the reader records
 // only moves between two nodes (D-23), never the address leaving for no node. What is asserted is that a move that does land
-// in the window is never given another reason. A move stored before the switch-off began (two helpers that both claimed the
-// address at the first election) is not the switch-off's and is left out.
+// in the window is never given another reason. A move stored before the switch-off began is not the switch-off's and is left out.
 func TestVIPDisableLeavesNothing(t *testing.T) {
 	e := startVIPEnv(t)
 	_, holder := e.awaitHeld()

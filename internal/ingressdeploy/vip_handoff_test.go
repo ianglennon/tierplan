@@ -183,6 +183,9 @@ func TestVIPHandoffBranches(t *testing.T) {
 		if w := h.b.Writes(); len(w) != 0 {
 			t.Errorf("node B writes = %v, want none", w)
 		}
+		// The move is stored once it has settled, in a pass after the drain's own.
+		<-h.clock.After(3 * time.Second)
+		h.svc.ReadVIPOnce(testsupport.Context(t), h.envID)
 		if moves := h.moves(); len(moves) != 1 || moves[0].Reason != "drain_handoff" {
 			t.Errorf("moves = %+v, want one drain_handoff: the handoff marks the node before it stops it", moves)
 		}
