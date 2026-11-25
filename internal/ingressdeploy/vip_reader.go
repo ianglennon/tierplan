@@ -44,6 +44,10 @@ const (
 	// engine accepts a call and never answers would otherwise hold the environment's pass, and so every later pass, for as
 	// long as the server runs.
 	vipNodeReadTimeout = 8 * time.Second
+	// vipReplayGrace is how long the replay after a start waits for nodes that cannot be read yet. After a restart the agents
+	// connect one after another, each within its longest reconnect delay of a minute by default, and the history one node's log
+	// tells alone is not what happened.
+	vipReplayGrace = 90 * time.Second
 	// vipPassReadTimeout is the longest the loop lets one environment's pass take: a few batches of nodes at the per-node
 	// bound.
 	vipPassReadTimeout = 30 * time.Second
@@ -80,6 +84,15 @@ type vipEnv struct {
 	// open: the passes that replay the logs after a start, and the first after a failed store, store only moves newer than
 	// the newest stored one (D-21).
 	settled bool
+	// replayed is false from the start until every node has been read to its end, or vipReplayGrace has passed since
+	// replayFrom, the first pass. Until then no move is stored: every pass rebuilds the state from all the lines read so far,
+	// held in replay, so the moves of the whole replay are judged once, on every node's lines in time order.
+	replayed   bool
+	replayFrom time.Time
+	replay     []vipEvent
+	// heard is the set of nodes read to the end at least once. The first lines of a node that was not are history, even after
+	// the replay (its agent was offline), so a pass that has them stores only moves newer than the newest stored one.
+	heard map[string]bool
 	// skipped counts the lines refused or dropped, never their text.
 	skipped uint64
 }
@@ -103,6 +116,7 @@ func (v *vipState) env(envID string) *vipEnv {
 			view:    vipEnvState{Nodes: map[string]vipNode{}},
 			cursors: map[string]vipCursor{},
 			handoff: map[string]time.Time{},
+			heard:   map[string]bool{},
 		}
 		v.envs[envID] = e
 	}
@@ -287,10 +301,40 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 			silent[id] = true
 		}
 	}
-	settled := env.settled
+	settled, replayed, replay := env.settled, env.replayed, env.replay
+	replayFrom := env.replayFrom
+	if replayFrom.IsZero() {
+		replayFrom = now
+	}
+	heard := make(map[string]bool, len(env.heard))
+	for id := range env.heard {
+		heard[id] = true
+	}
 	env.mu.Unlock()
 
+	allHeard := true
+	for _, r := range reads {
+		id := r.node.SwarmNodeID
+		if !heard[id] && len(r.events) > 0 {
+			settled = false
+		}
+		if r.ok && !r.more {
+			heard[id] = true
+		}
+		allHeard = allHeard && heard[id]
+	}
+
 	next, moves := detectMoves(prev, events, marks)
+	if !replayed {
+		replay = append(slices.Clone(replay), events...)
+		next, moves = detectMoves(vipEnvState{}, replay, marks)
+		next.keepHeard(prev)
+		if (allHeard && caughtUp) || now.Sub(replayFrom) >= vipReplayGrace {
+			replayed, replay = true, nil
+		} else {
+			moves = nil
+		}
+	}
 	// A node whose engine answered every call of this pass and runs no keepalived container is not a holder, whatever its
 	// last line was: a helper killed without a STOP line left MASTER as its last word. Only that is evidence. A node that
 	// could not be asked (agent not connected, read failed or timed out, node ID not known, no longer in the engine's list of
@@ -355,7 +399,8 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	// The replay of a log longer than one pass takes is not over until a pass has read to the end of every container. Until
 	// then the moves it rebuilds are still filtered against the newest stored one, or an old move would be stored twice.
 	// A claim the replay left open becomes a move in a later pass, so the replay is not over before it is settled either.
-	env.settled = env.settled || (caughtUp && !next.claimOpen())
+	env.settled = replayed && (settled || (caughtUp && !next.claimOpen()))
+	env.replayed, env.replay, env.replayFrom, env.heard = replayed, replay, replayFrom, heard
 	env.skipped += skipped
 	for _, r := range reads {
 		if !r.ok {
@@ -375,6 +420,23 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	}
 	if skipped > 0 {
 		s.log().Debug("the virtual IP reader skipped lines it could not use", "environment", envID, "lines", skipped)
+	}
+}
+
+// keepHeard carries over what a rebuild of the state from the lines alone does not know: when each node was last heard, the
+// nodes that wrote nothing, and since when no node holds the address when the lines do not say.
+func (st *vipEnvState) keepHeard(prev vipEnvState) {
+	for id, p := range prev.Nodes {
+		n, ok := st.Nodes[id]
+		if !ok {
+			st.Nodes[id] = p
+			continue
+		}
+		n.LastHeard = p.LastHeard
+		st.Nodes[id] = n
+	}
+	if st.HolderlessSince.IsZero() {
+		st.HolderlessSince = prev.HolderlessSince
 	}
 }
 

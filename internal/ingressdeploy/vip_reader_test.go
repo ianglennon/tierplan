@@ -6,6 +6,7 @@ package ingressdeploy_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"sync"
@@ -747,4 +748,89 @@ func TestVIPStatusShowsAddressInUse(t *testing.T) {
 		}
 	}
 	t.Fatalf("node-a is no candidate: %+v", st.Candidates)
+}
+
+// TestVIPReaderRestartWithAgentsConnectingOneByOne pins the restart rule as it happens in service, found on the LAN on
+// 2026-11-25: after a restart no agent is connected and then each connects in its own time. The log of one node alone tells a
+// history that did not happen, so nothing is stored until every node has been read, and then nothing is stored twice and a
+// move made while the server was down is stored once.
+func TestVIPReaderRestartWithAgentsConnectingOneByOne(t *testing.T) {
+	const late = 120 * time.Second
+	logs := func(t *testing.T, v *vipRig) (t1, t2, t3 time.Time) {
+		t.Helper()
+		at := func(s int) time.Time { return vipT0.Add(time.Duration(s) * time.Second) }
+		m, b := ingressbundle.VIPStateMaster, ingressbundle.VIPStateBackup
+		f := ingressbundle.VIPStateFault
+		p := ingressbundle.VIPReasonProbeFailing
+		// A holds, A to B at 11, B to A at 31 (both stored before the restart), A to B at 51, while the server was down.
+		v.a.AppendLogs("ka-a", logLine(t, at(0), vipStateEvent(vipNodeA, 1, m, "")),
+			logLine(t, at(10), vipStateEvent(vipNodeA, 2, f, p)), logLine(t, at(20), vipStateEvent(vipNodeA, 3, b, "")),
+			logLine(t, at(31), vipStateEvent(vipNodeA, 4, m, "")), logLine(t, at(50), vipStateEvent(vipNodeA, 5, f, p)))
+		v.b.AppendLogs("ka-b", logLine(t, at(0), vipStateEvent(vipNodeB, 1, b, "")),
+			logLine(t, at(11), vipStateEvent(vipNodeB, 2, m, "")), logLine(t, at(30), vipStateEvent(vipNodeB, 3, f, p)),
+			logLine(t, at(40), vipStateEvent(vipNodeB, 4, b, "")), logLine(t, at(51), vipStateEvent(vipNodeB, 5, m, "")))
+		for _, mv := range []ingressstore.VIPMove{
+			{EnvID: v.envID, At: at(11), FromNodeID: vipNodeA, FromNodeName: "node-a", ToNodeID: vipNodeB, ToNodeName: "node-b", Reason: ingressdeploy.VIPMoveProbeFailing},
+			{EnvID: v.envID, At: at(31), FromNodeID: vipNodeB, FromNodeName: "node-b", ToNodeID: vipNodeA, ToNodeName: "node-a", Reason: ingressdeploy.VIPMoveProbeFailing},
+		} {
+			if err := v.istore.InsertVIPMove(testsupport.Context(t), mv); err != nil {
+				t.Fatalf("InsertVIPMove: %v", err)
+			}
+		}
+		return at(11), at(31), at(51)
+	}
+	connect := func(v *vipRig, a, b bool) {
+		v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected, i.Nodes[1].Connected = a, b })
+	}
+	for _, aFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("a first %v", aFirst), func(t *testing.T) {
+			v := newVIPRig(t)
+			_, _, t3 := logs(t, v)
+			fresh := ingressdeploy.New(v.deps)
+			connect(v, false, false)
+			v.settle(fresh)
+			v.settle(fresh)
+			connect(v, aFirst, !aFirst)
+			v.settle(fresh)
+			v.settle(fresh)
+			if n := len(v.moves()); n != 2 {
+				t.Fatalf("%d moves with one node read, want the 2 that were stored: %+v", n, v.moves())
+			}
+			connect(v, true, true)
+			for range 3 {
+				v.settle(fresh)
+			}
+			got := v.moves()
+			if len(got) != 3 || !got[2].At.Equal(t3) || got[2].FromNodeID != vipNodeA || got[2].ToNodeID != vipNodeB || got[2].Reason != ingressdeploy.VIPMoveProbeFailing {
+				t.Fatalf("moves = %+v, want the 2 stored and A to B at %s, probe_failing", got, t3)
+			}
+			if h := fresh.VIPHolders(v.envID); len(h) != 1 || h[0].Hostname != "node-b" {
+				t.Fatalf("holders = %v, want [node-b]", h)
+			}
+		})
+	}
+
+	t.Run("a node that stays offline does not hold the history back for ever, and tells nothing old when it is back", func(t *testing.T) {
+		v := newVIPRig(t)
+		logs(t, v)
+		fresh := ingressdeploy.New(v.deps)
+		connect(v, false, true)
+		v.settle(fresh)
+		v.clock.set(v.clock.Now().Add(late))
+		v.settle(fresh)
+		v.settle(fresh)
+		before := len(v.moves())
+		// B's log alone shows B taking the address after the newest stored move; who lost it cannot be known, so that is one row
+		// at most, and the node's own old history adds none.
+		if before > 3 {
+			t.Fatalf("%d moves stored from one node's log, want at most the one that is newer: %+v", before, v.moves())
+		}
+		connect(v, true, true)
+		for range 3 {
+			v.settle(fresh)
+		}
+		if n := len(v.moves()); n != before {
+			t.Fatalf("%d moves after the late node was read, want %d: %+v", n, before, v.moves())
+		}
+	})
 }
