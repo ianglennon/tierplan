@@ -208,8 +208,17 @@ func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvSta
 				}
 			}
 		case ingressbundle.VIPEventFault:
-			n.Reason = ev.Reason
-			n.Faults[ev.Reason] = true
+			// A fault line without Active says the fault is over (no_interface, ambiguous_interface and address_in_use are
+			// cleared this way), so it takes the fault away and never records one.
+			if ev.Active {
+				n.Reason = ev.Reason
+				n.Faults[ev.Reason] = true
+			} else {
+				delete(n.Faults, ev.Reason)
+				if n.Reason == ev.Reason {
+					n.Reason = ""
+				}
+			}
 		case ingressbundle.VIPEventForeignRouter:
 			n.Foreign = ev.Active
 			n.ForeignSender, n.ForeignCounter = "", ""

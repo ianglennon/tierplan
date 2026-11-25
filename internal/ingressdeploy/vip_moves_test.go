@@ -336,3 +336,42 @@ func TestVIPMovesKeepTheLastHolderWhenNoneRemains(t *testing.T) {
 		t.Fatalf("the node that held it last is %q, want B", st.LastHolder)
 	}
 }
+
+// faultEv is a fault event of a node, `s` seconds after movesT0.
+func faultEv(node string, seq uint64, s int, reason string, active bool) vipEvent {
+	return vipEvent{
+		At: movesT0.Add(time.Duration(s) * time.Second), NodeID: node, Hostname: movesHost(node),
+		VIPEvent: ingressbundle.VIPEvent{Event: ingressbundle.VIPEventFault, Reason: reason, Active: active, Node: node, Seq: seq},
+	}
+}
+
+// TestVIPFaultLineThatClearsRecordsNoFault pins WR-06: the helper writes a fault line with active false to say a fault is
+// over, so such a line takes the fault away and never records one.
+func TestVIPFaultLineThatClearsRecordsNoFault(t *testing.T) {
+	st, _ := apply(vipEnvState{}, vipMarks{},
+		faultEv(movesNodeA, 1, 0, ingressbundle.VIPReasonAddressInUse, true),
+		stateEv(movesNodeA, 2, 1, ingressbundle.VIPStateFault, ingressbundle.VIPReasonProbeFailing),
+	)
+	a := st.Nodes[movesNodeA]
+	if !a.Faults[ingressbundle.VIPReasonAddressInUse] || !a.Faults[ingressbundle.VIPReasonProbeFailing] {
+		t.Fatalf("faults = %v, want address_in_use and probe_failing standing", a.Faults)
+	}
+
+	st, _ = apply(st, vipMarks{}, faultEv(movesNodeA, 3, 2, ingressbundle.VIPReasonAddressInUse, false))
+	a = st.Nodes[movesNodeA]
+	if a.Faults[ingressbundle.VIPReasonAddressInUse] {
+		t.Errorf("the cleared address_in_use is still recorded as standing: %v", a.Faults)
+	}
+	if !a.Faults[ingressbundle.VIPReasonProbeFailing] || a.Reason != ingressbundle.VIPReasonProbeFailing {
+		t.Errorf("faults = %v, reason = %q: the clear of one fault must leave the other standing", a.Faults, a.Reason)
+	}
+
+	// The fault the node was last reporting is the one cleared: no reason is left shown.
+	st, _ = apply(vipEnvState{}, vipMarks{},
+		faultEv(movesNodeB, 1, 0, ingressbundle.VIPReasonNoInterface, true),
+		faultEv(movesNodeB, 2, 1, ingressbundle.VIPReasonNoInterface, false),
+	)
+	if b := st.Nodes[movesNodeB]; b.Reason != "" || len(b.Faults) != 0 {
+		t.Errorf("reason = %q, faults = %v after the fault was cleared, want none", b.Reason, b.Faults)
+	}
+}

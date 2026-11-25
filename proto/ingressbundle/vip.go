@@ -145,7 +145,8 @@ type VIPEvent struct {
 	Ifaces []string `json:"ifaces,omitempty"`
 	// Stale is true when a start event found the address already on the interface (D-10).
 	Stale bool `json:"stale,omitempty"`
-	// Active is true while a foreign_router or clock_skew condition holds and false when it has cleared.
+	// Active is true while a foreign_router, clock_skew or fault condition holds and false when it has cleared. A fault line
+	// that raises a fault must carry it; one without it says the fault is over.
 	Active bool `json:"active,omitempty"`
 	// Counter is one of the VIPCounter constants, for a foreign_router event.
 	Counter string `json:"counter,omitempty"`
