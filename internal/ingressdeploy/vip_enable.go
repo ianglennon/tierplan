@@ -216,6 +216,11 @@ func (e *vipRun) makeKey(_ context.Context) error {
 // makeSecret creates the swarm secret that carries the key, named after the environment and the key's generation. A secret
 // of that name that is TierPlan's is the leftover of an enable that failed before the row was stored, so it is removed and
 // made again with this key; one that is not TierPlan's is never touched, and the preflight has refused it already.
+//
+// When the leftover enable got as far as the service, that service still references the secret and the swarm refuses to
+// remove it. The service is TierPlan's leftover too (the row that would make it the environment's is missing), so it is
+// removed first, the step waits until its tasks have ended, and the secret is removed and made again. Only a service
+// named and labelled as TierPlan's keepalived service is ever removed here.
 func (e *vipRun) makeSecret(ctx context.Context) error {
 	content, err := KeepalivedSecretContent(e.key)
 	if err != nil {
@@ -223,33 +228,94 @@ func (e *vipRun) makeSecret(ctx context.Context) error {
 	}
 	defer clear(content)
 	name := KeepalivedSecretName(e.envID, vipFirstGeneration)
-	err = e.s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
-		rows, err := c.SecretList(ctx)
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			if row.Name != name {
-				continue
-			}
-			if !ingress.OwnsKeepalivedSecret(row.Name, row.Labels) {
-				return errors.New("the swarm holds a secret named " + name + " that is not TierPlan's")
-			}
-			if err := c.SecretRemove(ctx, row.ID); err != nil && !errors.Is(err, dockerx.ErrObjectNotFound) {
+	for attempt := 0; ; attempt++ {
+		inUse := false
+		err = e.s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
+			rows, err := c.SecretList(ctx)
+			if err != nil {
 				return err
 			}
+			for _, row := range rows {
+				if row.Name != name {
+					continue
+				}
+				if !ingress.OwnsKeepalivedSecret(row.Name, row.Labels) {
+					return errors.New("the swarm holds a secret named " + name + " that is not TierPlan's")
+				}
+				switch err := c.SecretRemove(ctx, row.ID); {
+				case err == nil, errors.Is(err, dockerx.ErrObjectNotFound):
+				case errors.Is(err, dockerx.ErrObjectInUse):
+					inUse = true
+					return err
+				default:
+					return err
+				}
+			}
+			e.secretID, err = c.SecretCreate(ctx, dockerx.SecretSpec{Name: name, Labels: ingress.KeepalivedLabels(), Data: content})
+			return err
+		})
+		if err == nil || !inUse || attempt > 0 {
+			break
 		}
-		e.secretID, err = c.SecretCreate(ctx, dockerx.SecretSpec{Name: name, Labels: ingress.KeepalivedLabels(), Data: content})
-		return err
-	})
+		cleared, clearErr := e.removeLeftoverService(ctx)
+		if clearErr != nil {
+			err = clearErr
+			break
+		}
+		if !cleared {
+			// Something that is not the keepalived service holds the secret: it is not ours to remove.
+			break
+		}
+	}
 	e.wipe()
 	if err != nil {
+		var se *stepError
+		if errors.As(err, &se) {
+			return se
+		}
 		// The engine's words are not shown: an error that touched the key step is never put in a job.
 		return fail(CodeVIPSecretFailed, err)
 	}
 	e.secretName = name
 	e.done(ItemVIPSecret, map[string]string{"secret": name})
 	return nil
+}
+
+// removeLeftoverService removes the keepalived service an earlier enable left behind, and waits until its tasks have ended
+// so every node has dropped the address before the new key is used. It reports false, having removed nothing, when there is no
+// such service, and refuses one that is not TierPlan's.
+func (e *vipRun) removeLeftoverService(ctx context.Context) (bool, error) {
+	s := e.s
+	removed := false
+	err := s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
+		cur, _, err := c.ServiceInspect(ctx, ingress.ServiceNameKeepalived)
+		switch {
+		case errors.Is(err, dockerx.ErrServiceNotFound):
+			return nil
+		case err != nil:
+			return err
+		case !ingress.OwnsKeepalivedService(cur.Name, cur.Labels):
+			return nil
+		}
+		if err := c.ServiceRemove(ctx, cur.ID); err != nil && !errors.Is(err, dockerx.ErrServiceNotFound) {
+			return err
+		}
+		removed = true
+		return nil
+	})
+	if err != nil || !removed {
+		return false, err
+	}
+	e.r.Output("Removed the keepalived service an earlier switch-on left behind.")
+	left, err := s.waitKeepalivedGone(ctx, e.envID, VIPDisableTaskDeadline, nil)
+	if err != nil {
+		return false, err
+	}
+	if left > 0 {
+		return false, fail(CodeVIPSecretFailed, errors.New("keepalived tasks remain"),
+			strconv.Itoa(left)+" task(s) of the earlier keepalived service were still running "+VIPDisableTaskDeadline.String()+" after it was removed.")
+	}
+	return true, nil
 }
 
 // makeService creates the global keepalived service, or, when one that is TierPlan's is there already (the leftover of a
