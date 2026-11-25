@@ -429,7 +429,7 @@ ingress-image:
 # fetches and checks against the pinned sha256, so building needs the network once.
 # The context is laid out as goreleaser lays it out: $TARGETPLATFORM/tierplan-ingress
 # (the helper, the same plain build as ingress-image) and build/keepalived/ with the
-# tarball, plus keepalived/image (the SBOM template and the notice the Dockerfile
+# tarball, plus keepalived/image (the SBOM template, the notice and the licence texts the Dockerfile
 # copies). KEEPALIVED_CTX is overridable (a relative path or an absolute one) so two
 # builds on one runner can use separate contexts. Needs Docker with buildx and curl.
 KEEPALIVED_ARCH ?= $(shell go env GOARCH)

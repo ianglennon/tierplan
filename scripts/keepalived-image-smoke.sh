@@ -6,7 +6,7 @@
 # for what its licence and supply-chain obligations need (VIP-06, D-26, D-27):
 #
 #   - /usr/sbin/keepalived runs and reports 2.4.3;
-#   - the licence text (/licenses/keepalived/COPYING), the SBOM entry
+#   - the licence texts (/licenses/keepalived/COPYING, /licenses/musl/COPYRIGHT), the SBOM entry
 #     (/usr/share/tierplan/sbom/keepalived.spdx.json) and the notice
 #     (/usr/share/doc/tierplan-keepalived/NOTICE.md) are in the image with a size above
 #     zero, and so is the helper (/usr/local/bin/tierplan-ingress);
@@ -67,6 +67,7 @@ docker cp "${NAME}:/" - | tar -tvf - >"${WORK}/listing" \
 awk '{ name = $6; sub(/^\.?\/?/, "/", name); print $3, name }' "${WORK}/listing" >"${WORK}/sizes"
 
 for f in /licenses/keepalived/COPYING \
+         /licenses/musl/COPYRIGHT \
          /usr/share/tierplan/sbom/keepalived.spdx.json \
          /usr/share/doc/tierplan-keepalived/NOTICE.md \
          /usr/local/bin/tierplan-ingress \

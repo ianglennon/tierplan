@@ -8,7 +8,9 @@
 package keepalived_test
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -20,6 +22,9 @@ const (
 	keepalivedSHA256 = "a0faef8e401c143487b131b526df7541c1e33d9b8814642fa9dfe8bb250a9632"
 	// alpineBase is the pinned Alpine 3.24 multi-arch index the C stage builds on.
 	alpineBase = "alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf"
+	// muslCopyrightSHA256 is the hash of the COPYRIGHT file of musl 1.2.6. It was read from musl-1.2.6.tar.gz, whose SHA-512 is the
+	// one Alpine 3.24 records for its musl package.
+	muslCopyrightSHA256 = "b870108ec5e7790e9f9919064f1b9421d62d5f9b0e6c230c6adf7ea2da62e97b"
 	// keepalivedSource is where the tarball comes from; the image labels name it.
 	keepalivedSource = "https://www.keepalived.org/software/keepalived-2.4.3.tar.gz"
 )
@@ -142,6 +147,20 @@ func TestKeepalivedDockerfileShape(t *testing.T) {
 	// The licence text of keepalived crosses into the final stage.
 	if !final.has(regexp.MustCompile(`^COPY --from=build /src/keepalived-2\.4\.3/COPYING /licenses/keepalived/COPYING$`)) {
 		t.Errorf("the final stage does not copy COPYING to /licenses/keepalived/COPYING")
+	}
+
+	// So does musl's copyright notice, byte for byte as musl 1.2.6 ships it, and the build refuses another musl.
+	if !final.has(regexp.MustCompile(`^COPY keepalived/image/licenses/musl/COPYRIGHT /licenses/musl/COPYRIGHT$`)) {
+		t.Errorf("the final stage does not copy musl's COPYRIGHT to /licenses/musl/COPYRIGHT")
+	}
+	if !build.has(regexp.MustCompile(`case "\$\{MUSL_VERSION\}" in 1\.2\.6-r\*\)`)) {
+		t.Errorf("the build stage does not check that the linked musl is the version of the notice")
+	}
+	if sum := fmt.Sprintf("%x", sha256.Sum256([]byte(readFile(t, "image/licenses/musl/COPYRIGHT")))); sum != muslCopyrightSHA256 {
+		t.Errorf("image/licenses/musl/COPYRIGHT has the SHA-256 %s, want %s", sum, muslCopyrightSHA256)
+	}
+	if !strings.Contains(readFile(t, "image/doc/NOTICE.md"), "`/licenses/musl/COPYRIGHT`") {
+		t.Error("the notice does not say where musl's COPYRIGHT is")
 	}
 
 	// The OCI labels (D-26): the source, the two licences and the two keepalived source labels.

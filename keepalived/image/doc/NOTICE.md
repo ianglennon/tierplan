@@ -14,7 +14,7 @@ keepalived is built from that unmodified tarball. The build checks the tarball a
 | Library | Version | Licence |
 |---|---|---|
 | OpenSSL (libcrypto) | the version of Alpine's `openssl-libs-static` package in the build stage, recorded in the SBOM entry | Apache-2.0 |
-| musl libc | the version of Alpine's `musl-dev` package in the build stage, recorded in the SBOM entry | MIT, as Alpine's musl package declares it. The musl project's own `COPYRIGHT` file, in its source at https://musl.libc.org/, lists a few portions under other permissive licences |
+| musl libc | the version of Alpine's `musl-dev` package in the build stage, recorded in the SBOM entry | MIT, as Alpine's musl package declares it. The musl project's own `COPYRIGHT` file, which lists a few portions under other permissive licences, is in `/licenses/musl/COPYRIGHT` |
 
 Neither library ships as a separate file in the image: both are inside the keepalived binary. OpenSSL 3 is licensed under Apache-2.0, which is compatible with version 3 of the GPL but not with version 2 alone. keepalived is licensed GPL-2.0-or-later, not GPL-2.0-only, so the binary that links OpenSSL is distributed under version 3 or later of the GPL.
 

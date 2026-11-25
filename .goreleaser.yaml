@@ -202,7 +202,7 @@ dockers_v2:
   # source tarball in the Dockerfile's build stage, and the ingress helper as PID 1
   # (ids: the helper is the tierplan-ingress build). keepalived is GPL-2.0-or-later and
   # the helper AGPL-3.0-or-later, so the GPL code lives in this image alone (VIP-06).
-  # extra_files puts the tarball and keepalived/image (the SBOM template and the notice)
+  # extra_files puts the tarball and keepalived/image (the SBOM template, the notice and the licence texts)
   # at the same relative paths in the build context. BuildKit's scanner merges the
   # hand-written SPDX file with the helper's Go SBOM. The same tag rules as the others.
   - id: tierplan-keepalived

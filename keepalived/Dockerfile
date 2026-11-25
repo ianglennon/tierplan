@@ -29,9 +29,11 @@
 # build stage.
 #
 # The image carries its evidence (D-27): the licence text at /licenses/keepalived/COPYING,
+# musl's copyright notice at /licenses/musl/COPYRIGHT (musl is linked into the binary, and
+# Alpine's package does not carry the file, so it is in keepalived/image/licenses),
 # the SBOM entry at /usr/share/tierplan/sbom/keepalived.spdx.json and a notice at
 # /usr/share/doc/tierplan-keepalived/NOTICE.md naming the source, its hash and its licence.
-# The build context also needs keepalived/image/ (sbom/ and doc/) beside the helper and
+# The build context also needs keepalived/image/ (sbom/, doc/ and licenses/) beside the helper and
 # the tarball.
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS build
 
@@ -51,7 +53,8 @@ RUN echo "a0faef8e401c143487b131b526df7541c1e33d9b8814642fa9dfe8bb250a9632  /src
 # with three placeholders: OpenSSL's and musl's versions, read from the packages installed
 # above (they are what got linked; musl-dev provides the static libc), and a created time
 # taken from SOURCE_DATE_EPOCH (the epoch when unset) so a rebuild is identical. The build
-# fails if a placeholder is left. BuildKit's SBOM scanner merges this file with the
+# fails if a placeholder is left, and if the musl that got linked is not the version whose
+# copyright notice the image carries. BuildKit's SBOM scanner merges this file with the
 # helper's Go SBOM.
 ARG SOURCE_DATE_EPOCH=0
 COPY keepalived/image/sbom/keepalived.spdx.json.in /src/keepalived.spdx.json.in
@@ -60,6 +63,7 @@ RUN mkdir -p /out/sbom \
  && [ -n "${OPENSSL_VERSION}" ] \
  && MUSL_VERSION="$(apk list -I musl-dev | sed -nE 's/^musl-dev-([^ ]+) .*/\1/p' | head -n 1)" \
  && [ -n "${MUSL_VERSION}" ] \
+ && case "${MUSL_VERSION}" in 1.2.6-r*) ;; *) echo "keepalived/image/licenses/musl/COPYRIGHT is of musl 1.2.6, not ${MUSL_VERSION}: replace it" >&2; exit 1 ;; esac \
  && CREATED="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)" \
  && sed -e "s/@OPENSSL_VERSION@/${OPENSSL_VERSION}/g" -e "s/@MUSL_VERSION@/${MUSL_VERSION}/g" -e "s/@CREATED@/${CREATED}/g" /src/keepalived.spdx.json.in >/out/sbom/keepalived.spdx.json \
  && ! grep -Eq '@[A-Z_]+@' /out/sbom/keepalived.spdx.json
@@ -79,6 +83,7 @@ LABEL org.opencontainers.image.title="TierPlan keepalived" \
 
 COPY --from=build /out/usr/sbin/keepalived /usr/sbin/keepalived
 COPY --from=build /src/keepalived-2.4.3/COPYING /licenses/keepalived/COPYING
+COPY keepalived/image/licenses/musl/COPYRIGHT /licenses/musl/COPYRIGHT
 # A reproducible build leaves the build date out of the binary and has keepalived
 # read its configure options from this file at start; without it keepalived prints
 # "Unable to read build config options file" and exits 1, even for --version.
