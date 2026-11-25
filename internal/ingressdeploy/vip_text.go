@@ -23,6 +23,7 @@ const vipNameLimit = 64
 // The sentences of UI-SPEC S5 that carry no value.
 const (
 	vipAddressInvalidText   = "Give the address with its prefix length, for example 192.168.1.50/24."
+	vipPrefixRangeText      = "The prefix length must be from 8 to 32, for example 192.168.1.50/24."
 	vipIPv6UnsupportedText  = "IPv6 virtual addresses aren't supported yet. Use an IPv4 address."
 	vipRouterIDInvalidText  = "The router ID must be a whole number from 1 to 255."
 	vipNotUnicastTextSuffix = " can't be a virtual IP. Loopback, link-local, multicast and unspecified addresses aren't allowed."

@@ -26,6 +26,9 @@ const (
 	// CodeVIPAlreadyEnabled is the refusal of an enable on an environment that has a virtual IP row already. A change or a
 	// switch-off is the way on from there.
 	CodeVIPAlreadyEnabled = "vip_already_enabled"
+	// CodeVIPRemovalPending is the refusal of a change of a virtual IP whose switch-off failed part way: the row is off, and the
+	// next ensure pass finishes removing it, so a change would only be undone. Switching it off again is the way on.
+	CodeVIPRemovalPending = "vip_removal_pending"
 	// CodeVIPNameTaken is the refusal of a swarm that holds a service named tierplan-keepalived, or a secret under the key
 	// secrets' prefix, that is not TierPlan's. It is never taken over (A-08).
 	CodeVIPNameTaken = "vip_name_taken"
@@ -37,6 +40,7 @@ const (
 	vipIngressOffText     = "Switch ingress on for this environment first. The virtual IP points at the proxies."
 	vipNameTakenText      = "The swarm already has an object under a name the virtual IP reserves, and it isn't TierPlan's. Remove or rename it, then try again."
 	vipAlreadyEnabledText = "This environment already has a virtual IP. Change it or switch it off instead of enabling it again."
+	vipRemovalPendingText = "This virtual IP is being switched off and the removal has not finished. Switch it off again to finish removing it."
 	// vipManagersUnreadText is added to the gate's sentence when the managers' opt-in could not be read at all.
 	vipManagersUnreadText = " The managers could not be read just now, so none can be counted as allowing."
 )
@@ -111,12 +115,16 @@ func (s *Service) vipChecks(ctx context.Context, info EnvInfo, req VIPRequest, c
 	if err != nil {
 		return pv, nil, err
 	}
-	has := slices.ContainsFunc(vips, func(v ingressstore.VIPConfig) bool { return v.EnvID == info.ID })
+	at := slices.IndexFunc(vips, func(v ingressstore.VIPConfig) bool { return v.EnvID == info.ID })
+	has := at >= 0
 	switch {
 	case change && !has:
 		return pv, nil, ErrVIPNotEnabled
 	case !change && has:
 		return refuse(CodeVIPAlreadyEnabled, vipAlreadyEnabledText)
+	case change && !vips[at].Enabled:
+		// The row of a switch-off that failed: the ensure loop removes what is left, so a change would be undone at once.
+		return refuse(CodeVIPRemovalPending, vipRemovalPendingText)
 	}
 	if !info.ManagerConnected {
 		f, err := checkManager(ctx, s, checkInput{Info: info})

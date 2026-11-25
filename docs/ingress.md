@@ -375,7 +375,8 @@ same findings. Nothing is written when one appears.
 | `ingress_paused` | A restore paused ingress on this environment. |
 | `vip_already_enabled` | The environment already has a virtual IP. Change it or switch it off instead. |
 | `vip_privileged_not_allowed` | Some manager does not allow privileged services. The detail names `TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true`, and the items list every manager with `allows`, `refuses` or `unknown` (no connected agent, or the managers could not be read). |
-| `vip_address_invalid` (`422`) | The address has no prefix length, or is not an address. A router ID outside 1 to 255 is refused as a malformed request, also `422`. |
+| `vip_address_invalid` (`422`) | The address has no prefix length, or is not an address, or its prefix length is not from 8 to 32. A router ID outside 1 to 255 is refused as a malformed request, also `422`. |
+| `vip_removal_pending` | A change was asked for a virtual IP whose switch-off failed part way. Switch it off again to finish removing it. |
 | `vip_ipv6_unsupported` | An IPv6 address. See [Not supported yet](#not-supported-yet). |
 | `vip_not_unicast` | The address is loopback, link-local, multicast or unspecified. |
 | `vip_is_network_or_broadcast` | The address is the network or broadcast address of its prefix. |

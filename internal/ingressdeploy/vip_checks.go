@@ -80,6 +80,9 @@ type VIPAddressInput struct {
 	Pools []netip.Prefix
 }
 
+// VIPMinPrefixLen is the shortest prefix length a virtual IP's network may have (the widest private range is a /8).
+const VIPMinPrefixLen = 8
+
 // ParseVIPAddress reads the typed address with its prefix length, for example 192.168.1.50/24 (D-07). The prefix is
 // required and only IPv4 unicast is accepted. The returned Prefix keeps the host address. A refusal comes back as a
 // Finding and the Prefix is then the zero value.
@@ -101,6 +104,11 @@ func ParseVIPAddress(raw string) (netip.Prefix, *Finding) {
 		return netip.Prefix{}, &Finding{
 			Code: CodeVIPNetworkOrBroadcast, Message: vipIsNetworkOrBroadcastText(a, p.Masked()), Severity: SeverityError,
 		}
+	}
+	// No LAN is wider than a /8, and the table of virtual IPs holds only 1 to 32: a prefix outside that is refused here, so every
+	// refusal comes before anything is created and a job never fails at the row for it.
+	if p.Bits() < VIPMinPrefixLen {
+		return netip.Prefix{}, &Finding{Code: CodeVIPAddressInvalid, Message: vipPrefixRangeText, Severity: SeverityError}
 	}
 	return p, nil
 }

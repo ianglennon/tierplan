@@ -128,6 +128,10 @@ func TestVIPAddressParse(t *testing.T) {
 		{"192.168.1.0/30", ingressdeploy.CodeVIPNetworkOrBroadcast},
 		{"192.168.1.3/30", ingressdeploy.CodeVIPNetworkOrBroadcast},
 		{"10.0.0.0/8", ingressdeploy.CodeVIPNetworkOrBroadcast},
+		// A prefix below /8 is refused here, not by the table's CHECK after the service has been created (IN-02).
+		{"1.2.3.4/0", ingressdeploy.CodeVIPAddressInvalid},
+		{"10.1.2.3/7", ingressdeploy.CodeVIPAddressInvalid},
+		{"192.168.1.50/1", ingressdeploy.CodeVIPAddressInvalid},
 	}
 	for _, tc := range refused {
 		t.Run("refuses "+tc.raw, func(t *testing.T) {
@@ -161,6 +165,7 @@ func TestVIPAddressParse(t *testing.T) {
 		{"10.0.0.1/32", "10.0.0.1/32"},
 		{"192.168.1.1/30", "192.168.1.1/30"},
 		{"192.168.1.2/30", "192.168.1.2/30"},
+		{"10.1.2.3/8", "10.1.2.3/8"},
 	}
 	for _, tc := range accepted {
 		t.Run("accepts "+tc.raw, func(t *testing.T) {

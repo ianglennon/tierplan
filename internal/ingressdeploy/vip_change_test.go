@@ -87,6 +87,19 @@ func wantChangeRefused(t *testing.T, f *vipDisableFix, req ingressdeploy.VIPRequ
 	}
 }
 
+// TestChangeVIPRefusedWhileARemovalIsPending pins IN-01: the row of a switch-off that failed part way is off, and the ensure
+// loop removes what is left, so a change of it is refused with a stable code before anything is written, instead of
+// recreating the service and finishing done only to be removed again.
+func TestChangeVIPRefusedWhileARemovalIsPending(t *testing.T) {
+	f := newVIPDisableFix(t, vipDisableOpts{})
+	ctx := testsupport.Context(t)
+	f.enabled()
+	if err := f.istore.SetVIPEnabled(ctx, f.envID, false); err != nil {
+		t.Fatalf("SetVIPEnabled: %v", err)
+	}
+	wantChangeRefused(t, f, ingressdeploy.VIPRequest{Address: "10.9.0.60/24"}, ingressdeploy.CodeVIPRemovalPending)
+}
+
 // TestChangeVIP: a new address in the nodes' subnet updates the service's environment and the row, keeps the key's
 // generation, sealed key and secret, and records ingress.vip_changed with the address and the router ID; the same checks as the
 // enable refuse a colliding router ID and a manager that does not allow; no virtual IP is ErrVIPNotEnabled; and a request that
