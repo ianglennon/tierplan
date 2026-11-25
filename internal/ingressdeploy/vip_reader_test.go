@@ -273,7 +273,10 @@ func TestVIPReaderRestartStoresNothingTwice(t *testing.T) {
 	t1, t3 := vipT0.Add(1*time.Second), vipT0.Add(3*time.Second)
 	v.a.AppendLogs("ka-a",
 		logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")),
-		logLine(t, t3, vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateMaster, "")),
+		// A yields to B and, after B has let go too, takes the address back: a node that stays in MASTER is the one that
+		// held it last, so a second MASTER with no BACKUP between would not be a move.
+		logLine(t, vipT0.Add(1500*time.Millisecond), vipStateEvent(vipNodeA, 2, ingressbundle.VIPStateBackup, "")),
+		logLine(t, t3, vipStateEvent(vipNodeA, 3, ingressbundle.VIPStateMaster, "")),
 	)
 	v.b.AppendLogs("ka-b",
 		logLine(t, t1, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateMaster, "")),

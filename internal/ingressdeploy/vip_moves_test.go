@@ -288,3 +288,51 @@ func TestVIPHolderNoneOneMany(t *testing.T) {
 		t.Fatalf("holderless since %s, want %s", st.HolderlessSince, want)
 	}
 }
+
+// TestVIPMovesFollowTheNodeThatKeepsTheAddress: two nodes claim the address at the first election and the later one gives it
+// up again. The node that keeps it is the one that held it last, so when a drain stops that node, the move away from it
+// is found by the handoff mark for it. Before, the later claimant stayed the one that held it last, the move was read as
+// from a node that no longer held the address, and the history said unknown (found at the phase gate, TestSwarmShared/VirtualIP).
+func TestVIPMovesFollowTheNodeThatKeepsTheAddress(t *testing.T) {
+	st := settle(t)
+	marks := vipMarks{Handoff: map[string]time.Time{movesNodeA: movesT0.Add(19 * time.Second)}}
+	st, moves := apply(st, marks,
+		stateEv(movesNodeB, 2, 10, ingressbundle.VIPStateMaster, ""),
+		stateEv(movesNodeB, 3, 11, ingressbundle.VIPStateBackup, ""),
+	)
+	if len(moves) != 1 || moves[0].FromNodeID != movesNodeA || moves[0].ToNodeID != movesNodeB {
+		t.Fatalf("the double claim stores %+v, want the one move A to B", moves)
+	}
+	if st.LastHolder != movesNodeA {
+		t.Fatalf("the node that held it last is %q after B gave it up, want A", st.LastHolder)
+	}
+	if got := holderIDs(st); len(got) != 1 || got[0] != movesNodeA {
+		t.Fatalf("holders = %v, want A alone", got)
+	}
+
+	_, moves = apply(st, marks,
+		stateEv(movesNodeA, 2, 20, ingressbundle.VIPStateStop, ""),
+		stateEv(movesNodeB, 4, 21, ingressbundle.VIPStateMaster, ""),
+	)
+	if len(moves) != 1 {
+		t.Fatalf("%d moves after the drain, want 1: %+v", len(moves), moves)
+	}
+	if m := moves[0]; m.FromNodeID != movesNodeA || m.ToNodeID != movesNodeB || m.Reason != VIPMoveDrainHandoff {
+		t.Fatalf("the move = %+v, want A to B with the reason %s", m, VIPMoveDrainHandoff)
+	}
+}
+
+// TestVIPMovesKeepTheLastHolderWhenNoneRemains: with nobody holding the address the node that held it last stays the one
+// it was, so a STOP on A and a MASTER on B later is still a move from A (the case the double claim must not disturb).
+func TestVIPMovesKeepTheLastHolderWhenNoneRemains(t *testing.T) {
+	st, moves := apply(settle(t), vipMarks{},
+		stateEv(movesNodeA, 2, 10, ingressbundle.VIPStateBackup, ""),
+		stateEv(movesNodeB, 2, 15, ingressbundle.VIPStateMaster, ""),
+	)
+	if len(moves) != 1 || moves[0].FromNodeID != movesNodeA || moves[0].ToNodeID != movesNodeB {
+		t.Fatalf("moves = %+v, want the one move A to B", moves)
+	}
+	if st.LastHolder != movesNodeB {
+		t.Fatalf("the node that held it last is %q, want B", st.LastHolder)
+	}
+}

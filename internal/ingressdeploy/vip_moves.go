@@ -128,7 +128,8 @@ func compareVIPNodes(a, b vipNode) int {
 //
 // A move is a MASTER state on a node while the node that held the address last is another. The node that held it last
 // is remembered after it leaves, so STOP on A and then MASTER on B is one move from A to B, and a node that goes MASTER,
-// BACKUP, MASTER with no other holder between records none. The very first MASTER is no move, since there is no node it
+// BACKUP, MASTER with no other holder between records none. When the node that held it last gives it up while another
+// node is in MASTER, that node is the one that held it last. The very first MASTER is no move, since there is no node it
 // came from. Two lines with the same node, sequence number and instant are one line read twice.
 func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvState, []ingressstore.VIPMove) {
 	st := prev.clone()
@@ -208,6 +209,14 @@ func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvSta
 			n.ClockSkew = ev.Active
 		}
 		st.Nodes[ev.NodeID] = n
+		// The node the address was with last is the one that still holds it. When two nodes claimed it at once and the
+		// later one gave it up again, that is the earlier one, so its later departure is a move from it, and a drain's
+		// handoff mark for it is found (the history would otherwise name the node that lost the claim).
+		if last := st.Nodes[st.LastHolder]; st.LastHolder != "" && last.State != ingressbundle.VIPStateMaster {
+			if now := holders(st.Nodes); len(now) > 0 {
+				st.LastHolder = now[0].NodeID
+			}
+		}
 		switch has := len(holders(st.Nodes)) > 0; {
 		case has:
 			st.HolderlessSince = time.Time{}
