@@ -60,6 +60,10 @@ type vipNode struct {
 	// TaskStarted is when the helper last started; LastEvent when it last wrote any line.
 	TaskStarted time.Time
 	LastEvent   time.Time
+	// Run is the container of the last start and LastRun the one of the last line taken. OldRun is the container that start
+	// replaced: swarm can start a node's new task before the old one has ended (it does when a paused node is made active
+	// again), and what the old one still says is not what the node does.
+	Run, LastRun, OldRun string
 	// HeldAt is when the node last reported MASTER; the zero time when it never has.
 	HeldAt time.Time
 	// LostAt is when it last left MASTER, by its own line.
@@ -89,6 +93,8 @@ type vipNode struct {
 type vipEvent struct {
 	At               time.Time
 	NodeID, Hostname string
+	// Run is the ID of the container that wrote the line.
+	Run string
 	ingressbundle.VIPEvent
 }
 
@@ -318,6 +324,13 @@ func (st *vipEnvState) apply(ev vipEvent) {
 	if !ok {
 		n = vipNode{NodeID: ev.NodeID, Faults: map[string]bool{}}
 	}
+	if ev.Run != "" && ev.Run == n.OldRun {
+		return
+	}
+	if ev.Event == ingressbundle.VIPEventStart && ev.Run != n.Run {
+		n.OldRun, n.Run = n.LastRun, ev.Run
+	}
+	n.LastRun = ev.Run
 	if ev.Hostname != "" {
 		n.Hostname = ev.Hostname
 	}

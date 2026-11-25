@@ -532,8 +532,12 @@ func (s *Service) readVIPContainer(ctx context.Context, cli *dockerx.Client, row
 		out.more = true
 	}
 	failed := copyErr != nil && !capped && !errors.Is(copyErr, io.ErrUnexpectedEOF)
+	taken := len(out.events)
 	for _, rl := range sink.lines {
 		s.takeVIPLine(rl, cur, out)
+	}
+	for i := range out.events[taken:] {
+		out.events[taken+i].Run = row.ID
 	}
 	if !failed && !capped && row.State != "running" && row.State != "restarting" && row.State != "created" && !hitLimit && !sink.partial {
 		// The container had stopped before the read began, and the read reached its end: nothing more will be written.

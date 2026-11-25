@@ -652,6 +652,23 @@ func TestVIPMovesWhatThePassKnows(t *testing.T) {
 			t.Fatalf("holders = %v, want none", got)
 		}
 	})
+	t.Run("the last words of a container that was replaced before it ended", func(t *testing.T) {
+		run := func(id string, ev vipEvent) vipEvent { ev.Run = id; return ev }
+		events := []vipEvent{
+			run("old", startEv(movesNodeB, 1000)), run("old", msEv(movesNodeB, 2, 2000, b, "")),
+			run("new", startEv(movesNodeB, 60000)), run("new", msEv(movesNodeB, 2, 60900, b, "")),
+			run("old", msEv(movesNodeB, 3, 62500, ingressbundle.VIPStateStop, "")),
+		}
+		st, moves := apply(settle(t), vipMarks{}, events...)
+		if got := st.Nodes[movesNodeB].State; got != b || len(moves) != 0 {
+			t.Fatalf("state = %q, moves %q; want BACKUP and none", got, moveText(moves))
+		}
+		// The next container is heard like any other, also when its start line is no longer in its log.
+		st, _ = apply(st, vipMarks{}, run("next", msEv(movesNodeB, 9, 90000, f, "")))
+		if got := st.Nodes[movesNodeB].State; got != f {
+			t.Fatalf("state = %q, want FAULT", got)
+		}
+	})
 	t.Run("a node whose container is gone", func(t *testing.T) {
 		gone := vipMarks{Silent: silentA.Silent, Gone: map[string]bool{movesNodeA: true}}
 		// A's MASTER is the newer by its clock, which must not keep B's claim from settling.

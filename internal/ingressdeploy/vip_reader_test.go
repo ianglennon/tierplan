@@ -933,3 +933,36 @@ func TestVIPReaderMarksDuringTheReplay(t *testing.T) {
 		}
 	})
 }
+
+// TestVIPReaderIgnoresAReplacedContainersLastWords: swarm started a node's new keepalived container before the old one had
+// ended, so the old one's STOP is the newest line of the node. The node is what the running container says, also after a restart
+// of the server read both logs again.
+func TestVIPReaderIgnoresAReplacedContainersLastWords(t *testing.T) {
+	v := newVIPRig(t)
+	labels := map[string]string{ingress.LabelComponent: ingress.ComponentKeepalived, "com.docker.swarm.service.name": ingress.ServiceNameKeepalived}
+	v.b.Reconfigure(dockertest.FakeConfig{Containers: []dockertest.FakeContainer{
+		{ID: "ka-b2", Names: []string{"/ka-b2"}, State: "running", Labels: labels},
+		{ID: "ka-b", Names: []string{"/ka-b"}, State: "exited", Labels: labels},
+	}})
+	line := func(id string, s int, ev ingressbundle.VIPEvent) {
+		v.b.AppendLogs(id, logLine(t, vipT0.Add(time.Duration(s)*time.Second), ev))
+	}
+	start := ingressbundle.VIPEvent{V: 1, Event: ingressbundle.VIPEventStart, Node: vipNodeB, Name: "node-b", Seq: 1}
+	line("ka-b", 0, start)
+	line("ka-b", 1, vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, ""))
+	line("ka-b2", 10, start)
+	line("ka-b2", 11, vipStateEvent(vipNodeB, 2, ingressbundle.VIPStateBackup, ""))
+	line("ka-b", 13, vipStateEvent(vipNodeB, 3, ingressbundle.VIPStateStop, ""))
+	for _, svc := range []*ingressdeploy.Service{v.svc, ingressdeploy.New(v.deps)} {
+		svc.ReadVIPOnce(testsupport.Context(t), v.envID)
+		st, err := svc.VIPStatus(testsupport.Context(t), v.envID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range st.Candidates {
+			if c.NodeID == vipNodeB && c.VRRPState != ingressbundle.VIPStateBackup {
+				t.Errorf("node-b is %q, want BACKUP", c.VRRPState)
+			}
+		}
+	}
+}
