@@ -48,9 +48,11 @@ pass() { echo "PASS: $1"; }
 docker image inspect "${IMAGE}" >/dev/null 2>&1 \
   || fail "${IMAGE} not found; run make keepalived-image first"
 
-# 1. The binary runs and is the pinned version. Its output is one version line.
-version="$(docker run --rm --label "${OWNER_LABEL}" --name "${NAME}-version" --entrypoint /usr/sbin/keepalived "${IMAGE}" --version 2>&1 | head -n 1)" \
+# 1. The binary runs and is the pinned version. Its output is one version line, taken after docker run has ended: a pipe into
+#    `head -n 1` can close before docker run has finished writing, and pipefail then fails the step.
+out="$(docker run --rm --label "${OWNER_LABEL}" --name "${NAME}-version" --entrypoint /usr/sbin/keepalived "${IMAGE}" --version 2>&1)" \
   || fail "keepalived --version did not run"
+version="$(printf '%s\n' "${out}" | sed -n '1p')"
 case "${version}" in
   *"v2.4.3"*) pass "keepalived reports v2.4.3" ;;
   *) fail "keepalived --version reports '${version}', want v2.4.3" ;;

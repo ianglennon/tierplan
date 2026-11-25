@@ -1198,6 +1198,28 @@ else
   echo "test-scripts: Docker is not reachable; skipping the ci-preflight cases that need it"
 fi
 
+# --- Keepalived image smoke (IN-04): the version step must not trip over the writer outliving `head` ---
+# A docker run that writes more than a pipe holds after its first line is killed by SIGPIPE once `head -n 1` has
+# gone; under pipefail that failed the whole step. The fake docker answers the image check, then writes a version line
+# and 460 KB more as its last act, so only a script that reads all of the output passes the version step. Everything
+# after that step fails on the fake, as it should: only the version step is under test.
+kasmoke="${scratch}/kasmoke"
+mkdir -p "${kasmoke}"
+cat >"${kasmoke}/docker" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+  image) exit 0 ;;
+  run)
+    echo "Keepalived v2.4.3 (fake)"
+    exec awk 'BEGIN { for (i = 0; i < 20000; i++) print "padding padding padding" }'
+    ;;
+  *) exit 1 ;;
+esac
+FAKE
+chmod +x "${kasmoke}/docker"
+expect fail "keepalived-smoke-fake-docker" env PATH="${kasmoke}:${PATH}" scripts/keepalived-image-smoke.sh
+expect_out "keepalived-smoke-version-survives-long-output" "PASS: keepalived reports v2.4.3"
+
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} script test(s) failed"
   exit 1
