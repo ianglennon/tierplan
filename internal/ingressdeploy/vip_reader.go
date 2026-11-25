@@ -328,18 +328,6 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 		allHeard = allHeard && heard[id]
 	}
 
-	next, moves := detectMoves(prev, events, marks)
-	if !replayed {
-		replay = append(slices.Clone(replay), events...)
-		next, moves = detectMoves(vipEnvState{}, replay, marks)
-		next.keepHeard(prev, silent)
-		// A switch-off does not wait either: the reader may not come back to the environment after it.
-		if (allHeard && caughtUp) || now.Sub(replayFrom) >= vipReplayGrace || len(replay) >= vipReplayMax || marks.Disabling {
-			replayed, replay = true, nil
-		} else {
-			moves = nil
-		}
-	}
 	// A node whose engine answered every call of this pass and runs no keepalived container is not a holder, whatever its
 	// last line was: a helper killed without a STOP line left MASTER as its last word. Only that is evidence. A node that
 	// could not be asked (agent not connected, read failed or timed out, node ID not known, no longer in the engine's list of
@@ -351,9 +339,19 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 			gone[r.node.SwarmNodeID] = true
 		}
 	}
-	for id, n := range next.Nodes {
-		n.Gone = gone[id]
-		next.Nodes[id] = n
+	marks.Gone = gone
+
+	next, moves := detectMoves(prev, events, marks)
+	if !replayed {
+		replay = append(slices.Clone(replay), events...)
+		next, moves = detectMoves(vipEnvState{}, replay, marks)
+		next.keepHeard(prev, silent)
+		// A switch-off does not wait either: the reader may not come back to the environment after it.
+		if (allHeard && caughtUp) || now.Sub(replayFrom) >= vipReplayGrace || len(replay) >= vipReplayMax || marks.Disabling {
+			replayed, replay = true, nil
+		} else {
+			moves = nil
+		}
 	}
 	for _, r := range reads {
 		if !r.ok || len(r.listed) == 0 {

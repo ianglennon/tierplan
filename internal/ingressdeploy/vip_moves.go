@@ -62,6 +62,8 @@ type vipNode struct {
 	LastEvent   time.Time
 	// HeldAt is when the node last reported MASTER; the zero time when it never has.
 	HeldAt time.Time
+	// LostAt is when it last left MASTER, by its own line.
+	LostAt time.Time
 	// Lost is why the node last left MASTER: VIPMoveProbeFailing, VIPMoveHolderFailed when its helper died without a word,
 	// or VIPMoveUnknown. It is kept when the node leaves, so nothing the node does afterwards changes it, and is "" while the
 	// node holds the address.
@@ -72,7 +74,7 @@ type vipNode struct {
 	// LastHeard is the last pass that read the node's engine without a failure.
 	LastHeard time.Time
 	// Gone is true while the last pass read the node's engine successfully and found no running keepalived container
-	// there: positive evidence that the helper is dead, whatever its last line said. The reader sets it at the end of every
+	// there: positive evidence that the helper is dead, whatever its last line said. It is set after the lines of every
 	// pass. A MASTER that is gone is not a holder, since a helper killed without a STOP line left MASTER as its last word,
 	// but State is kept as it was, so the node holds the address again the moment a running container is read. A node that
 	// could not be asked (its agent is not connected, the read failed or timed out, its node ID is not known) is not gone:
@@ -96,6 +98,8 @@ type vipMarks struct {
 	// Silent is the set of nodes the pass could not hear: the agent is not connected, the read failed, or no keepalived
 	// task is running there any more.
 	Silent map[string]bool
+	// Gone is the set of nodes the pass asked and found running no keepalived container (vipNode.Gone).
+	Gone map[string]bool
 	// Now is the instant of the pass, by the server's clock.
 	Now time.Time
 }
@@ -103,8 +107,9 @@ type vipMarks struct {
 // vipClaim is a node that is the only one claiming the address, before it is the settled holder.
 type vipClaim struct {
 	NodeID string
-	// At is when the node reported MASTER, which is the instant of the move if the claim settles.
-	At time.Time
+	// Held is when the node reported MASTER. At is the instant of the move if the claim settles: the same, or, when the address
+	// came back to a node that had never said it lost it, when the node that had it in between gave it up.
+	Held, At time.Time
 	// Since is when it became the only claimant, by the lines' own time, the zero time when that was concluded from another
 	// node's silence, which no line dates; Seen is the pass that first saw it, by the server's clock. Either one settles the
 	// claim once vipSettleWindow has passed.
@@ -184,7 +189,9 @@ func compareVIPNodes(a, b vipNode) int {
 func (st *vipEnvState) supersede(silent map[string]bool) {
 	var newest time.Time
 	for id, n := range st.Nodes {
-		if n.State == ingressbundle.VIPStateMaster && !silent[id] && n.HeldAt.After(newest) {
+		// A node that had the address for a while and gave it up again took it all the same; a lost election did not.
+		took := n.State == ingressbundle.VIPStateMaster || n.LostAt.Sub(n.HeldAt) >= vipSettleWindow
+		if took && !silent[id] && n.HeldAt.After(newest) {
 			newest = n.HeldAt
 		}
 	}
@@ -207,9 +214,17 @@ func (st *vipEnvState) track(since time.Time, marks vipMarks) {
 		st.Claim = vipClaim{}
 		return
 	}
-	if n := now[0]; st.Claim.NodeID != n.NodeID || !st.Claim.At.Equal(n.HeldAt) {
-		st.Claim = vipClaim{NodeID: n.NodeID, At: n.HeldAt, Since: since, Seen: marks.Now}
+	n := now[0]
+	if st.Claim.NodeID == n.NodeID && st.Claim.Held.Equal(n.HeldAt) {
+		return
 	}
+	c := vipClaim{NodeID: n.NodeID, Held: n.HeldAt, At: n.HeldAt, Since: since, Seen: marks.Now}
+	if last, ok := st.Nodes[st.LastHolder]; ok && !n.HeldAt.After(last.HeldAt) {
+		if c.At = since; since.IsZero() {
+			c.At = marks.Now
+		}
+	}
+	st.Claim = c
 }
 
 // commit makes the claimant the settled holder and returns the move, which the very first holder is not.
@@ -238,10 +253,11 @@ func (st *vipEnvState) commit(marks vipMarks) (ingressstore.VIPMove, bool) {
 // number and instant are one line read twice.
 func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvState, []ingressstore.VIPMove) {
 	st := prev.clone()
-	// Whether a node is gone is the reader's to say after the events are applied; the events themselves are applied to
-	// what the nodes last said.
+	// What the pass knows of a node now is applied after the lines, which are judged by what the nodes last said. Only a node
+	// that was gone or superseded and still is stays so, until it writes a line.
 	for id, n := range st.Nodes {
-		n.Gone = false
+		n.Gone = n.Gone && marks.Gone[id]
+		n.Superseded = n.Superseded && marks.Silent[id]
 		st.Nodes[id] = n
 	}
 	ordered := slices.Clone(events)
@@ -272,7 +288,11 @@ func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvSta
 		st.apply(ev)
 		st.track(ev.At, marks)
 	}
-	// A node that fell silent changes who claims the address without a line of its own.
+	// A node that is gone or fell silent changes who claims the address without a line of its own.
+	for id, n := range st.Nodes {
+		n.Gone = marks.Gone[id]
+		st.Nodes[id] = n
+	}
 	st.supersede(marks.Silent)
 	st.track(time.Time{}, marks)
 	// While the virtual IP is being switched off the reader may not come back to the environment, so nothing is held back.
@@ -293,13 +313,14 @@ func (st *vipEnvState) apply(ev vipEvent) {
 		n.Hostname = ev.Hostname
 	}
 	n.LastEvent = ev.At
+	n.Gone = false
 	wasMaster := n.State == ingressbundle.VIPStateMaster
 	switch ev.Event {
 	case ingressbundle.VIPEventStart:
 		// The helper started: whatever the run before it said is over. A run that ended without saying so while it held
 		// the address was killed.
 		if wasMaster {
-			n.Lost = VIPMoveHolderFailed
+			n.Lost, n.LostAt = VIPMoveHolderFailed, ev.At
 		}
 		n.TaskStarted = ev.At
 		n.State, n.Superseded = "", false
@@ -318,9 +339,9 @@ func (st *vipEnvState) apply(ev vipEvent) {
 		case ev.State == ingressbundle.VIPStateMaster:
 			n.HeldAt, n.Lost = ev.At, ""
 		case wasMaster && n.Faults[ingressbundle.VIPReasonProbeFailing]:
-			n.Lost = VIPMoveProbeFailing
+			n.Lost, n.LostAt = VIPMoveProbeFailing, ev.At
 		case wasMaster:
-			n.Lost = VIPMoveUnknown
+			n.Lost, n.LostAt = VIPMoveUnknown, ev.At
 		}
 	case ingressbundle.VIPEventFault:
 		// A fault line without Active says the fault is over (no_interface, ambiguous_interface and address_in_use are

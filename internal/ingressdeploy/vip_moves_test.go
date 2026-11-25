@@ -4,6 +4,7 @@
 package ingressdeploy
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -603,6 +604,51 @@ func TestVIPMovesSilenceIsNotHistory(t *testing.T) {
 		_, second := apply(st, vipMarks{}, msEv(movesNodeB, 3, 90000, m, ""))
 		if got := moveText(append(first, second...)); got != "" {
 			t.Fatalf("moves = %q, want none", got)
+		}
+	})
+}
+
+// TestVIPMovesWhatThePassKnows pins the second review of 26-35: a return to a node that never said it lost the address is timed
+// by the node that gave it up, a successor that came and went in one read still took the address, and a node whose container is
+// gone neither wins nor blocks a claim.
+func TestVIPMovesWhatThePassKnows(t *testing.T) {
+	m, b, f := ingressbundle.VIPStateMaster, ingressbundle.VIPStateBackup, ingressbundle.VIPStateFault
+	silentA := vipMarks{Silent: map[string]bool{movesNodeA: true}}
+
+	t.Run("a return is timed by its own line", func(t *testing.T) {
+		st, all := settle(t), []ingressstore.VIPMove(nil)
+		for i, s := range []int{10, 110} {
+			var mv []ingressstore.VIPMove
+			st, mv = apply(st, silentA, stateEv(movesNodeB, uint64(2*i+2), s, m, ""))
+			all = append(all, mv...)
+			st, mv = apply(st, vipMarks{}, stateEv(movesNodeB, uint64(2*i+3), s+50, b, ""))
+			all = append(all, mv...)
+		}
+		var at []int
+		for _, mv := range all {
+			at = append(at, int(mv.At.Sub(movesT0)/time.Second))
+		}
+		if got := moveText(all); got != "a>b holder_failed, b>a unknown, a>b holder_failed, b>a unknown" || !slices.Equal(at, []int{10, 60, 110, 160}) {
+			t.Fatalf("moves = %q at %v, want there and back twice at 10, 60, 110 and 160", got, at)
+		}
+	})
+	t.Run("a successor that came and went in one read", func(t *testing.T) {
+		st, _ := apply(settle(t), silentA, stateEv(movesNodeB, 2, 10, m, ""), stateEv(movesNodeB, 3, 15, f, ingressbundle.VIPReasonProbeFailing))
+		if got := holderIDs(st); len(got) != 0 {
+			t.Fatalf("holders = %v, want none", got)
+		}
+	})
+	t.Run("a node whose container is gone", func(t *testing.T) {
+		gone := vipMarks{Silent: silentA.Silent, Gone: map[string]bool{movesNodeA: true}}
+		// A's MASTER is the newer by its clock, which must not keep B's claim from settling.
+		st, _ := apply(settle(t), vipMarks{}, stateEv(movesNodeA, 2, 49, b, ""), stateEv(movesNodeA, 3, 50, m, ""))
+		st, moves := apply(st, gone, stateEv(movesNodeB, 2, 45, m, ""))
+		if got := moveText(moves); got != "a>b holder_failed" || len(holderIDs(st)) != 1 {
+			t.Fatalf("moves = %q, holders %v, want a>b holder_failed and B alone", got, holderIDs(st))
+		}
+		if _, moves = apply(settle(t), vipMarks{Silent: map[string]bool{movesNodeB: true}, Gone: map[string]bool{movesNodeB: true}},
+			stateEv(movesNodeA, 2, 9, f, ""), stateEv(movesNodeB, 2, 10, m, "")); len(moves) != 0 {
+			t.Fatalf("moves = %q, want none to a node whose container is gone", moveText(moves))
 		}
 	})
 }
