@@ -148,7 +148,7 @@ func newVIPHelperRig(t *testing.T) *vipHelperRig {
 		Annotations: swarm.Annotations{Name: vhReadyService},
 		TaskTemplate: swarm.TaskSpec{
 			ContainerSpec: &swarm.ContainerSpec{
-				Image:           traefiktest.WhoamiImage,
+				Image:           dockertest.NodeImage(traefiktest.WhoamiImage),
 				Args:            []string{"--port", strconv.Itoa(port)},
 				StopGracePeriod: &grace,
 			},

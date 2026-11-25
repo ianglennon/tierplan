@@ -31,6 +31,8 @@ import (
 const (
 	// vipHolderBound is how long the first holder may take once the job is done. S3 measured about 5.5 s for the election
 	// itself; the rest is the images' start and the reader's first pass.
+	// vipSettle is how long a holder is watched to have settled: the reader's window and two of its passes.
+	vipSettle      = 8 * time.Second
 	vipHolderBound = 60 * time.Second
 	// vipMoveBound is how long the address may take to be on the other node after the holder's proxy is stopped (VIP-02;
 	// S3 measured 3.0 to 3.8 s).
@@ -265,6 +267,23 @@ func TestVIPMovesWhenTheHolderProxyStops(t *testing.T) {
 	e := startVIPEnv(t)
 	_, holder := e.awaitHeld()
 	other := e.otherThan(holder)
+	// A holder that loses the address before it settled was never the holder the history moves from, so wait until it has.
+	for try := 1; ; try++ {
+		v := vhWatch(vipSettle, func() string {
+			if got := e.holderNodes(e.addr.Addr()); len(got) != 1 || got[0] != holder {
+				return "holders " + vhNames(got)
+			}
+			return ""
+		})
+		if v == "" {
+			break
+		}
+		if try == 3 {
+			t.Fatalf("the address kept moving between the nodes: %s", v)
+		}
+		_, holder = e.awaitHeld()
+		other = e.otherThan(holder)
+	}
 	stopped := e.proxyContainer(holder)
 	if stopped == "" {
 		t.Fatalf("%s runs no proxy container", holder.Hostname)

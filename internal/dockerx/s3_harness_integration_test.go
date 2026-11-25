@@ -187,7 +187,7 @@ func newS3Swarm(t *testing.T) *s3Rig {
 		Annotations: swarm.Annotations{Name: s3Ready},
 		TaskTemplate: swarm.TaskSpec{
 			ContainerSpec: &swarm.ContainerSpec{
-				Image:           traefiktest.WhoamiImage,
+				Image:           dockertest.NodeImage(traefiktest.WhoamiImage),
 				Args:            []string{"--port", strconv.Itoa(s3ReadyPort)},
 				StopGracePeriod: &grace,
 			},

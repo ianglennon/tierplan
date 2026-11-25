@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,8 +72,9 @@ func LoadAgentImageAs(t testing.TB, src, target string, nodes ...*Node) {
 }
 
 // LoadImage copies an image the machine's engine has, pulling it first when it
-// does not, into every node under the same name. It is for the small images a
-// test starts inside a node, such as busybox.
+// does not, into every node under the name NodeImage gives it, which is the same
+// one unless it is pinned by digest. It is for the small images a test starts
+// inside a node, such as busybox.
 func LoadImage(t testing.TB, ref string, nodes ...*Node) {
 	t.Helper()
 	cli := hostClient(t)
@@ -87,7 +89,24 @@ func LoadImage(t testing.TB, ref string, nodes ...*Node) {
 			t.Fatalf("pull %s on this machine's engine: %v", ref, err)
 		}
 	}
-	loadImage(t, ref, "", nodes)
+	also := ""
+	if name := NodeImage(ref); name != ref {
+		also = name
+	}
+	loadImage(t, ref, also, nodes)
+}
+
+// NodeImage is the name a node knows an image by that LoadImage loaded into it. An image pinned by digest
+// (name:tag@sha256:...) is saved without a name, and an engine before 29 does not keep its digest either, so a task that
+// names the digest makes every node pull it from its registry again. The name given to it here is in a registry that does
+// not exist, so a swarm, which asks the registry for a tag before it uses the node's own copy, is refused at once and never
+// counts against a registry's pull limit.
+func NodeImage(ref string) string {
+	name, _, pinned := strings.Cut(ref, "@")
+	if !pinned {
+		return ref
+	}
+	return "127.0.0.1:1/" + name
 }
 
 // loadImage saves src once and loads it into each node, tagging it as also when that is not empty. The save is the image as
@@ -138,8 +157,10 @@ func loadInto(ctx context.Context, cli *client.Client, tarball []byte, src, also
 		return err
 	}
 	// An engine that refuses the tar still answers 200: the refusal is a message in the stream.
+	loaded := ""
 	for dec := json.NewDecoder(bytes.NewReader(output)); ; {
 		var msg struct {
+			Stream      string `json:"stream"`
 			Error       string `json:"error"`
 			ErrorDetail struct {
 				Message string `json:"message"`
@@ -154,8 +175,17 @@ func loadInto(ctx context.Context, cli *client.Client, tarball []byte, src, also
 		if msg.ErrorDetail.Message != "" {
 			return errors.New(msg.ErrorDetail.Message)
 		}
+		for _, prefix := range []string{"Loaded image ID: ", "Loaded image: "} {
+			if name, ok := strings.CutPrefix(strings.TrimSpace(msg.Stream), prefix); ok {
+				loaded = name
+			}
+		}
 	}
 	if also != "" {
+		if strings.Contains(src, "@") {
+			// The image came in without the name it has here, under its ID alone.
+			src = loaded
+		}
 		if _, err := cli.ImageTag(ctx, client.ImageTagOptions{Source: src, Target: also}); err != nil {
 			return fmt.Errorf("tag %s as %s: %w", src, also, err)
 		}

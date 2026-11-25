@@ -442,6 +442,9 @@ func sharedVirtualIP(t *testing.T, f *swarmFix) {
 	if svc := strings.TrimSpace(sh(t, mgr, "docker service ls --filter name="+ingress.ServiceNameKeepalived+" -q")); svc == "" {
 		t.Fatal("the enable job is done but there is no keepalived service")
 	}
+	// A holder that loses the address before it settled was never the holder the history moves from, so wait until it has.
+	f.vipHolder(t, ids, "one holder of "+addr.String(), vipHolderWait, nil)
+	f.vipSettled(t, ids, "the first holder of "+addr.String()+" to settle", nil)
 	st, holder := f.vipHolder(t, ids, "one holder of "+addr.String(), vipHolderWait, nil)
 	t.Logf("the virtual IP %s is held by %s: %+v", addr, holder.Hostname, st.Candidates)
 	if !st.Enabled || st.Address != addr.String() {
