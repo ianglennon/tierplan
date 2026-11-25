@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -716,7 +717,7 @@ func (s *Service) vipSurvey(ctx context.Context, envID string, cfg ingressstore.
 	}
 	var nets []dockerx.NetworkRow
 	if err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
-		nets, err = c.Networks(ctx)
+		nets, err = keepalivedNetworks(ctx, c, p.service.Spec)
 		return err
 	}); err != nil {
 		s.log().Warn("the ingress ensure loop could not read a swarm's networks for its virtual IP", "environment", envID, "error", err)
@@ -737,6 +738,34 @@ func (s *Service) vipSurvey(ctx context.Context, envID string, cfg ingressstore.
 	}
 	p.work = serviceSettled(p.service) && len(staleVIPSecrets(p.secrets, envID, name, liveSecretNames(p.service)...)) > 0
 	return p, ""
+}
+
+// keepalivedNetworks are the networks the keepalived service's stored spec names. Swarm stores the host network by the ID of its
+// own predefined network of that name, which the list of networks leaves out, so a target that is not listed is asked for by its
+// ID. One that is not there either is left out, and reads as a difference.
+func keepalivedNetworks(ctx context.Context, c *dockerx.Client, stored json.RawMessage) ([]dockerx.NetworkRow, error) {
+	nets, err := c.Networks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var spec swarm.ServiceSpec
+	if err := json.Unmarshal(stored, &spec); err != nil {
+		return nil, fmt.Errorf("read the keepalived service's spec: %w", err)
+	}
+	for _, t := range spec.TaskTemplate.Networks {
+		if t.Target == "host" || slices.ContainsFunc(nets, func(n dockerx.NetworkRow) bool { return n.ID == t.Target || n.Name == t.Target }) {
+			continue
+		}
+		d, _, err := c.NetworkDetail(ctx, t.Target, false)
+		switch {
+		case err == nil:
+			nets = append(nets, dockerx.NetworkRow{ID: d.ID, Name: d.Name})
+		case dockerx.IsNotFound(err):
+		default:
+			return nil, err
+		}
+	}
+	return nets, nil
 }
 
 // vipRollbackStuck is whether swarm gave up putting the previous configuration back: the spec may be the wanted one again while
@@ -849,7 +878,7 @@ func (s *Service) ensureKeepalived(ctx context.Context, c *dockerx.Client, envID
 			return false, errors.New("the swarm holds a service named " + cur.Name + " that is not TierPlan's")
 		}
 		spec.TaskTemplate.ForceUpdate = liveForceUpdate(cur.Spec)
-		nets, err := c.Networks(ctx)
+		nets, err := keepalivedNetworks(ctx, c, cur.Spec)
 		if err != nil {
 			return false, err
 		}

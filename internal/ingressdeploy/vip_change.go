@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/api/types/swarm"
@@ -80,6 +82,7 @@ const (
 	vipChangeKeyGoneText = "The virtual IP key is not in the swarm, so the service cannot be built. Switch the virtual IP off and on again to make a new key."
 	vipChangeUndoneText  = "A node could not run the new configuration, so swarm stopped the update. The new address was not saved and the previous one is put back."
 	vipChangeStuckText   = "A node could not run the new configuration, and swarm stopped putting the previous one back. The new address was not saved, and nodes may serve different addresses until TierPlan has put the previous one back."
+	vipChangePausedText  = "These paused nodes keep the previous configuration until they are active again: "
 	vipChangeSlowText    = "The new address is saved. Swarm carries on with the nodes that have not restarted yet."
 	vipChangeLeftText    = "The change did not finish and the keepalived service may be missing or old. Change the virtual IP again to finish it."
 )
@@ -233,6 +236,8 @@ type vipChangeRun struct {
 	// node is touched.
 	serviceID string
 	prior     *dockerx.ServiceUpdateStatus
+	// paused are the paused nodes the last read found on the previous configuration.
+	paused []string
 }
 
 // runVIPChange runs the steps, one at a time. The first failure ends its item with a code and the items after it as not run.
@@ -458,22 +463,40 @@ const (
 )
 
 // progress reads how far the swarm has got with the service this change wrote. A node whose task waits for its restart counts
-// as one that does not run it yet, so a node that keeps failing never reads as settled between two tries.
+// as one that does not run it yet, so a node that keeps failing never reads as settled between two tries. A paused node counts
+// for nothing: swarm leaves what it runs alone until it is active again, so waiting for it would only end at the deadline.
 func (e *vipChangeRun) progress(ctx context.Context) (stackops.Convergence, []dockerx.TaskRow, error) {
 	ctx, cancel := context.WithTimeout(ctx, vipChangeReadTimeout)
 	defer cancel()
 	var (
-		d    dockerx.ServiceDetail
-		rows []dockerx.TaskRow
+		d     dockerx.ServiceDetail
+		rows  []dockerx.TaskRow
+		nodes []dockerx.NodeRow
 	)
 	if err := e.s.d.Engine.ClusterRead(ctx, e.envID, func(c *dockerx.Client) (err error) {
 		if d, _, err = c.ServiceInspect(ctx, e.serviceID); err != nil {
 			return err
 		}
-		rows, err = c.Tasks(ctx, dockerx.TaskFilter{ServiceIDs: []string{d.ID}})
+		if rows, err = c.Tasks(ctx, dockerx.TaskFilter{ServiceIDs: []string{d.ID}}); err != nil {
+			return err
+		}
+		nodes, err = c.SwarmNodes(ctx)
 		return err
 	}); err != nil {
 		return stackops.Convergence{}, nil, err
+	}
+	e.paused = nil
+	for _, n := range nodes {
+		if n.Availability != "pause" {
+			continue
+		}
+		left := slices.DeleteFunc(slices.Clone(rows), func(r dockerx.TaskRow) bool {
+			return r.NodeID == n.ID && r.SpecHash != d.TemplateHash && r.DesiredState == stackops.TaskRunning
+		})
+		if len(left) < len(rows) {
+			e.paused = append(e.paused, n.Hostname)
+		}
+		rows = left
 	}
 	c := stackops.Progress(d, rows).IgnoringUpdate(e.prior)
 	if c.Live > c.Desired {
@@ -514,6 +537,9 @@ func (e *vipChangeRun) wait(ctx context.Context) error {
 		if detail, undone := vipChangeUndone(last); undone {
 			return fail(CodeVIPChangeFailed, errVIPChangeUndone, detail)
 		}
+	}
+	if len(e.paused) > 0 {
+		e.r.Output(vipChangePausedText + strings.Join(e.paused, ", "))
 	}
 	nodes := map[string]string{"running": strconv.Itoa(last.Running), "wanted": strconv.Itoa(last.Want)}
 	if err == nil {

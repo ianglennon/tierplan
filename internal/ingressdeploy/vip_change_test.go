@@ -645,3 +645,25 @@ func TestEnsureGoesOnWithAStoppedRollback(t *testing.T) {
 		t.Errorf("ensure class = %q, want %q", row.EnsureError, ingressdeploy.EnsureUpdateFailed)
 	}
 }
+
+// TestChangeVIPDoesNotWaitForAPausedNode: swarm leaves a paused node's task alone, so the change is done without it and the job
+// names it. A node that is not paused is waited for.
+func TestChangeVIPDoesNotWaitForAPausedNode(t *testing.T) {
+	const newAddress = "10.9.0.60/24"
+	f := newVIPDisableFix(t, vipDisableOpts{config: func(c *dockertest.FakeConfig) { c.NodeRows[2].Availability = "pause" }})
+	f.enabled()
+	f.rolling(true, true, false)
+	job := f.changeVIP(ingressdeploy.VIPRequest{Address: newAddress})
+	wantChangeDone(t, job)
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeWait); it.Result["running"] != "2" || it.Result["wanted"] != "2" || f.clock.waited() != 0 {
+		t.Errorf("wait item = %+v after %d waits, want 2 of 2 at once", it, f.clock.waited())
+	}
+	var out []string
+	lines, _ := f.hub.Output(job.ID)
+	for _, l := range lines {
+		out = append(out, l.Text)
+	}
+	if text := strings.Join(out, "\n"); !strings.Contains(text, "manager-3") || strings.Contains(text, "manager-2") {
+		t.Errorf("output = %q, want the paused node named", text)
+	}
+}

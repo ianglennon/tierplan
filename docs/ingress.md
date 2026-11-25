@@ -410,6 +410,7 @@ has no virtual IP. The change is audited as `ingress.vip_changed`. The key and i
 
 The job waits until every node runs the new configuration, about a minute for three nodes and at most ten minutes, and only
 then saves the new address. Until it is done the status shows the previous one and no other operation starts on the environment.
+A paused node is not waited for: swarm leaves it on the previous address until it is active again, and the job's output names it.
 A wait that runs out of time, or is cancelled, still saves the new address, because swarm carries on with the nodes that are left.
 An update that swarm stopped, because a node could not run it, is not saved and swarm puts the previous address back. If a node
 cannot run that either, swarm gives up and nodes may serve different addresses. The ensure loop then writes the previous
