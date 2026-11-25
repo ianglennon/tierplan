@@ -147,15 +147,15 @@ func TestKeepalivedServiceSpec(t *testing.T) {
 	}
 
 	// The roll: one node at a time, the old task stopped first, 10 s between nodes, back on failure.
-	if u := spec.UpdateConfig; u == nil || u.Parallelism != 1 || u.Order != swarm.UpdateOrderStopFirst || u.FailureAction != swarm.UpdateFailureActionRollback || u.Delay != 10*time.Second {
-		t.Errorf("UpdateConfig = %+v, want parallelism 1, stop-first, rollback, delay 10s", u)
+	if u := spec.UpdateConfig; u == nil || u.Parallelism != 1 || u.Order != swarm.UpdateOrderStopFirst || u.FailureAction != swarm.UpdateFailureActionRollback || u.Delay != 10*time.Second || u.Monitor != 5*time.Second {
+		t.Errorf("UpdateConfig = %+v, want parallelism 1, stop-first, rollback, delay 10s, monitor 5s", u)
 	}
 	// S3 update-delay decision: 10s
 	if ingressdeploy.KeepalivedUpdateDelay != 10*time.Second {
 		t.Errorf("KeepalivedUpdateDelay = %v, want 10s", ingressdeploy.KeepalivedUpdateDelay)
 	}
-	if r := spec.RollbackConfig; r == nil || r.Parallelism != 1 || r.Order != swarm.UpdateOrderStopFirst {
-		t.Errorf("RollbackConfig = %+v, want parallelism 1, stop-first", r)
+	if r := spec.RollbackConfig; r == nil || r.Parallelism != 1 || r.Order != swarm.UpdateOrderStopFirst || r.Monitor != 5*time.Second {
+		t.Errorf("RollbackConfig = %+v, want parallelism 1, stop-first, monitor 5s", r)
 	}
 
 	// The same labels as the package's own helper, so the consumers' ownership tests see the service.

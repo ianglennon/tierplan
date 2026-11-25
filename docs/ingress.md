@@ -408,12 +408,12 @@ has no virtual IP. The change is audited as `ingress.vip_changed`. The key and i
   the roll ended, so the job removes the service first and the address is unanswered for a few seconds.
 - **No change** (`none`) touches no node.
 
-The job waits until every node runs the new configuration, about half a minute for three nodes and at most ten minutes, and only
+The job waits until every node runs the new configuration, about a minute for three nodes and at most ten minutes, and only
 then saves the new address. Until it is done the status shows the previous one and no other operation starts on the environment.
 A wait that runs out of time, or is cancelled, still saves the new address, because swarm carries on with the nodes that are left.
 An update that swarm stopped, because a node could not run it, is not saved and swarm puts the previous address back. If a node
-cannot run that either, swarm gives up: nodes may then serve different addresses, `lastEnsure` reports `update_failed`, and
-switching the virtual IP off and on again is the way out. When TierPlan crashes or is killed while it waits, nothing is saved and
+cannot run that either, swarm gives up and nodes may serve different addresses. The ensure loop then writes the previous
+configuration again, and once an hour while that fails too; `lastEnsure` reports `update_failed` meanwhile. When TierPlan crashes or is killed while it waits, nothing is saved and
 the ensure loop puts the previous address back, so make the change again. A normal stop of TierPlan saves the new address.
 
 If a change does not finish, the next `PUT` with the same body finishes it.

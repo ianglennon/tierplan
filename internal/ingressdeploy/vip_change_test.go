@@ -531,7 +531,7 @@ func TestChangeVIPTheSwarmIsRollingBackIsNotSaved(t *testing.T) {
 		{"cancelled while it rolls back", "rollback_started", "put back", true},
 		{"out of time while it rolls back", "rollback_started", "put back", false},
 		{"cancelled as the rollback ends", "rollback_completed", "put back", true},
-		{"the rollback stopped too", "rollback_paused", "off and on again", false},
+		{"the rollback stopped too", "rollback_paused", "until TierPlan has put", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newVIPDisableFix(t, vipDisableOpts{})
@@ -621,12 +621,26 @@ func TestChangeVIPRolledBackAfterTheSaveIsNotRepeated(t *testing.T) {
 	}
 }
 
-// TestEnsureReportsAStoppedRollback: the service names the wanted configuration again, but swarm gave up putting it back.
-func TestEnsureReportsAStoppedRollback(t *testing.T) {
+// TestEnsureGoesOnWithAStoppedRollback: the service names the wanted configuration again, but swarm gave up putting it back, so
+// nodes may run the refused one. The loop writes it once more, which makes swarm go on, and does not repeat that every pass when
+// it stops again.
+func TestEnsureGoesOnWithAStoppedRollback(t *testing.T) {
 	f := newVIPDisableFix(t, vipDisableOpts{})
 	f.enabled()
+	f.round()
+	ups := len(f.fake.ServiceUpdates())
 	f.fake.SetUpdateState(ingress.ServiceNameKeepalived, "rollback_paused", "rollback paused")
 	f.round()
+	got := f.fake.ServiceUpdates()
+	if len(got) != ups+1 || envOf(got[ups].Spec, ingressbundle.EnvVIPAddress) != vipTestAddress {
+		t.Fatalf("updates = %d, were %d; want the wanted configuration written once more", len(got), ups)
+	}
+	for range 3 {
+		f.round()
+	}
+	if n := len(f.fake.ServiceUpdates()); n != ups+1 {
+		t.Errorf("updates = %d, want the one: the spec was tried and swarm stopped again", n)
+	}
 	if row, _ := f.istore.GetVIP(testsupport.Context(t), f.envID); row.EnsureError != ingressdeploy.EnsureUpdateFailed {
 		t.Errorf("ensure class = %q, want %q", row.EnsureError, ingressdeploy.EnsureUpdateFailed)
 	}

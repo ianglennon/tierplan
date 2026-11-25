@@ -33,7 +33,7 @@ const (
 )
 
 // VIPChangeWaitDeadline is how long the change job waits for every node to run the new configuration. A roll moves one node at
-// a time with KeepalivedUpdateDelay between them, so three nodes take about half a minute.
+// a time with KeepalivedUpdateDelay between them, and swarm watches each for KeepalivedUpdateMonitor, so three nodes take about a minute.
 const VIPChangeWaitDeadline = 10 * time.Minute
 
 // vipChangeReadTimeout bounds one read of the service and its tasks while the job waits.
@@ -79,7 +79,7 @@ const (
 	vipChangeNoneText    = "No node is touched."
 	vipChangeKeyGoneText = "The virtual IP key is not in the swarm, so the service cannot be built. Switch the virtual IP off and on again to make a new key."
 	vipChangeUndoneText  = "A node could not run the new configuration, so swarm stopped the update. The new address was not saved and the previous one is put back."
-	vipChangeStuckText   = "A node could not run the new configuration, and swarm stopped putting the previous one back. The new address was not saved and nodes may serve different addresses. Switch the virtual IP off and on again."
+	vipChangeStuckText   = "A node could not run the new configuration, and swarm stopped putting the previous one back. The new address was not saved, and nodes may serve different addresses until TierPlan has put the previous one back."
 	vipChangeSlowText    = "The new address is saved. Swarm carries on with the nodes that have not restarted yet."
 	vipChangeLeftText    = "The change did not finish and the keepalived service may be missing or old. Change the virtual IP again to finish it."
 )

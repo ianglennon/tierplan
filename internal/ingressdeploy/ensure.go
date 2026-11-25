@@ -728,19 +728,31 @@ func (s *Service) vipSurvey(ctx context.Context, envID string, cfg ingressstore.
 		s.log().Warn("the ingress ensure loop could not compare a swarm with the virtual IP it wants", "environment", envID, "error", err)
 		return vipPlan{}, EnsureWriteFailed
 	}
-	if len(changes) > 0 {
-		if !s.updateHeld(vipHeldKey(envID), p.service, desired) {
+	if len(changes) > 0 || vipRollbackStuck(p.service) {
+		if !s.vipUpdateHeld(envID, p.service, desired) {
 			p.work = true
 			return p, ""
 		}
 		p.held = true
 	}
-	if st := p.service.UpdateStatus; st != nil && st.State == updateRollbackPaused {
-		// The spec is the wanted one again, but swarm gave up putting it back, so nodes may still run the refused one.
-		p.held = true
-	}
 	p.work = serviceSettled(p.service) && len(staleVIPSecrets(p.secrets, envID, name, liveSecretNames(p.service)...)) > 0
 	return p, ""
+}
+
+// vipRollbackStuck is whether swarm gave up putting the previous configuration back: the spec may be the wanted one again while
+// nodes still run the refused one, and writing it once more is what makes swarm go on.
+func vipRollbackStuck(d *dockerx.ServiceDetail) bool {
+	return d != nil && d.UpdateStatus != nil && d.UpdateStatus.State == updateRollbackPaused
+}
+
+// vipUpdateHeld is updateHeld for the keepalived service, where a rollback that stopped holds the spec it was written for too.
+func (s *Service) vipUpdateHeld(envID string, d *dockerx.ServiceDetail, spec swarm.ServiceSpec) bool {
+	if vipRollbackStuck(d) {
+		stopped := *d
+		stopped.UpdateStatus = &dockerx.ServiceUpdateStatus{State: updatePaused}
+		d = &stopped
+	}
+	return s.updateHeld(vipHeldKey(envID), d, spec)
 }
 
 // staleVIPSecrets are the key secrets of the environment other than the current one and the ones in keep, which the live service
@@ -827,7 +839,7 @@ func (s *Service) makeVIPSecret(ctx context.Context, envID string, cfg ingressst
 }
 
 // ensureKeepalived creates the keepalived service, or, when one that is TierPlan's exists, updates it at the version read, carrying
-// its force-update counter over, and only when the live spec differs from spec. It reports whether it wrote. c is a manager's
+// its force-update counter over, and only when the live spec differs from spec or swarm stopped putting it back. It reports whether it wrote. c is a manager's
 // client, inside one write. Nothing waits for the update to converge.
 func (s *Service) ensureKeepalived(ctx context.Context, c *dockerx.Client, envID string, spec swarm.ServiceSpec, auth string) (bool, error) {
 	cur, _, err := c.ServiceInspect(ctx, ingress.ServiceNameKeepalived)
@@ -845,10 +857,10 @@ func (s *Service) ensureKeepalived(ctx context.Context, c *dockerx.Client, envID
 		if err != nil {
 			return false, err
 		}
-		if len(changes) == 0 {
+		if len(changes) == 0 && !vipRollbackStuck(&cur) {
 			return false, nil
 		}
-		if s.updateHeld(vipHeldKey(envID), &cur, spec) {
+		if s.vipUpdateHeld(envID, &cur, spec) {
 			return false, errUpdateHeld
 		}
 		raw, err := json.Marshal(spec)

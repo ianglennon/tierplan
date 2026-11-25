@@ -742,11 +742,13 @@
         "Parallelism": 1,
         "Delay": 10000000000,
         "FailureAction": "rollback",
+        "Monitor": 5000000000,
         "MaxFailureRatio": 0,
         "Order": "stop-first"
       },
       "RollbackConfig": {
         "Parallelism": 1,
+        "Monitor": 5000000000,
         "MaxFailureRatio": 0,
         "Order": "stop-first"
       }

@@ -151,6 +151,19 @@ func (e *vipEnv) proxyContainer(n *dockertest.Node) string {
 	return ""
 }
 
+// keepalivedService is the keepalived service as the swarm holds it.
+func (e *vipEnv) keepalivedService() dockerx.ServiceDetail {
+	e.t.Helper()
+	var d dockerx.ServiceDetail
+	if err := e.cluster(func(ctx context.Context, c *dockerx.Client) (err error) {
+		d, _, err = c.ServiceInspect(ctx, ingress.ServiceNameKeepalived)
+		return err
+	}); err != nil {
+		e.t.Fatalf("read the keepalived service: %v", err)
+	}
+	return d
+}
+
 // keepalivedLeft reports what the virtual IP leaves on the swarm: the keepalived service and the key secrets by their names,
 // and the nodes whose interfaces list the address. Each is a count, so a failure says which.
 func (e *vipEnv) keepalivedLeft() (services, secrets int, holders []*dockertest.Node) {
@@ -228,6 +241,20 @@ func TestVIPEnableHoldsOnSwarm(t *testing.T) {
 		t.Errorf("candidate states %v, want one MASTER and the rest BACKUP", states)
 	}
 	t.Logf("the virtual IP %s is held by %s on engine %s", e.addr, holder.Hostname, e.sw.Engine)
+
+	// An ensure pass over a virtual IP that is as wanted writes nothing (D-18): a default the engine writes into the stored spec
+	// and the builder leaves out would have the loop write the service on every pass.
+	before := e.keepalivedService()
+	for pass := 1; pass <= 2; pass++ {
+		e.deploy.Round(testsupport.Context(t))
+		after := e.keepalivedService()
+		if after.Version != before.Version || string(after.Spec) != string(before.Spec) {
+			t.Fatalf("ensure pass %d changed the keepalived service: version %d -> %d; the comparison does not know a default the engine adds", pass, before.Version, after.Version)
+		}
+	}
+	if st, err := e.vipStatus(); err != nil || st.EnsureAt.IsZero() || st.EnsureError != "" {
+		t.Errorf("the passes recorded %q at %v (%v), want none that failed", st.EnsureError, st.EnsureAt, err)
+	}
 }
 
 // TestVIPMovesWhenTheHolderProxyStops is D-29, VIP-02 and VIP-03: stopping the holder's proxy container makes the other node

@@ -35,6 +35,11 @@ const (
 	// before then; 10 s adds an advert timeout and a margin.
 	KeepalivedUpdateDelay = 10 * time.Second
 
+	// KeepalivedUpdateMonitor is how long swarm watches a node that was just updated before it takes the next one. It is swarm's
+	// own default, named because swarm writes the default into the spec it stores: a spec that left it out would differ from the
+	// stored one for ever, and the ensure loop would write the service on every pass.
+	KeepalivedUpdateMonitor = 5 * time.Second
+
 	// KeepalivedRestartDelay is how long swarm waits before it replaces a keepalived task that exited.
 	// A keepalived that is killed leaves its address on the node's interface, and the node keeps
 	// answering ARP for it until the replacement starts as BACKUP and clears it. S3 leg 2 measured
@@ -179,11 +184,13 @@ func KeepalivedServiceSpec(in KeepalivedSpecInput) swarm.ServiceSpec {
 		UpdateConfig: &swarm.UpdateConfig{
 			Parallelism:   1,
 			Delay:         KeepalivedUpdateDelay,
+			Monitor:       KeepalivedUpdateMonitor,
 			FailureAction: swarm.UpdateFailureActionRollback,
 			Order:         swarm.UpdateOrderStopFirst,
 		},
 		RollbackConfig: &swarm.UpdateConfig{
 			Parallelism: 1,
+			Monitor:     KeepalivedUpdateMonitor,
 			Order:       swarm.UpdateOrderStopFirst,
 		},
 	}
