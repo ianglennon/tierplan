@@ -10,12 +10,14 @@ import (
 	"errors"
 	"net/netip"
 	"strconv"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 // JobKindVIPChange is the kind of the job that changes an environment's virtual IP.
@@ -24,8 +26,19 @@ const JobKindVIPChange = "ingress_vip_change"
 // The items of the virtual IP change job, in the order they run (D-16).
 const (
 	ItemVIPChangeService = "vip_change_service"
+	ItemVIPChangeWait    = "vip_change_wait"
 	ItemVIPChangeSave    = "vip_change_save"
 )
+
+// VIPChangeWaitDeadline is how long the change job waits for every node to run the new configuration. A roll moves one node at
+// a time with KeepalivedUpdateDelay between them, so three nodes take about half a minute.
+const VIPChangeWaitDeadline = 10 * time.Minute
+
+// vipChangeReadTimeout bounds one read of the service and its tasks while the job waits.
+const vipChangeReadTimeout = 20 * time.Second
+
+// vipChangeSaveTimeout bounds the save of a change whose job was cancelled while it waited.
+const vipChangeSaveTimeout = 10 * time.Second
 
 // CodeVIPChangeFailed is the code an item of the change job ends with when it fails. The words of the engine ride only with
 // the service step, never with anything that touched the key.
@@ -59,17 +72,21 @@ const (
 	vipChangeReplaceText = "The virtual IP is unanswered for a few seconds while the keepalived service is removed and created again."
 	vipChangeNoneText    = "No node is touched."
 	vipChangeKeyGoneText = "The virtual IP key is not in the swarm, so the service cannot be built. Switch the virtual IP off and on again to make a new key."
+	vipChangeUndoneText  = "A node could not run the new configuration, so swarm stopped the update. The new address was not saved and the previous one is put back."
+	vipChangeSlowText    = "The new address is saved. Swarm carries on with the nodes that have not restarted yet."
 	vipChangeLeftText    = "The change did not finish and the keepalived service may be missing or old. Change the virtual IP again to finish it."
 )
 
 var (
-	vipChangeItems  = []string{ItemVIPChangeService, ItemVIPChangeSave}
+	vipChangeItems  = []string{ItemVIPChangeService, ItemVIPChangeWait, ItemVIPChangeSave}
 	vipChangeLabels = map[string]string{
 		ItemVIPChangeService: "Update the keepalived service",
+		ItemVIPChangeWait:    "Wait for every node to restart",
 		ItemVIPChangeSave:    "Save the new address",
 	}
 	vipChangeMessages = map[string]string{
 		ItemVIPChangeService: "The keepalived service could not be updated.",
+		ItemVIPChangeWait:    "Not every node restarted with the new address.",
 		ItemVIPChangeSave:    "The new address could not be saved.",
 	}
 )
@@ -158,11 +175,14 @@ func (s *Service) PreviewVIPChange(ctx context.Context, envID string, req VIPReq
 
 // ChangeVIP changes the environment's virtual IP: it takes the environment's operation lock, re-runs every check of the
 // enable on the new request (the address, the router ID, the collisions and the manager gate), and starts a job that updates
-// the keepalived service and stores the new address with its audit entry. The key and its secret are kept: a change never
+// the keepalived service, waits until every node runs it and stores the new address with its audit entry. The key and its secret are kept: a change never
 // rotates them (D-03). It returns the job's ID. A held lock is a *LockedError, a refused check a *PreflightError and an
 // environment with no virtual IP is ErrVIPNotEnabled; in each case nothing was written. A request that changes nothing is a job
-// that writes nothing. A step that fails ends its item with vip_change_failed and the one after it as not run; nothing is
-// rolled back, and changing again starts over from what the failed one left.
+// that writes nothing. A step that fails ends its item with vip_change_failed and the ones after it as not run; nothing is
+// rolled back, and changing again starts over from what the failed one left. The wait is the exception: once the swarm took the
+// new configuration it carries on by itself, so a wait that was too long, could not read the swarm or was cancelled still saves
+// the new address. Only an update the swarm stopped or rolled back is not saved: the row keeps the previous address, and the
+// ensure loop puts it back on the nodes.
 func (s *Service) ChangeVIP(ctx context.Context, actor audit.Actor, owner, envID string, req VIPRequest) (string, error) {
 	info, err := s.d.Envs.Info(ctx, envID)
 	if err != nil {
@@ -202,9 +222,15 @@ type vipChangeRun struct {
 	pv      VIPChangePreview
 	cur     ingressstore.VIPConfig
 	image   string
+	// serviceID is the keepalived service the service step wrote and prior the update status it had before; empty when no
+	// node is touched.
+	serviceID string
+	prior     *dockerx.ServiceUpdateStatus
 }
 
 // runVIPChange runs the steps, one at a time. The first failure ends its item with a code and the items after it as not run.
+// A cancel stops it up to the moment the swarm took the new configuration; after that it only ends the wait, and the address
+// is saved, so the row never says less than what the nodes are told to run.
 func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, envID string, pv VIPChangePreview, cur ingressstore.VIPConfig) {
 	run := &vipChangeRun{s: s, actor: actor, envID: envID, r: r, release: release, pv: pv, cur: cur, image: KeepalivedImage(s.d.ServerVersion)}
 	steps := []struct {
@@ -212,17 +238,19 @@ func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release fu
 		do   func(context.Context) error
 	}{
 		{ItemVIPChangeService, run.service},
+		{ItemVIPChangeWait, run.wait},
 		{ItemVIPChangeSave, run.save},
 	}
 	for i, st := range steps {
-		if ctx.Err() != nil {
+		taken := run.serviceID != "" // an earlier step ended well, so the swarm took the new configuration
+		if ctx.Err() != nil && !taken {
 			run.stop(st.item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 			return
 		}
 		r.Update(st.item, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 		if err := st.do(ctx); err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil && !taken {
 				run.stop(st.item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 				run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 				return
@@ -233,7 +261,9 @@ func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release fu
 				detail = se.detail
 			}
 			s.log().Warn("a virtual IP change step failed", "environment", envID, "step", st.item, "error", err)
-			r.Output(vipChangeLeftText)
+			if !errors.Is(err, errVIPChangeUndone) {
+				r.Output(vipChangeLeftText)
+			}
 			run.stop(st.item, jobs.ItemFailed, CodeVIPChangeFailed, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
 			return
@@ -344,10 +374,11 @@ func (e *vipChangeRun) roll(ctx context.Context, auth string) error {
 			if !ingress.OwnsKeepalivedService(cur.Name, cur.Labels) {
 				return &stepError{code: CodeVIPChangeFailed, err: errors.New("the swarm holds a service named " + cur.Name + " that is not TierPlan's"), detail: vipNotOursDetail(cur.Name)}
 			}
+			e.serviceID, e.prior = cur.ID, cur.UpdateStatus
 			_, err = c.ServiceUpdate(ctx, cur.ID, cur.Version, raw, auth)
 			return err
 		case errors.Is(err, dockerx.ErrServiceNotFound):
-			_, _, err = c.ServiceCreate(ctx, raw, auth)
+			e.serviceID, _, err = c.ServiceCreate(ctx, raw, auth)
 			return err
 		default:
 			return err
@@ -390,15 +421,70 @@ func (e *vipChangeRun) replace(ctx context.Context, auth string) error {
 		if err != nil {
 			return err
 		}
-		_, _, err = c.ServiceCreate(ctx, raw, auth)
+		e.serviceID, _, err = c.ServiceCreate(ctx, raw, auth)
 		return err
 	})
+}
+
+// errVIPChangeUndone is an update the swarm stopped or rolled back: the one end of the wait that is a step failure.
+var errVIPChangeUndone = errors.New("the swarm stopped the keepalived service's update")
+
+// wait waits until every node the swarm wants keepalived on runs the new configuration, so the job is not done, and the new
+// address not saved, while nodes still serve the old one (UAT-26 issue 3). It writes nothing to the swarm. It fails only when
+// the swarm stopped or rolled back the update; any other end leaves a swarm that carries on by itself, so it is reported on
+// its own item and the save follows, also when the job was cancelled.
+func (e *vipChangeRun) wait(ctx context.Context) error {
+	if e.serviceID == "" {
+		e.done(ItemVIPChangeWait, nil)
+		return nil
+	}
+	s := e.s
+	var last stackops.Convergence
+	err := stackops.WaitConverged(ctx, s.d.Clock, VIPChangeWaitDeadline, func(ctx context.Context) (stackops.Convergence, []dockerx.TaskRow, error) {
+		rctx, cancel := context.WithTimeout(ctx, vipChangeReadTimeout)
+		defer cancel()
+		var (
+			d    dockerx.ServiceDetail
+			rows []dockerx.TaskRow
+		)
+		if err := s.d.Engine.ClusterRead(rctx, e.envID, func(c *dockerx.Client) (err error) {
+			if d, _, err = c.ServiceInspect(rctx, e.serviceID); err != nil {
+				return err
+			}
+			rows, err = c.Tasks(rctx, dockerx.TaskFilter{ServiceIDs: []string{d.ID}})
+			return err
+		}); err != nil {
+			return stackops.Convergence{}, nil, err
+		}
+		return stackops.Progress(d, rows).IgnoringUpdate(e.prior), rows, nil
+	}, nil, func(c stackops.Convergence, _ []dockerx.TaskRow) { last = c })
+	nodes := map[string]string{"running": strconv.Itoa(last.Running), "wanted": strconv.Itoa(last.Want)}
+	switch {
+	case err == nil:
+		e.done(ItemVIPChangeWait, nodes)
+		return nil
+	case errors.Is(err, stackops.ErrUpdateStopped):
+		return fail(CodeVIPChangeFailed, errVIPChangeUndone, vipChangeUndoneText)
+	}
+	s.log().Warn("a virtual IP change saved its address before every node had restarted", "environment", e.envID, "error", err)
+	e.r.Output(vipChangeSlowText)
+	if ctx.Err() != nil {
+		e.r.Finish(ItemVIPChangeWait, jobs.ItemCancelled, jobs.CodeCancelled, "", nodes)
+		return nil
+	}
+	e.r.Finish(ItemVIPChangeWait, jobs.ItemFailed, CodeVIPChangeFailed, vipChangeMessages[ItemVIPChangeWait], nodes)
+	return nil
 }
 
 // save stores the new address with the audit entry in the same transaction, so the row never changes without its entry nor the
 // entry without the change. A request that changes nothing stores nothing.
 func (e *vipChangeRun) save(ctx context.Context) error {
 	s := e.s
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), vipChangeSaveTimeout)
+		defer cancel()
+	}
 	pfx := e.pv.Address
 	if pfx == e.cur.Prefix() && e.pv.RouterID == e.cur.RouterID && e.pv.RouterDerived == e.cur.RouterDerived {
 		e.release()

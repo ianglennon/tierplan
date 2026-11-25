@@ -44,6 +44,7 @@ func newVIPWriteFix(t *testing.T, config func(*dockertest.FakeConfig)) *vipWrite
 		{NodeID: vipNodeB, Hostname: "manager-2", State: envs.ManagerAllows},
 	}}}
 	v.deployFix = newDeployFixDeps(t, false, func(c *dockertest.FakeConfig) {
+		c.TasksFollowWrites = true // a change's job waits for the service to settle
 		c.NodeRows = []dockertest.FakeNode{
 			{ID: vipNodeA, Hostname: "manager-1", Role: "manager", Leader: true, Address: "10.9.0.11"},
 			{ID: vipNodeB, Hostname: "manager-2", Role: "manager", Address: "10.9.0.12"},
@@ -464,8 +465,8 @@ func TestChangeAndDisableIngressVIPRoutes(t *testing.T) {
 	}
 	pv := decodeBody[vipPreviewResp](t, rec)
 	if !pv.Change || pv.Current != vipWriteAddress || pv.CurrentRouterID != derived || pv.Address != "10.9.0.60/24" || pv.Strategy != "roll" || pv.Notice == "" ||
-		len(pv.Items) != 2 || pv.Warning != ingressdeploy.VIPPrivilegeWarning {
-		t.Errorf("change preview = %+v, want a roll from %s with the notice, two items and the warning", pv, vipWriteAddress)
+		len(pv.Items) != 3 || pv.Warning != ingressdeploy.VIPPrivilegeWarning {
+		t.Errorf("change preview = %+v, want a roll from %s with the notice, three items and the warning", pv, vipWriteAddress)
 	}
 	rec = v.credCall(t, v.adminA, http.MethodPost, base+"/preview", `{"address":"`+vipWriteAddress+`","routerId":77}`)
 	if pv := decodeBody[vipPreviewResp](t, rec); !pv.Change || pv.Strategy != "replace" || pv.RouterDerived || pv.RouterID != 77 {
@@ -488,8 +489,8 @@ func TestChangeAndDisableIngressVIPRoutes(t *testing.T) {
 
 	// PUT changes the address through a job.
 	job := v.startAndWait(t, http.MethodPut, base, vipBody("10.9.0.60/24"))
-	if job.Kind != ingressdeploy.JobKindVIPChange || job.State != jobs.JobDone || len(job.Items) != 2 {
-		t.Fatalf("change job = %+v, want a done %s with two items", job, ingressdeploy.JobKindVIPChange)
+	if job.Kind != ingressdeploy.JobKindVIPChange || job.State != jobs.JobDone || len(job.Items) != 3 {
+		t.Fatalf("change job = %+v, want a done %s with three items", job, ingressdeploy.JobKindVIPChange)
 	}
 	if n := len(v.fake.ServiceUpdates()); n != 1 {
 		t.Errorf("service updates = %d, want 1", n)

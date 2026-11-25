@@ -72,6 +72,8 @@ func newVIPEnableRig(t *testing.T, config func(*dockertest.FakeConfig), deps fun
 	v.rig = newRig(t, rigOptions{
 		config: func(c *dockertest.FakeConfig) {
 			c.NodeRows = vipNodeRows()
+			// A service written settles at once, unless a test scripts its tasks: the change job waits for that.
+			c.TasksFollowWrites = true
 			v.base = *c
 			if config != nil {
 				config(c)

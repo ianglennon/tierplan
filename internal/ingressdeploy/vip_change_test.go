@@ -13,7 +13,9 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
@@ -30,13 +32,13 @@ func (f *vipDisableFix) changeVIP(req ingressdeploy.VIPRequest) jobs.Job {
 	return f.wait(id)
 }
 
-// wantChangeDone fails the test unless both items of the change ended done.
+// wantChangeDone fails the test unless every item of the change ended done.
 func wantChangeDone(t *testing.T, job jobs.Job) {
 	t.Helper()
 	if job.State != jobs.JobDone {
 		t.Fatalf("job state = %q, want done; items = %+v", job.State, job.Items)
 	}
-	for _, id := range []string{ingressdeploy.ItemVIPChangeService, ingressdeploy.ItemVIPChangeSave} {
+	for _, id := range []string{ingressdeploy.ItemVIPChangeService, ingressdeploy.ItemVIPChangeWait, ingressdeploy.ItemVIPChangeSave} {
 		if it := itemOf(job, id); it.State != jobs.ItemDone {
 			t.Errorf("item %s = %q (code %q), want done", id, it.State, it.Code)
 		}
@@ -126,7 +128,7 @@ func TestChangeVIP(t *testing.T) {
 			t.Fatalf("the preview refuses with %v", errs)
 		}
 		if pv.Strategy != ingressdeploy.VIPChangeRoll || pv.Address.String() != newAddress || pv.Current.String() != vipTestAddress ||
-			pv.Warning != ingressdeploy.VIPPrivilegeWarning || len(pv.Managers) != 3 || len(pv.Items) != 2 {
+			pv.Warning != ingressdeploy.VIPPrivilegeWarning || len(pv.Managers) != 3 || len(pv.Items) != 3 {
 			t.Errorf("preview = strategy %q address %v current %v, %d managers, %d items", pv.Strategy, pv.Address, pv.Current, len(pv.Managers), len(pv.Items))
 		}
 		if !strings.Contains(pv.Notice, "moves") || !strings.Contains(pv.Notice, "briefly unanswered") {
@@ -316,7 +318,7 @@ func TestChangeVIPStrategy(t *testing.T) {
 					t.Errorf("update config = %+v, want parallelism 1, stop-first, delay 10s", uc)
 				}
 				if f.clock.waited() != 0 {
-					t.Errorf("a roll waited %d times for tasks, want none", f.clock.waited())
+					t.Errorf("a roll of a swarm that settles at once waited %d times, want none", f.clock.waited())
 				}
 			case "replace":
 				if len(writes) != 2 || !strings.HasPrefix(writes[0], "DELETE /services/") || writes[1] != "POST /services/create" {
@@ -355,4 +357,165 @@ func rowRouterID(t *testing.T, f *vipDisableFix) int {
 		t.Fatal(err)
 	}
 	return row.RouterID
+}
+
+// rolling scripts the three nodes' keepalived tasks: running tells, per node, whether it runs the new configuration yet.
+func (f *vipDisableFix) rolling(running ...bool) {
+	var tasks []dockertest.FakeServiceTask
+	for i, now := range running {
+		tasks = append(tasks, dockertest.FakeServiceTask{
+			ID: "keepalived-" + strconv.Itoa(i+1), Node: "node-" + strconv.Itoa(i+1), State: "running", Old: !now,
+		})
+	}
+	f.fake.SetServiceTasks(ingress.ServiceNameKeepalived, tasks...)
+}
+
+// TestChangeVIPWaitsForTheRoll: a change is done, and the new address saved, only once every node runs the new configuration
+// (UAT-26 issue 3). Until then the job runs, the row and so the status keep the address that is still served, and the
+// operation lock is held, so the ensure loop cannot put the previous address back under the roll.
+func TestChangeVIPWaitsForTheRoll(t *testing.T) {
+	const newAddress = "10.9.0.60/24"
+	f := newVIPDisableFix(t, vipDisableOpts{})
+	ctx := testsupport.Context(t)
+	f.enabled()
+	f.rolling(false, false, false)
+	f.clock.hook = func(n int) {
+		row, err := f.istore.GetVIP(ctx, f.envID)
+		if err != nil || row.Prefix().String() != vipTestAddress {
+			t.Errorf("wait %d: the row says %v (%v) while nodes still serve %s", n, row.Prefix(), err, vipTestAddress)
+		}
+		if _, held := f.locks.Held(f.envID); !held {
+			t.Errorf("wait %d: the operation lock is free while the roll runs", n)
+		}
+		if got := f.auditCount("ingress.vip_changed"); got != 0 {
+			t.Errorf("wait %d: the change is audited before it is made", n)
+		}
+		switch n {
+		case 1:
+			f.fake.SetUpdateState(ingress.ServiceNameKeepalived, "updating", "update in progress")
+			f.rolling(true, false, false)
+		case 2:
+			f.rolling(true, true, true)
+		case 3: // Every task runs; the swarm is still watching the last one.
+			f.fake.SetUpdateState(ingress.ServiceNameKeepalived, "completed", "update completed")
+		}
+	}
+	job := f.changeVIP(ingressdeploy.VIPRequest{Address: newAddress})
+	wantChangeDone(t, job)
+	if got := f.clock.waited(); got != 3 {
+		t.Errorf("the job waited %d times, want 3", got)
+	}
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeWait); it.Result["running"] != "3" || it.Result["wanted"] != "3" {
+		t.Errorf("wait result = %v, want 3 of 3", it.Result)
+	}
+	if row, _ := f.istore.GetVIP(ctx, f.envID); row.Prefix().String() != newAddress {
+		t.Errorf("row = %v, want %s", row.Prefix(), newAddress)
+	}
+	if got := f.auditCount("ingress.vip_changed"); got != 1 {
+		t.Errorf("audit rows = %d, want 1", got)
+	}
+}
+
+// TestChangeVIPThatTakesTooLongIsSaved: a node that does not restart in time ends the wait failed, says so, and the new address
+// is saved all the same: the swarm took it and carries on, and a row that kept the old address would have the ensure loop move
+// every node back.
+func TestChangeVIPThatTakesTooLongIsSaved(t *testing.T) {
+	const newAddress = "10.9.0.60/24"
+	f := newVIPDisableFix(t, vipDisableOpts{})
+	f.enabled()
+	f.rolling(true, true, false)
+	start := f.clock.Now()
+	job := f.changeVIP(ingressdeploy.VIPRequest{Address: newAddress})
+	if d := f.clock.Now().Sub(start); d < ingressdeploy.VIPChangeWaitDeadline || d > ingressdeploy.VIPChangeWaitDeadline+time.Minute {
+		t.Errorf("the job waited %v, want the deadline of %v", d, ingressdeploy.VIPChangeWaitDeadline)
+	}
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeWait); it.State != jobs.ItemFailed || it.Code != ingressdeploy.CodeVIPChangeFailed || it.Message == "" || it.Result["running"] != "2" || it.Result["wanted"] != "3" {
+		t.Errorf("wait item = %+v, want failed with 2 of 3", it)
+	}
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeSave); job.State != jobs.JobPartial || it.State != jobs.ItemDone {
+		t.Errorf("job = %q, save item = %+v, want a partial job that saved", job.State, it)
+	}
+	if row, _ := f.istore.GetVIP(testsupport.Context(t), f.envID); row.Prefix().String() != newAddress {
+		t.Errorf("row = %v, want %s", row.Prefix(), newAddress)
+	}
+	if got := f.auditCount("ingress.vip_changed"); got != 1 {
+		t.Errorf("audit rows = %d, want 1", got)
+	}
+	if _, held := f.locks.Held(f.envID); held {
+		t.Error("the operation lock is still held after the job")
+	}
+}
+
+// TestChangeVIPTheSwarmRolledBackIsNotSaved: an update the swarm rolled back leaves the nodes on the previous address, so the
+// row keeps it, nothing is audited, and the ensure loop does not write the refused configuration again.
+func TestChangeVIPTheSwarmRolledBackIsNotSaved(t *testing.T) {
+	f := newVIPDisableFix(t, vipDisableOpts{})
+	ctx := testsupport.Context(t)
+	f.enabled()
+	before, _ := f.istore.GetVIP(ctx, f.envID)
+	// The status an earlier update left is not this one's: it must not end the wait.
+	f.fake.SetUpdateState(ingress.ServiceNameKeepalived, "paused", "an earlier update was paused")
+	f.rolling(false, false, false)
+	f.clock.hook = func(n int) {
+		if n == 2 {
+			f.fake.SetUpdateState(ingress.ServiceNameKeepalived, "rollback_completed", "rollback completed")
+		}
+	}
+	job := f.changeVIP(ingressdeploy.VIPRequest{Address: "10.9.0.60/24"})
+	if got := f.clock.waited(); got != 2 {
+		t.Errorf("the job waited %d times, want 2: the status the earlier update left is not this one's", got)
+	}
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeWait); it.State != jobs.ItemFailed || it.Code != ingressdeploy.CodeVIPChangeFailed || !strings.Contains(it.Detail, "not saved") {
+		t.Errorf("wait item = %+v, want failed, saying the address was not saved", it)
+	}
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeSave); it.State != jobs.ItemSkipped || it.Code != ingressdeploy.CodeNotRun {
+		t.Errorf("save item = %+v, want not run", it)
+	}
+	if after, _ := f.istore.GetVIP(ctx, f.envID); after != before {
+		t.Errorf("a rolled-back change touched the row: %+v, was %+v", after, before)
+	}
+	if got := f.auditCount("ingress.vip_changed"); got != 0 {
+		t.Errorf("a rolled-back change wrote %d audit rows", got)
+	}
+	if _, held := f.locks.Held(f.envID); held {
+		t.Error("the operation lock is still held after the job")
+	}
+}
+
+// TestChangeVIPCancelledWhileItWaitsIsSaved: a cancel ends the wait and nothing else, because the swarm carries on with what it
+// took.
+func TestChangeVIPCancelledWhileItWaitsIsSaved(t *testing.T) {
+	const newAddress = "10.9.0.60/24"
+	f := newVIPDisableFix(t, vipDisableOpts{})
+	ctx := testsupport.Context(t)
+	f.enabled()
+	f.rolling(false, false, false)
+	var id string
+	started := make(chan struct{})
+	f.clock.hook = func(n int) {
+		if n == 1 {
+			<-started
+			if err := f.hub.Cancel(id); err != nil {
+				t.Errorf("cancel: %v", err)
+			}
+		}
+	}
+	id, err := f.svc.ChangeVIP(ctx, testActor, testOwner, f.envID, ingressdeploy.VIPRequest{Address: newAddress})
+	if err != nil {
+		t.Fatalf("ChangeVIP: %v", err)
+	}
+	close(started)
+	job := f.wait(id)
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeWait); it.State != jobs.ItemCancelled {
+		t.Errorf("wait item = %+v, want cancelled", it)
+	}
+	if it := itemOf(job, ingressdeploy.ItemVIPChangeSave); it.State != jobs.ItemDone {
+		t.Errorf("save item = %+v, want done", it)
+	}
+	if row, _ := f.istore.GetVIP(ctx, f.envID); row.Prefix().String() != newAddress {
+		t.Errorf("row = %v, want %s", row.Prefix(), newAddress)
+	}
+	if _, held := f.locks.Held(f.envID); held {
+		t.Error("the operation lock is still held after the job")
+	}
 }
