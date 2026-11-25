@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -435,13 +436,38 @@ func TestVIPReaderWaitsForTheNodeID(t *testing.T) {
 	}
 }
 
-// TestVIPReaderDoesNotCountAHolderThatCannotBeHeard pins WR-04: a holder whose last line is MASTER and that can no longer
-// be heard (killed without a STOP line, or lost with its host) is not the holder, so the status says none and the clock of
-// the no-holder bell starts. Its last state is kept, so it holds the address again as soon as it can be heard.
-func TestVIPReaderDoesNotCountAHolderThatCannotBeHeard(t *testing.T) {
+// setKeepalivedState changes the state the node's fake engine reports for its keepalived container, as a container that was
+// killed or removed from a node: the log it wrote stays.
+func (v *vipRig) setKeepalivedState(f *dockertest.Fake, id, state string) {
+	v.t.Helper()
+	labels := map[string]string{ingress.LabelComponent: ingress.ComponentKeepalived, "com.docker.swarm.service.name": ingress.ServiceNameKeepalived}
+	f.Reconfigure(dockertest.FakeConfig{Containers: []dockertest.FakeContainer{{ID: id, Names: []string{"/" + id}, State: state, Labels: labels}}})
+}
+
+// noHolderBell says whether the header bell would raise vip_no_holder for the environment at the instant.
+func (v *vipRig) noHolderBell(svc *ingressdeploy.Service, now time.Time) bool {
+	v.t.Helper()
+	f, ok, err := svc.VIPFacts(testsupport.Context(v.t), v.envID)
+	if err != nil || !ok {
+		v.t.Fatalf("VIPFacts = %v, %v", ok, err)
+	}
+	for _, w := range envs.VIPWarnings(v.envID, "prod", f, nil, now) {
+		if w.ID == envs.WarnVIPNoHolder {
+			return true
+		}
+	}
+	return false
+}
+
+// TestVIPReaderDoesNotCountAHolderWhoseKeepalivedIsGone pins WR-04: a holder whose last line is MASTER, on a node whose engine
+// answered this pass and runs no keepalived container (killed without a STOP line, the task removed), is not the holder, so the
+// status says none and the clock of the no-holder bell starts. Its last state is kept, so it holds the address again as soon as
+// a running container is read.
+func TestVIPReaderDoesNotCountAHolderWhoseKeepalivedIsGone(t *testing.T) {
 	v := newVIPRig(t)
 	v.a.AppendLogs("ka-a", logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
-	v.b.AppendLogs("ka-b", logLine(t, vipT0, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateBackup, "")))
+	// The other node's proxy is down, so nobody can take the address over.
+	v.b.AppendLogs("ka-b", logLine(t, vipT0, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateFault, ingressbundle.VIPReasonProbeFailing)))
 	v.read()
 	if got := v.holderNames(); len(got) != 1 || got[0] != "node-a" {
 		t.Fatalf("holders after the first pass = %v, want [node-a]", got)
@@ -450,36 +476,113 @@ func TestVIPReaderDoesNotCountAHolderThatCannotBeHeard(t *testing.T) {
 		t.Fatalf("the address is held, but it is holderless since %s", since)
 	}
 
-	// The holder's agent goes: no STOP line was written, and nobody else claims the address.
 	lost := v.clock.Now().Add(time.Minute)
 	v.clock.set(lost)
-	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected = false })
+	v.setKeepalivedState(v.a, "ka-a", "exited")
 	v.read()
 	if got := v.holderNames(); len(got) != 0 {
-		t.Fatalf("holders after the holder fell silent = %v, want none", got)
+		t.Fatalf("holders after the holder's container was gone = %v, want none", got)
 	}
 	if since := v.svc.VIPHolderlessSince(v.envID); !since.Equal(lost) {
 		t.Errorf("holderless since %s, want %s: the no-holder bell is timed from the pass that lost the holder", since, lost)
 	}
 	for _, n := range v.svc.VIPNodeStates(v.envID) {
 		if n.Hostname == "node-a" && n.State == ingressbundle.VIPStateMaster {
-			t.Errorf("node-a is shown as MASTER while it cannot be heard")
+			t.Errorf("node-a is shown as MASTER while no keepalived runs there")
 		}
 	}
 	if n := len(v.moves()); n != 0 {
 		t.Errorf("%d moves stored, want none: nobody took the address", n)
 	}
+	if v.noHolderBell(v.svc, lost.Add(5*time.Second)) {
+		t.Error("the no-holder bell is raised 5 s after the holder was lost, want it after more than 10 s")
+	}
+	if !v.noHolderBell(v.svc, lost.Add(11*time.Second)) {
+		t.Error("the no-holder bell is not raised 11 s after the only holder was lost")
+	}
 
-	// It comes back with nothing new in its log: it still holds the address.
+	// A running container is read again with nothing new in its log: the node still holds the address.
 	v.clock.set(lost.Add(time.Minute))
-	v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected = true })
+	v.setKeepalivedState(v.a, "ka-a", "running")
 	v.read()
 	if got := v.holderNames(); len(got) != 1 || got[0] != "node-a" {
-		t.Fatalf("holders after the holder was heard again = %v, want [node-a]", got)
+		t.Fatalf("holders after the container ran again = %v, want [node-a]", got)
 	}
 	if since := v.svc.VIPHolderlessSince(v.envID); !since.IsZero() {
 		t.Errorf("the address is held again, but it is holderless since %s", since)
 	}
+	if v.noHolderBell(v.svc, lost.Add(2*time.Minute)) {
+		t.Error("the no-holder bell is raised while the address is held")
+	}
+}
+
+// TestVIPReaderKeepsAHolderItCannotAsk pins the other half of WR-04: not being able to ask is not evidence that nobody holds
+// the address. A holder whose agent is offline, whose node ID is not known, or whose read times out stays the holder, the
+// no-holder clock never starts and no bell is raised, however long that lasts.
+func TestVIPReaderKeepsAHolderItCannotAsk(t *testing.T) {
+	setup := func(t *testing.T) (*vipRig, *ingressdeploy.Service, *vipStallEngine) {
+		t.Helper()
+		v := newVIPRig(t)
+		v.a.AppendLogs("ka-a", logLine(t, vipT0, vipStateEvent(vipNodeA, 1, ingressbundle.VIPStateMaster, "")))
+		v.b.AppendLogs("ka-b", logLine(t, vipT0, vipStateEvent(vipNodeB, 1, ingressbundle.VIPStateFault, ingressbundle.VIPReasonProbeFailing)))
+		eng := &vipStallEngine{Engine: v.deps.Engine, stall: map[string]bool{}, entered: make(chan string, 8)}
+		d := v.deps
+		d.Engine = eng
+		svc := ingressdeploy.New(d)
+		svc.SetVIPReadTimeouts(100*time.Millisecond, time.Hour) // wall-clock: the bound a stalled engine is cut at; a correct pass ends no later, and a wrong one never ends
+		svc.ReadVIPOnce(testsupport.Context(t), v.envID)
+		if h := svc.VIPHolders(v.envID); len(h) != 1 || h[0].Hostname != "node-a" {
+			t.Fatalf("holders after the first pass = %v, want [node-a]", h)
+		}
+		return v, svc, eng
+	}
+	wantHeld := func(t *testing.T, v *vipRig, svc *ingressdeploy.Service, why string) {
+		t.Helper()
+		if h := svc.VIPHolders(v.envID); len(h) != 1 || h[0].Hostname != "node-a" {
+			t.Fatalf("holders %s = %v, want [node-a] still", why, h)
+		}
+		if since := svc.VIPHolderlessSince(v.envID); !since.IsZero() {
+			t.Errorf("%s: holderless since %s, want the address held", why, since)
+		}
+		if v.noHolderBell(svc, v.clock.Now().Add(time.Hour)) {
+			t.Errorf("%s: the no-holder bell is raised for an address nobody was shown to have lost", why)
+		}
+	}
+
+	t.Run("the agent is offline", func(t *testing.T) {
+		v, svc, _ := setup(t)
+		v.clock.set(v.clock.Now().Add(time.Minute))
+		v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].Connected = false })
+		svc.ReadVIPOnce(testsupport.Context(t), v.envID)
+		wantHeld(t, v, svc, "with the agent offline")
+		v.clock.set(v.clock.Now().Add(time.Hour))
+		svc.ReadVIPOnce(testsupport.Context(t), v.envID)
+		wantHeld(t, v, svc, "an hour with the agent offline")
+	})
+
+	t.Run("the read times out", func(t *testing.T) {
+		v, svc, eng := setup(t)
+		eng.stall["agent-a"] = true
+		v.clock.set(v.clock.Now().Add(time.Minute))
+		svc.ReadVIPOnce(testsupport.Context(t), v.envID)
+		wantHeld(t, v, svc, "with the holder's read timed out")
+	})
+
+	t.Run("the node ID is not known", func(t *testing.T) {
+		v, svc, _ := setup(t)
+		v.clock.set(v.clock.Now().Add(time.Minute))
+		v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes[0].SwarmNodeID = "" })
+		svc.ReadVIPOnce(testsupport.Context(t), v.envID)
+		wantHeld(t, v, svc, "with the holder's node ID unknown")
+	})
+
+	t.Run("the agent is gone from the list", func(t *testing.T) {
+		v, svc, _ := setup(t)
+		v.clock.set(v.clock.Now().Add(time.Minute))
+		v.envs.set(func(i *ingressdeploy.EnvInfo) { i.Nodes = i.Nodes[1:] })
+		svc.ReadVIPOnce(testsupport.Context(t), v.envID)
+		wantHeld(t, v, svc, "with the holder's agent no longer listed")
+	})
 }
 
 // TestVIPReaderHolderThatFellSilentIsReplacedAsFailed pins that the demotion leaves the reason of a move alone: a silent

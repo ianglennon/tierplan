@@ -291,10 +291,19 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	env.mu.Unlock()
 
 	next, moves := detectMoves(prev, events, marks)
-	// A node that cannot be heard is not a holder, whatever its last line was: a holder killed without a STOP line, or lost
-	// with its host, left MASTER as its last word. Its state is kept, so it holds the address again when it is heard.
+	// A node whose engine answered every call of this pass and runs no keepalived container is not a holder, whatever its
+	// last line was: a helper killed without a STOP line left MASTER as its last word. Only that is evidence. A node that
+	// could not be asked (agent not connected, read failed or timed out, node ID not known, no longer in the engine's list of
+	// agents) keeps its last state, since "cannot ask" is not "nobody holds it"; the status shows when it was last heard.
+	// State is kept for a gone node too, so it holds the address again as soon as a running container is read.
+	gone := map[string]bool{}
+	for _, r := range reads {
+		if r.ok && r.node.Connected && r.node.AgentID != "" && r.node.SwarmNodeID != "" && !r.running {
+			gone[r.node.SwarmNodeID] = true
+		}
+	}
 	for id, n := range next.Nodes {
-		n.Unheard = silent[id]
+		n.Gone = gone[id]
 		next.Nodes[id] = n
 	}
 	for _, r := range reads {
@@ -618,8 +627,8 @@ func (s *Service) vipNodeStates(envID string) []vipNode {
 	out := make([]vipNode, 0, len(e.view.Nodes))
 	for _, n := range e.view.Nodes {
 		n.Faults = cloneFaults(n.Faults)
-		if n.Unheard && n.State == ingressbundle.VIPStateMaster {
-			// What the status and the bell read: a MASTER that cannot be heard is not one.
+		if n.Gone && n.State == ingressbundle.VIPStateMaster {
+			// What the status and the bell read: a MASTER whose keepalived is no longer running is not one.
 			n.State = ""
 		}
 		out = append(out, n)

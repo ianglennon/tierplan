@@ -57,11 +57,13 @@ type vipNode struct {
 	HeldAt time.Time
 	// LastHeard is the last pass that read the node's engine without a failure.
 	LastHeard time.Time
-	// Unheard is true while the node cannot be heard: its agent is not connected, the last read failed, or no keepalived
-	// task runs there. The reader sets it at the end of every pass. A MASTER that is unheard is not a holder, since a
-	// helper that died without a STOP line left that line as its last word, but State is kept as it was so the node holds
-	// the address again the moment it can be heard.
-	Unheard bool
+	// Gone is true while the last pass read the node's engine successfully and found no running keepalived container
+	// there: positive evidence that the helper is dead, whatever its last line said. The reader sets it at the end of every
+	// pass. A MASTER that is gone is not a holder, since a helper killed without a STOP line left MASTER as its last word,
+	// but State is kept as it was, so the node holds the address again the moment a running container is read. A node that
+	// could not be asked (its agent is not connected, the read failed or timed out, its node ID is not known) is not gone:
+	// not being able to ask says nothing about whether it holds the address.
+	Gone bool
 }
 
 // vipEvent is one parsed line with the instant the engine stamped it with and the node it came from.
@@ -111,12 +113,12 @@ func cloneFaults(m map[string]bool) map[string]bool {
 	return out
 }
 
-// holders returns every node whose last state is MASTER and that can be heard, sorted by host name then ID. One is the
+// holders returns every node whose last state is MASTER and that is not gone, sorted by host name then ID. One is the
 // healthy case; none and several are what the status reports as a problem.
 func holders(nodes map[string]vipNode) []vipNode {
 	var out []vipNode
 	for _, n := range nodes {
-		if n.State == ingressbundle.VIPStateMaster && !n.Unheard {
+		if n.State == ingressbundle.VIPStateMaster && !n.Gone {
 			out = append(out, n)
 		}
 	}
@@ -138,10 +140,10 @@ func compareVIPNodes(a, b vipNode) int {
 // came from. Two lines with the same node, sequence number and instant are one line read twice.
 func detectMoves(prev vipEnvState, events []vipEvent, marks vipMarks) (vipEnvState, []ingressstore.VIPMove) {
 	st := prev.clone()
-	// Whether a node can be heard is the reader's to say after the events are applied; the events themselves are applied
-	// to what the nodes last said.
+	// Whether a node is gone is the reader's to say after the events are applied; the events themselves are applied to
+	// what the nodes last said.
 	for id, n := range st.Nodes {
-		n.Unheard = false
+		n.Gone = false
 		st.Nodes[id] = n
 	}
 	ordered := slices.Clone(events)
