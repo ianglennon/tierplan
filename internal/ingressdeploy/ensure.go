@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/agents"
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -41,7 +42,8 @@ const (
 	// EnsureOK is a pass that found the objects as wanted, or made them so. It is stored as the empty string, which
 	// is what the row holds for "succeeded".
 	EnsureOK = ""
-	// EnsureUnreachable is a pass that could not read the swarm: no manager is connected or the read failed.
+	// EnsureUnreachable is a pass that could not read the swarm: no manager is connected or the read failed. On a virtual IP it
+	// is also a pass that found no manager refusing but one with no agent to ask (D-19).
 	EnsureUnreachable = "unreachable"
 	// EnsureLocked is a pass that had something to write and found the environment's operation lock held.
 	EnsureLocked = "locked"
@@ -59,7 +61,7 @@ const (
 	// EnsureUpdateFailed is a pass that left the proxy service alone because the update this server wants was written
 	// before and the swarm rolled it back (WR-07). It is tried again when the wanted spec changes or after UpdateRetryAfter.
 	EnsureUpdateFailed = "update_failed"
-	// EnsurePrivilegedLost is a pass over a virtual IP that found a manager no longer allowing privileged services (D-19): nothing
+	// EnsurePrivilegedLost is a pass over a virtual IP that found a manager whose agent refuses privileged services (D-19): nothing
 	// is written and the keepalived service that runs is left running. It is recorded on the virtual IP's row only.
 	EnsurePrivilegedLost = "privileged_lost"
 )
@@ -645,8 +647,9 @@ func (s *Service) ensureVIPClass(ctx context.Context, envID string) (class strin
 }
 
 // vipGateClass reads the managers' opt-in and asks the gate. It is empty when every manager allows privileged services,
-// EnsurePrivilegedLost when one does not, and EnsureUnreachable when the table could not be read, which says nothing about any
-// manager.
+// EnsurePrivilegedLost when a manager's connected agent refuses them, and EnsureUnreachable when the table could not be read or
+// holds only managers no agent speaks for. Neither of those two says that any manager stopped allowing, so the row does not
+// say so either: an offline agent is for the offline items to report (D-19).
 func (s *Service) vipGateClass(ctx context.Context, envID string) string {
 	rows, err := s.vipManagerRows(ctx, envID)
 	if ok, _ := EvaluateManagerGate(rows); ok {
@@ -655,7 +658,12 @@ func (s *Service) vipGateClass(ctx context.Context, envID string) string {
 	if err != nil {
 		return EnsureUnreachable
 	}
-	return EnsurePrivilegedLost
+	for _, r := range rows {
+		if r.State == envs.ManagerRefuses {
+			return EnsurePrivilegedLost
+		}
+	}
+	return EnsureUnreachable
 }
 
 // desiredKeepalived is the keepalived service this server wants for the row, naming the key secret by its name and ID.

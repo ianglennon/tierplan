@@ -282,3 +282,26 @@ func TestEnsureVIPHeldUpdate(t *testing.T) {
 		t.Errorf("service updates after the retry time = %d, want the retry", got)
 	}
 }
+
+// TestEnsureVIPOfflineManagerIsNotPrivilegedLost pins WR-08: a manager whose agent is offline is in state unknown, and the gate
+// stays closed for it, but the row must not say that a manager stopped allowing privileged services. It records unreachable,
+// still writes nothing, and a manager that does refuse still records privileged_lost.
+func TestEnsureVIPOfflineManagerIsNotPrivilegedLost(t *testing.T) {
+	f := newVIPIngressFix(t)
+	f.managers.set(vipManagerRows(envs.ManagerAllows, envs.ManagerUnknown, envs.ManagerAllows), nil)
+
+	f.fake.ReplaceServiceSpec(ingress.ServiceNameKeepalived, withOlderImage(f.liveKeepalivedSpec()))
+	before := len(f.fake.Writes())
+	f.round()
+	f.wantNoWrites(before, "a pass with a manager whose agent is offline")
+	if row := f.vipRow(); row.EnsureError != ingressdeploy.EnsureUnreachable {
+		t.Errorf("the row records %q with one manager unknown and the others allowing, want %q", row.EnsureError, ingressdeploy.EnsureUnreachable)
+	}
+
+	// One that refuses outweighs one that is unknown.
+	f.managers.set(vipManagerRows(envs.ManagerUnknown, envs.ManagerRefuses, envs.ManagerAllows), nil)
+	f.round()
+	if row := f.vipRow(); row.EnsureError != ingressdeploy.EnsurePrivilegedLost {
+		t.Errorf("the row records %q with a manager refusing, want privileged_lost", row.EnsureError)
+	}
+}
