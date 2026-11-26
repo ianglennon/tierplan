@@ -9,6 +9,7 @@ import { setCsrfToken } from "@/api/client";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { VIPCard } from "@/features/ingress/vip-card";
+import { vipFixture } from "@/features/ingress/vip-fixture";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -297,5 +298,180 @@ describe("where the card is drawn", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText("Off")).toBeTruthy();
+  });
+});
+
+describe("changing the virtual IP", () => {
+  it("shows On with the address and router ID, links to the Nodes tab, and prefills the form", async () => {
+    vip = vipFixture({ address: "192.168.10.250/24", routerId: 77, routerDerived: false });
+    mount();
+    await button("Change address or router ID");
+    expect(screen.getByText("On")).toBeTruthy();
+    const address = screen.getByText("192.168.10.250/24");
+    expect(address.className).toContain("font-mono");
+    expect(screen.getByText("77").className).toContain("font-mono");
+    const link = screen.getByRole("link", { name: "See who holds it on the Nodes tab." });
+    expect(link.getAttribute("href")).toBe(`/env/${ENV}/ingress/nodes`);
+    // On, the turn-on button is not offered.
+    expect(screen.queryByRole("button", { name: "Turn on virtual IP" })).toBeNull();
+
+    fireEvent.click(await button("Change address or router ID"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Change virtual IP?" }),
+    );
+    expect((within(dialog).getByLabelText("Address") as HTMLInputElement).value).toBe(
+      "192.168.10.250/24",
+    );
+    expect((within(dialog).getByLabelText("Router ID") as HTMLInputElement).value).toBe("77");
+  });
+
+  it("leaves the router ID empty when TierPlan chose it, previews, and PUTs on Change virtual IP", async () => {
+    vip = vipFixture();
+    previewAnswer = () =>
+      Response.json(
+        previewBody({
+          change: true,
+          current: "192.168.10.250/24",
+          notice:
+            "Nodes are updated one at a time. Each node answers on the old address until it is done.",
+          strategy: "roll",
+        }),
+      );
+    mount();
+    fireEvent.click(await button("Change address or router ID"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Change virtual IP?" }),
+    );
+    expect((within(dialog).getByLabelText("Router ID") as HTMLInputElement).value).toBe("");
+    typeAddress(dialog, "192.168.10.251/24");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Check address" }));
+    await waitUnderFakeClock(() =>
+      expect(
+        within(dialog).getByText(
+          "Nodes are updated one at a time. Each node answers on the old address until it is done.",
+        ),
+      ).toBeTruthy(),
+    );
+    // Nothing is written by the check.
+    expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([`POST ${BASE}/vip/preview`]);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change virtual IP" }));
+    await waitUnderFakeClock(() =>
+      expect(within(dialog).getByText("Virtual IP is changed.")).toBeTruthy(),
+    );
+    expect(writes.filter((w) => w.method === "PUT")).toEqual([
+      { method: "PUT", path: `${BASE}/vip`, body: { address: "192.168.10.251/24" } },
+    ]);
+  });
+
+  it("sends nothing when Keep current address is pressed", async () => {
+    vip = vipFixture();
+    mount();
+    fireEvent.click(await button("Change address or router ID"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Change virtual IP?" }),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep current address" }));
+    await waitUnderFakeClock(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(writes).toEqual([]);
+  });
+});
+
+describe("turning the virtual IP off", () => {
+  it("previews the switch-off, says what stops, confirms with a primary button and DELETEs", async () => {
+    vip = vipFixture({ address: "192.168.10.250/24" });
+    mount();
+    fireEvent.click(await button("Turn off virtual IP"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Turn off virtual IP?" }),
+    );
+    expect(
+      within(dialog).getByText(
+        "Nodes stop answering on 192.168.10.250/24. Ingress keeps serving on each node's own address.",
+      ),
+    ).toBeTruthy();
+    await waitUnderFakeClock(() =>
+      expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([
+        `POST ${BASE}/vip/disable/preview`,
+      ]),
+    );
+    const confirm = within(dialog).getByRole("button", { name: "Turn off virtual IP" });
+    // A primary button: switching the address off removes nothing a person made.
+    expect(confirm.className).not.toContain("bg-destructive");
+    expect(within(dialog).getByRole("button", { name: "Keep virtual IP on" })).toBeTruthy();
+
+    await waitUnderFakeClock(() => expect((confirm as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(confirm);
+    await waitUnderFakeClock(() =>
+      expect(within(dialog).getByText("Virtual IP is off.")).toBeTruthy(),
+    );
+    expect(writes.filter((w) => w.method === "DELETE")).toEqual([
+      { method: "DELETE", path: `${BASE}/vip`, body: {} },
+    ]);
+  });
+
+  it("sends nothing when Keep virtual IP on is pressed", async () => {
+    vip = vipFixture();
+    mount();
+    fireEvent.click(await button("Turn off virtual IP"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Turn off virtual IP?" }),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep virtual IP on" }));
+    await waitUnderFakeClock(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(writes.filter((w) => w.method === "DELETE")).toEqual([]);
+  });
+});
+
+describe("where the card is not offered", () => {
+  it("is not drawn on a standalone environment and never asks for the virtual IP", async () => {
+    envType = "standalone";
+    mount();
+    await waitUnderFakeClock(() =>
+      expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.queryByText("Virtual IP")).toBeNull();
+    const asked = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([req]) => new URL((req as Request).url).pathname,
+    );
+    expect(asked).not.toContain(`${BASE}/vip`);
+  });
+
+  it("disables Turn on virtual IP with the reason while ingress is off, and opens nothing", async () => {
+    ingressOn = false;
+    mount();
+    const turnOn = await button("Turn on virtual IP");
+    expect(turnOn.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getByText("Turn ingress on first. The virtual IP points at the proxies.", {
+        selector: "span.sr-only",
+      }),
+    ).toBeTruthy();
+    fireEvent.click(turnOn);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows a Viewer the card read-only with the permission reason on every button", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    vip = vipFixture();
+    mount();
+    const change = await button("Change address or router ID");
+    const off = await button("Turn off virtual IP");
+    for (const b of [change, off]) expect(b.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs Admin", { selector: "span.sr-only" })).toHaveLength(2);
+    fireEvent.click(change);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(writes).toEqual([]);
+  });
+
+  it("reads a Viewer's off card with the same reason on the turn-on button", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mount();
+    const turnOn = await button("Turn on virtual IP");
+    expect(turnOn.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText("Needs Admin", { selector: "span.sr-only" })).toBeTruthy();
   });
 });

@@ -460,6 +460,8 @@
         "off": "Off",
         "offBody": "A virtual IP is one address that always points at a working proxy. It moves to another node if the one holding it fails.",
         "turnOn": "Turn on virtual IP",
+        "change": "Change address or router ID",
+        "turnOff": "Turn off virtual IP",
         "needsIngress": "Turn ingress on first. The virtual IP points at the proxies.",
         "seeNodes": "See who holds it on the Nodes tab.",
         "error": "Couldn't read the virtual IP.",
@@ -525,6 +527,24 @@
         "progress": "Turning virtual IP on…",
         "done": "Virtual IP is on.",
         "failedHint": "Nothing is lost. Turn it on again to carry on, or off to remove what was made."
+      },
+      "vipChange": {
+        "title": "Change virtual IP?",
+        "body": "Change the address, the router ID or both. TierPlan checks them and says how the change is made before anything is touched.",
+        "confirm": "Change virtual IP",
+        "dismiss": "Keep current address",
+        "progress": "Changing virtual IP…",
+        "done": "Virtual IP is changed.",
+        "failedHint": "Nothing is lost. Change it again to carry on, or turn the virtual IP off to remove what was made."
+      },
+      "vipDisable": {
+        "title": "Turn off virtual IP?",
+        "body": "Nodes stop answering on {{address}}. Ingress keeps serving on each node's own address.",
+        "confirm": "Turn off virtual IP",
+        "dismiss": "Keep virtual IP on",
+        "progress": "Turning virtual IP off…",
+        "done": "Virtual IP is off.",
+        "failedHint": "Nothing is lost. Turn it off again to remove what is left."
       }
     }
   }

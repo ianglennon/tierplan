@@ -166,6 +166,53 @@ export function useEnableVIP(envId: string, input: VIPInput) {
   });
 }
 
+// useChangeVIP changes the address or the router ID of the virtual IP. The body is the whole configuration, so a router
+// ID left out derives one again. The job rolls one node at a time, or removes the service and makes it again when the
+// router ID changes, which the preview says first.
+export function useChangeVIP(envId: string, input: VIPInput) {
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<IngressStarted> => {
+      const { data, error, response } = await api.PUT("/api/env/{envId}/ingress/vip", {
+        params: { path: { envId } },
+        body: vipBody(input),
+      });
+      if (!data) throw refused(error, response);
+      return { jobId: data.jobId };
+    },
+  });
+}
+
+// useVIPDisablePreview reads what switching the virtual IP off would remove. It has no findings of its own to refuse
+// with: a switch-off is always allowed.
+export function useVIPDisablePreview(envId: string) {
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<ReviewPreview> => {
+      const { data, error, response } = await api.POST(
+        "/api/env/{envId}/ingress/vip/disable/preview",
+        { params: { path: { envId } } },
+      );
+      if (!data) throw refused(error, response);
+      return { findings: [], redeploy: [], unreachable: [] };
+    },
+  });
+}
+
+// useDisableVIP switches the virtual IP off, as a job. A switch-off that failed part way is finished by running it again.
+export function useDisableVIP(envId: string) {
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<IngressStarted> => {
+      const { data, error, response } = await api.DELETE("/api/env/{envId}/ingress/vip", {
+        params: { path: { envId } },
+      });
+      if (!data) throw refused(error, response);
+      return { jobId: data.jobId };
+    },
+  });
+}
+
 // jobEnded says whether a job has finished, one way or another.
 export function jobEnded(job: IngressJob | undefined): boolean {
   return job !== undefined && job.state !== "running";

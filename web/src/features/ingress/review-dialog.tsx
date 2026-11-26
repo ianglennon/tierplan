@@ -45,7 +45,7 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 export const REDEPLOY_SHOWN = 10;
 
 // The switches the dialog is built for. Each has its own words under ingressPage.review.<kind>.
-export type ReviewKind = "enable" | "disable" | "vipEnable";
+export type ReviewKind = "enable" | "disable" | "vipEnable" | "vipChange" | "vipDisable";
 
 // ReviewForm is the optional first state of the dialog (the virtual IP's address and router ID): fields the card owns,
 // drawn above the buttons, and the button that runs the preview with what was typed. The preview is not run when the
