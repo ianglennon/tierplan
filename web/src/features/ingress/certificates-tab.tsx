@@ -6,8 +6,6 @@ import { ChevronDown, Ellipsis, Info } from "lucide-react";
 import { useRef, useState } from "react";
 import { Trans } from "react-i18next";
 
-import type { HealthState } from "@/api/environments";
-
 import { IngressActionError, ingressStatusQuery } from "@/api/ingress";
 import {
   type IngressCert,
@@ -53,6 +51,7 @@ import {
   SwitchToACMEDialog,
   UploadCertificateDialog,
 } from "@/features/ingress/certificate-dialogs";
+import { CertificateSheet, certDot } from "@/features/ingress/certificate-sheet";
 import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
 import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -61,29 +60,6 @@ import { cn } from "@/lib/utils";
 
 // At most this many rows show until the person asks for the rest (UI-SPEC S3, the Routes tab's pattern).
 const SHOWN = 10;
-
-// certDot is the dot of a certificate's state (UI-SPEC Color, certificate state): a certificate that works is green,
-// one that is on its way is the hollow or pulsing dot, one that is mending or waiting is amber, one that is broken is
-// red and one that is stopped on purpose or retired is grey. A state this build does not know is grey, never green.
-function certDot(state: string): HealthState {
-  switch (state) {
-    case "valid":
-    case "uploaded":
-      return "online";
-    case "queued":
-      return "pending";
-    case "ordering":
-      return "reconnecting";
-    case "dns_proven_on_staging":
-    case "renewal_failed":
-      return "degraded";
-    case "failed":
-    case "expired":
-      return "offline";
-    default:
-      return "unknown";
-  }
-}
 
 // sourceKey is the words of where a certificate comes from and, for an ordered one, which directory it is from.
 function sourceKey(c: IngressCert): string {
@@ -495,6 +471,7 @@ function CertActions({
 }) {
   const t = useT();
   const retry = useRetryCertificate(envId);
+  const [viewing, setViewing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [switching, setSwitching] = useState(false);
   // Set when an item was chosen, so closing the menu does not hand focus back to its button over the dialog that is
@@ -546,6 +523,9 @@ function CertActions({
             event.preventDefault();
           }}
         >
+          <DropdownMenuItem className="max-md:min-h-11" onSelect={choose(() => setViewing(true))}>
+            {t("ingressPage.certs.menu.view")}
+          </DropdownMenuItem>
           {canRetry ? (
             <NeedsTooltip reason={needs.reason}>
               <DropdownMenuItem
@@ -579,6 +559,12 @@ function CertActions({
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+      <CertificateSheet
+        cert={c}
+        canManage={needs.allowed}
+        open={viewing}
+        onOpenChange={setViewing}
+      />
       <UploadCertificateDialog
         envId={envId}
         host={c.hostname}
