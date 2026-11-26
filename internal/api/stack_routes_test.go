@@ -327,7 +327,14 @@ func TestStackRoutesCarryConditions(t *testing.T) {
 	bothAnswers := func(t *testing.T, viewer *roleCaller) (stackRoutesAnswer, ingressRoutesAnswer) {
 		t.Helper()
 		_, stackSide := routeStates(t, viewer, "stack-shop")
-		envSide, _ := ingressRoutesOf(t, viewer)
+		all, _ := ingressRoutesOf(t, viewer)
+		// The list also names the reserved names of the domain; the routes are the rows of kind route.
+		envSide := ingressRoutesAnswer{Enabled: all.Enabled}
+		for _, r := range all.Routes {
+			if r.Kind == "route" {
+				envSide.Routes = append(envSide.Routes, r)
+			}
+		}
 		if len(stackSide.Routes) != 1 || len(envSide.Routes) != 1 {
 			t.Fatalf("stack answers %+v and environment answers %+v, want one route each", stackSide.Routes, envSide.Routes)
 		}

@@ -109,8 +109,9 @@ func TestListIngressRoutesSwarmTracer(t *testing.T) {
 	*src = *servedBundle(host, ingresshub.Node{Status: "active", AppliedBundleID: "b1"}, ingresshub.Node{Status: "active", AppliedBundleID: "b1"})
 
 	got, raw := ingressRoutesOf(t, viewer)
-	if !got.Enabled || len(got.Routes) != 1 {
-		t.Fatalf("answer = %+v, want enabled with exactly one row", got)
+	// The route, then the one name the environment's domain reserves.
+	if !got.Enabled || len(got.Routes) != 2 || got.Routes[1].Kind != "reserved" {
+		t.Fatalf("answer = %+v, want enabled with the route and the reserved name", got)
 	}
 	r := got.Routes[0]
 	if r.Kind != "route" || r.Hostname != host || r.Path != "/" || r.StackID != "stack-shop" || r.StackName != "shop" ||
@@ -136,5 +137,69 @@ func TestListIngressRoutesSwarmTracer(t *testing.T) {
 		if strings.Contains(raw, other) {
 			t.Errorf("the answer names %q of another environment: %s", other, raw)
 		}
+	}
+}
+
+// claimWithoutRoute writes a hostname claim of the environment with no route under it, the way a stack that holds a name
+// it serves nothing on does; a blank stackID makes it a system claim.
+func claimWithoutRoute(t *testing.T, f *envFix, e envBody, seed ingressWorldSeed, host, stackID string) {
+	t.Helper()
+	kind, stack := "stack", any(stackID)
+	if stackID == "" {
+		kind, stack = "system", nil
+	}
+	if _, err := f.st.Write.Exec(
+		`INSERT INTO ingress_hostnames (hostname, env_id, domain_id, owner_kind, stack_id, claimed_by, claimed_at) VALUES (?, ?, ?, ?, ?, 'tester', 1)`,
+		host, e.ID, seed.domainID, kind, stack); err != nil {
+		t.Fatalf("claim %s without a route: %v", host, err)
+	}
+}
+
+func TestListIngressRoutesClaimsAndReserved(t *testing.T) {
+	t.Parallel()
+	const routed, held, sys = "a.apps.example.com", "b.apps.example.com", "c.apps.example.com"
+	f, e, viewer, _, seed := swarmRoutesRig(t, routed, shopService(1, ingress.NetworkName))
+	claimWithoutRoute(t, f, e, seed, held, "stack-shop")
+	claimWithoutRoute(t, f, e, seed, sys, "")
+
+	got, raw := ingressRoutesOf(t, viewer)
+	if len(got.Routes) != 4 {
+		t.Fatalf("rows = %+v, want the route, two claims and the reserved name", got.Routes)
+	}
+	if r := got.Routes[0]; r.Kind != "route" || r.Hostname != routed || r.State == "" || len(r.Conditions) != 5 {
+		t.Errorf("row 0 = %+v, want the route of %s with its state and five conditions", r, routed)
+	}
+	if r := got.Routes[1]; r.Kind != "claim" || r.Hostname != held || r.StackID != "stack-shop" || r.StackName != "shop" ||
+		r.OwnerKind != "stack" || r.State != "" || r.Path != "" || r.Service != "" || r.Port != 0 || len(r.Conditions) != 0 {
+		t.Errorf("row 1 = %+v, want the stack claim of %s with no state and no conditions", r, held)
+	}
+	if r := got.Routes[2]; r.Kind != "claim" || r.Hostname != sys || r.StackID != "" || r.StackName != "" || r.OwnerKind != "system" || r.State != "" {
+		t.Errorf("row 2 = %+v, want the system claim of %s with no stack", r, sys)
+	}
+	if r := got.Routes[3]; r.Kind != "reserved" || r.Hostname != seed.reservedHost || r.StackID != "" || r.OwnerKind != "" || r.State != "" || len(r.Conditions) != 0 {
+		t.Errorf("row 3 = %+v, want the reserved name %s with no owner", r, seed.reservedHost)
+	}
+	if !strings.Contains(raw, `"conditions":[]`) || strings.Contains(raw, `"conditions":null`) {
+		t.Errorf("the claim and reserved rows must carry an empty conditions list, not null: %s", raw)
+	}
+	for _, other := range []string{ingressOtherStackName, ingressTaken, ingressOtherEnvID} {
+		if strings.Contains(raw, other) {
+			t.Errorf("the answer names %q of another environment: %s", other, raw)
+		}
+	}
+}
+
+func TestListIngressRoutesEmpty(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnvCfg(t, func(c *dockertest.FakeConfig) {}, func(f *envFix) { f.stackIngressRoutes = &routeSourcesFake{} })
+	if _, err := f.stackDeps.Ingress.SetEnabled(context.Background(), e.ID, true, "admin", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, raw := ingressRoutesOf(t, f.caller(t, e, "viewer-1", "viewer"))
+	if !got.Enabled || len(got.Routes) != 0 {
+		t.Errorf("answer = %+v, want enabled with no rows", got)
+	}
+	if !strings.Contains(raw, `"routes":[]`) {
+		t.Errorf("routes must be an empty array, not null: %s", raw)
 	}
 }

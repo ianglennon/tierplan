@@ -227,8 +227,52 @@ func listIngressRoutes(ctx context.Context, d StacksDeps, _ *ListIngressRoutesIn
 	slices.SortStableFunc(rows, func(a, b IngressRouteBody) int {
 		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.Path, b.Path), cmp.Compare(a.Service, b.Service))
 	})
+	rows, err = appendUnroutedRows(ctx, d, env.ID, snap, rows)
+	if err != nil {
+		return nil, err
+	}
 	out.Body.Routes = rows
 	return out, nil
+}
+
+// appendUnroutedRows adds, after the route rows, one claim row per hostname the environment holds that no route sits
+// under, then one reserved row per name its domains reserve. Each block is in hostname order, and both read the one
+// snapshot the routes were read from, so a deploy replacing a stack's claims shows either its old set or its new one.
+// A claim or reserved row has no state and no conditions: there is nothing to serve.
+func appendUnroutedRows(ctx context.Context, d StacksDeps, envID string, snap ingress.Snapshot, rows []IngressRouteBody) ([]IngressRouteBody, error) {
+	routed := map[string]bool{}
+	for _, r := range snap.Routes {
+		routed[r.Hostname] = true
+	}
+	claimed := map[string]bool{}
+	var claims []IngressRouteBody
+	for _, c := range snap.Claims {
+		claimed[c.Hostname] = true
+		if routed[c.Hostname] {
+			continue
+		}
+		claims = append(claims, IngressRouteBody{
+			Kind: "claim", Hostname: c.Hostname, StackID: c.StackID, StackName: c.StackName, OwnerKind: string(c.OwnerKind),
+			Conditions: []RouteConditionBody{},
+		})
+	}
+	doms, err := d.Ingress.Domains(ctx, envID)
+	if err != nil {
+		return nil, stackInternal(d, "read the reserved names of", envID, err)
+	}
+	var reserved []IngressRouteBody
+	for _, dom := range doms {
+		for _, h := range dom.Reserved {
+			if claimed[h] {
+				continue
+			}
+			reserved = append(reserved, IngressRouteBody{Kind: "reserved", Hostname: h, Conditions: []RouteConditionBody{}})
+		}
+	}
+	byHost := func(a, b IngressRouteBody) int { return cmp.Compare(a.Hostname, b.Hostname) }
+	slices.SortStableFunc(claims, byHost)
+	slices.SortStableFunc(reserved, byHost)
+	return append(append(rows, claims...), reserved...), nil
 }
 
 // warnEngineUnreadable logs that the engine could not be read for the route list, which then answers unknown.
