@@ -62,7 +62,7 @@ func (f *deployFix) enableViaRoute(t *testing.T) {
 }
 
 // TestIngressStatusRoute: an Admin reads the status of a new environment and of an enabled one, the body carries no token
-// or secret field, an Operator is refused and a standalone environment is a 409.
+// or secret field, an Operator reads it too and a standalone environment is a 409.
 func TestIngressStatusRoute(t *testing.T) {
 	t.Parallel()
 	f := newDeployFix(t, false)
@@ -99,8 +99,8 @@ func TestIngressStatusRoute(t *testing.T) {
 		}
 	}
 
-	if rec := f.credCall(t, f.operatorA, http.MethodGet, path, ""); rec.Code != http.StatusForbidden {
-		t.Errorf("an Operator's status read = %d, want 403", rec.Code)
+	if rec := f.credCall(t, f.operatorA, http.MethodGet, path, ""); rec.Code != http.StatusOK {
+		t.Errorf("an Operator's status read = %d, want 200", rec.Code)
 	}
 	if rec := f.credCall(t, f.adminB, http.MethodGet, path, ""); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
 		t.Errorf("another environment's Admin's status read = %d, want 403 or 404", rec.Code)
@@ -113,6 +113,39 @@ func TestIngressStatusRoute(t *testing.T) {
 	}
 	if sst := decodeBody[statusResp](t, rec); sst.Enabled || sst.ObjectsKnown {
 		t.Errorf("standalone status = %+v, want ingress off and the objects unknown: the fixture's node is not connected", sst)
+	}
+}
+
+// TestIngressStatusIsReadForViewers: the status is an ingress.read answer (D-14), so a Viewer and an Operator of the environment
+// read the same body an Admin reads, another environment's Admin is refused and an anonymous call is a 401.
+func TestIngressStatusIsReadForViewers(t *testing.T) {
+	t.Parallel()
+	f := newDeployFix(t, false)
+	viewer := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+	path := "/api/env/" + f.envA + "/ingress/status"
+
+	admin := f.credCall(t, f.adminA, http.MethodGet, path, "")
+	if admin.Code != http.StatusOK {
+		t.Fatalf("Admin status: %d %s", admin.Code, admin.Body)
+	}
+	for name, u := range map[string]credentialUser{"Viewer": viewer, "Operator": f.operatorA} {
+		rec := f.credCall(t, u, http.MethodGet, path, "")
+		if rec.Code != http.StatusOK {
+			t.Errorf("a %s's status read = %d %s, want 200", name, rec.Code, rec.Body)
+			continue
+		}
+		if rec.Body.String() != admin.Body.String() {
+			t.Errorf("a %s reads %s, the Admin reads %s; want the same body", name, rec.Body, admin.Body)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("a %s's Cache-Control = %q, want no-store", name, cc)
+		}
+	}
+	if rec := f.credCall(t, f.adminB, http.MethodGet, path, ""); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+		t.Errorf("another environment's Admin's status read = %d, want 403 or 404", rec.Code)
+	}
+	if rec := f.call(t, authReq{method: http.MethodGet, path: path}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("an anonymous status read = %d, want 401", rec.Code)
 	}
 }
 

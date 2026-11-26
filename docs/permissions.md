@@ -44,7 +44,8 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `images.delete` | environment | no | yes | yes | yes | no | Remove and untag images |
 | `images.pull` | environment | no | yes | yes | yes | no | Pull images |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
-| `ingress.manage` | environment | no | no | yes | yes | no | Register this environment's ingress domains, reserve hostnames, and list, request, retry, upload and switch back its hostname certificates, and change a domain's issuer; create, rotate and disable the ingress join token, list the ingress nodes, and preview and switch ingress on for a swarm environment, read its ingress status, switch the proxy access log and resume a restored environment |
+| `ingress.manage` | environment | no | no | yes | yes | no | Register, replace the DNS token of and delete this environment's ingress domains, reserve and release hostnames, and preview and change a domain's issuer; request, retry, upload and switch back its hostname certificates; make, rotate and disable the ingress join token; preview and switch ingress and the virtual IP on, change or off and follow their jobs; switch the proxy access log and resume a restored environment |
+| `ingress.read` | environment | yes | yes | yes | yes | no | View this environment's ingress: routes and their conditions, certificates and their budget, nodes, the virtual IP's status and moves, domains and reserved names (never a DNS token), the join token's details (never the token) and the ingress status |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
 | `janitor.run` | environment | no | no | yes | yes | no | Clean an environment now, keep items out of cleanup and set the swarm task history limit |
 | `networks.addressing` | environment | no | no | yes | yes | no | Change the address space settings: small stack subnets and entered address pools |
