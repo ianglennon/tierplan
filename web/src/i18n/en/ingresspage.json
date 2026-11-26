@@ -43,7 +43,17 @@
         "badge": "Reserved",
         "status": "Reserved",
         "detail": "Held back on the Domains tab. No stack can claim it."
-      }
+      },
+      "empty": {
+        "title": "No routes yet",
+        "body": "A route appears when a stack has tierplan.ingress.* labels and is deployed. The Expose panel in the stack editor writes them."
+      },
+      "showAll": "Show all {{count}}",
+      "showFewer": "Show fewer",
+      "noMatch": "No route matches “{{filter}}”.",
+      "clearFilter": "Clear filter",
+      "noAttention": "No route needs attention.",
+      "proxyLogs": "View proxy logs"
     },
     "conditions": {
       "state": {
@@ -71,6 +81,11 @@
       "engine_unreadable": "TierPlan couldn't read this environment just now.",
       "no_bundle": "Ingress hasn't published its settings yet.",
       "appliedReady": "On {{applied}} of {{total}} nodes."
+    },
+    "off": {
+      "title": "Ingress is off",
+      "body": "Ingress serves your stacks' hostnames over HTTPS, with a certificate for each name. It is off for this environment, so no route is served.",
+      "reader": "Ask an Admin to turn it on."
     }
   }
 }

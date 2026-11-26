@@ -13,6 +13,7 @@ import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -24,9 +25,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
+import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { routeHeadline } from "@/features/stacks/route-state";
+import { useNeeds } from "@/hooks/use-needs";
 import { keyExists, useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
+
+// At most this many rows show until the person asks for the rest (UI-SPEC S2, the stack Routes card's pattern).
+const SHOWN = 10;
+
+// The swarm service that runs the proxy, and the container of the standalone host's proxy: its compose project
+// tierplan-ingress, service proxy, first replica (internal/ingress/objects.go, disable_standalone.go).
+const PROXY_SERVICE = "tierplan-ingress";
+const PROXY_CONTAINER = "tierplan-ingress-proxy-1";
 
 // routeText is the hostname and the path joined, as a person types it; a route for the whole host is the hostname
 // alone.
@@ -79,6 +91,46 @@ function reasonOf(
   return c.message;
 }
 
+// detailOf is the one line under a route's headline: why it is in that state, in the words the stack page uses. A
+// route whose state the engine could not read says why in the server's reason for its first unread condition, and
+// is not an error: the tab still draws.
+function detailOf(
+  r: IngressRoute,
+  standalone: boolean,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  switch (r.state) {
+    case "pending":
+      return t(
+        standalone
+          ? "stackIngress.routes.state.pending.detailStandalone"
+          : "stackIngress.routes.state.pending.detail",
+      );
+    case "not_attached":
+    case "ingress_off":
+      return t(`stackIngress.routes.state.${r.state}.detail`);
+    case "waiting_certificate": {
+      if (r.reason === "") return "";
+      const key = `stackIngress.routes.reason.${r.reason}`;
+      return keyExists(key) ? t(key) : r.reason;
+    }
+    case "backend_not_running":
+      if (r.stopped) return t("stackIngress.routes.state.backend_not_running.stopped");
+      return t(
+        standalone
+          ? "stackIngress.routes.state.backend_not_running.noContainer"
+          : "stackIngress.routes.state.backend_not_running.noTask",
+        { service: r.service },
+      );
+    case "unknown": {
+      const unread = (r.conditions ?? []).find((c) => c.state === "unknown");
+      return unread ? reasonOf(unread, r, t) : t("ingressPage.reasons.engine_unreadable");
+    }
+    default:
+      return "";
+  }
+}
+
 // isRoute says whether a row is a route a stack serves and so has a state and five conditions. A TierPlan route has
 // no state and is not drawn (Phase 28 draws it).
 function isRoute(r: IngressRoute): boolean {
@@ -120,6 +172,10 @@ export function RoutesTab({ envId }: { envId: string }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<View>("all");
+  const [all, setAll] = useState(false);
+  const swarm = useEnvIsSwarm(envId);
+  // The proxy's logs are a link to the log view the page already has, and only for someone who may read it there.
+  const logsRead = useNeeds(swarm ? "services.read" : "containers.read", envId);
   const toggle = (key: string) =>
     setOpen((prev) => {
       const next = new Set(prev);
@@ -157,47 +213,70 @@ export function RoutesTab({ envId }: { envId: string }) {
     );
   }
 
+  if (query.data.enabled === false) return <IngressOffEmpty envId={envId} />;
+
   const everything = (query.data.routes ?? []).filter(isDrawn);
   const routes = everything.filter(isRoute);
   const needle = filter.trim().toLowerCase();
   const rows = everything.filter(
     (r) => matches(r, needle) && (view === "all" || needsAttention(r)),
   );
+  const shown = all ? rows : rows.slice(0, SHOWN);
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Input
-          type="text"
-          aria-label={t("ingressPage.routes.filter")}
-          placeholder={t("ingressPage.routes.filterPlaceholder")}
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="max-w-sm max-md:h-11"
-        />
-        <ToggleGroup
-          type="single"
-          role="group"
-          aria-label={t("ingressPage.routes.view.label")}
-          variant="outline"
-          size="sm"
-          spacing={2}
-          value={view}
-          // Pressing the one that is on would turn it off: there is always a view.
-          onValueChange={(v) => {
-            if (v) setView(v as View);
-          }}
-        >
-          {(["all", "attention"] as const).map((v) => (
-            <ToggleGroupItem
-              key={v}
-              value={v}
-              className="aria-checked:border-ring aria-checked:text-ring max-md:h-11"
+        {everything.length > 0 ? (
+          <>
+            <Input
+              type="text"
+              aria-label={t("ingressPage.routes.filter")}
+              placeholder={t("ingressPage.routes.filterPlaceholder")}
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="max-w-sm max-md:h-11"
+            />
+            <ToggleGroup
+              type="single"
+              role="group"
+              aria-label={t("ingressPage.routes.view.label")}
+              variant="outline"
+              size="sm"
+              spacing={2}
+              value={view}
+              // Pressing the one that is on would turn it off: there is always a view.
+              onValueChange={(v) => {
+                if (v) setView(v as View);
+              }}
             >
-              {t(`ingressPage.routes.view.${v}`)}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+              {(["all", "attention"] as const).map((v) => (
+                <ToggleGroupItem
+                  key={v}
+                  value={v}
+                  className="aria-checked:border-ring aria-checked:text-ring max-md:h-11"
+                >
+                  {t(`ingressPage.routes.view.${v}`)}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </>
+        ) : null}
+        {logsRead.allowed ? (
+          <Link
+            {...(swarm
+              ? {
+                  to: "/env/$envId/services/$serviceId/logs" as const,
+                  params: { envId, serviceId: PROXY_SERVICE },
+                }
+              : {
+                  to: "/env/$envId/containers/$containerId/logs" as const,
+                  params: { envId, containerId: PROXY_CONTAINER },
+                })}
+            className="ms-auto rounded-sm text-sm text-accent-ink hover:underline max-md:py-3"
+          >
+            {t("ingressPage.routes.proxyLogs")}
+          </Link>
+        ) : null}
       </div>
       <p className="text-sm text-muted-foreground">
         {t("ingressPage.routes.summary", {
@@ -207,115 +286,186 @@ export function RoutesTab({ envId }: { envId: string }) {
           stopped: routes.filter((r) => r.stopped).length,
         })}
       </p>
-      <Table aria-label={t("ingressPage.routes.label")}>
-        <TableHeader>
-          <TableRow>
-            <TableHead scope="col">{t("ingressPage.routes.columns.route")}</TableHead>
-            <TableHead scope="col">{t("ingressPage.routes.columns.stack")}</TableHead>
-            <TableHead scope="col">{t("ingressPage.routes.columns.status")}</TableHead>
-            <TableHead scope="col">{t("ingressPage.routes.columns.conditions")}</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => {
-            if (r.kind !== "route") return <HeldRow key={heldKey(r)} row={r} envId={envId} />;
-            const key = `${r.hostname}${r.path}:${r.service}`;
-            const host = routeText(r);
-            const expanded = open.has(key);
-            const panel = `ingress-conditions-${key}`;
-            const headline = routeHeadline(r.state || "unknown", r.stopped);
-            return (
-              <Fragment key={key}>
-                <TableRow>
-                  <TableCell className="align-top whitespace-normal">
-                    <div className="flex items-start gap-1">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className="-ms-1 shrink-0 max-md:size-11 md:h-8"
-                        aria-expanded={expanded}
-                        aria-controls={expanded ? panel : undefined}
-                        aria-label={t("ingressPage.routes.show", { host })}
-                        onClick={() => toggle(key)}
-                      >
-                        <ChevronDown
-                          aria-hidden="true"
-                          className={cn(
-                            "motion-safe:transition-transform",
-                            expanded ? "rotate-180" : "-rotate-90",
-                          )}
-                        />
-                      </Button>
-                      <div className="min-w-0">
-                        <span className="font-mono text-xs break-all">{host}</span>
-                        <p className="text-xs text-muted-foreground">
-                          {t(
-                            r.strip
-                              ? "ingressPage.routes.targetStrip"
-                              : "ingressPage.routes.target",
-                            { scheme: r.scheme, port: r.port },
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="align-top whitespace-normal">
-                    {r.stackId === "" ? (
-                      <span className="text-sm break-words">{r.stackName}</span>
+      {everything.length === 0 ? (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle role="heading" aria-level={3}>
+              {t("ingressPage.routes.empty.title")}
+            </EmptyTitle>
+            <EmptyDescription>{t("ingressPage.routes.empty.body")}</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : (
+        <>
+          <Table aria-label={t("ingressPage.routes.label")}>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">{t("ingressPage.routes.columns.route")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.routes.columns.stack")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.routes.columns.status")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.routes.columns.conditions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.length === 0 ? (
+                <TableRow className="hover:bg-transparent">
+                  <TableCell colSpan={4} className="whitespace-normal">
+                    {filter.trim() === "" ? (
+                      <p className="text-sm text-muted-foreground">
+                        {t("ingressPage.routes.noAttention")}
+                      </p>
                     ) : (
-                      <Link
-                        to="/env/$envId/stacks/$stackId"
-                        params={{ envId, stackId: r.stackId }}
-                        className="rounded-sm text-sm break-words text-accent-ink hover:underline"
-                      >
-                        {r.stackName}
-                      </Link>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <p className="text-sm break-words">
+                          {t("ingressPage.routes.noMatch", { filter: filter.trim() })}
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="max-md:h-11"
+                          onClick={() => setFilter("")}
+                        >
+                          {t("ingressPage.routes.clearFilter")}
+                        </Button>
+                      </div>
                     )}
-                    <p className="font-mono text-xs break-all">{r.service}</p>
-                  </TableCell>
-                  <TableCell className="align-top whitespace-normal">
-                    <StatusDot state={headline.dot} label={t(headline.labelKey)} />
-                  </TableCell>
-                  <TableCell className="align-top text-sm whitespace-normal">
-                    {t("ingressPage.routes.ready", { ready: readyCount(r) })}
                   </TableCell>
                 </TableRow>
-                {expanded ? (
-                  <TableRow className="hover:bg-transparent">
-                    <TableCell colSpan={4} id={panel} className="bg-muted/50 p-4 whitespace-normal">
-                      <ol
-                        aria-label={t("ingressPage.routes.conditionsList", { host })}
-                        className="flex flex-col gap-3"
-                      >
-                        {(r.conditions ?? []).map((c) => {
-                          const reason = reasonOf(c, r, t);
-                          return (
-                            <li key={c.code} className="flex flex-col gap-0.5">
-                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
-                                <StatusDot
-                                  state={conditionDot(c)}
-                                  label={t(`ingressPage.conditions.state.${c.state}`)}
-                                />
-                                <span>{t(`ingressPage.conditions.name.${c.code}`)}</span>
-                              </div>
-                              {reason ? (
-                                <p className="text-xs break-words text-muted-foreground">
-                                  {reason}
-                                </p>
-                              ) : null}
-                            </li>
-                          );
-                        })}
-                      </ol>
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-              </Fragment>
-            );
-          })}
-        </TableBody>
-      </Table>
+              ) : null}
+              {shown.map((r) => {
+                if (r.kind !== "route") return <HeldRow key={heldKey(r)} row={r} envId={envId} />;
+                const key = `${r.hostname}${r.path}:${r.service}`;
+                const host = routeText(r);
+                const expanded = open.has(key);
+                const panel = `ingress-conditions-${key}`;
+                const headline = routeHeadline(r.state || "unknown", r.stopped);
+                const detail = detailOf(r, !swarm, t);
+                return (
+                  <Fragment key={key}>
+                    <TableRow>
+                      <TableCell className="align-top whitespace-normal">
+                        <div className="flex items-start gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="-ms-1 shrink-0 max-md:size-11 md:h-8"
+                            aria-expanded={expanded}
+                            aria-controls={expanded ? panel : undefined}
+                            aria-label={t("ingressPage.routes.show", { host })}
+                            onClick={() => toggle(key)}
+                          >
+                            <ChevronDown
+                              aria-hidden="true"
+                              className={cn(
+                                "motion-safe:transition-transform",
+                                expanded ? "rotate-180" : "-rotate-90",
+                              )}
+                            />
+                          </Button>
+                          <div className="min-w-0">
+                            <span className="font-mono text-xs break-all">{host}</span>
+                            <p className="text-xs text-muted-foreground">
+                              {t(
+                                r.strip
+                                  ? "ingressPage.routes.targetStrip"
+                                  : "ingressPage.routes.target",
+                                { scheme: r.scheme, port: r.port },
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="align-top whitespace-normal">
+                        {r.stackId === "" ? (
+                          <span className="text-sm break-words">{r.stackName}</span>
+                        ) : (
+                          <Link
+                            to="/env/$envId/stacks/$stackId"
+                            params={{ envId, stackId: r.stackId }}
+                            className="rounded-sm text-sm break-words text-accent-ink hover:underline"
+                          >
+                            {r.stackName}
+                          </Link>
+                        )}
+                        {swarm ? (
+                          <Link
+                            to="/env/$envId/services/$serviceId"
+                            params={{ envId, serviceId: `${r.stackName}_${r.service}` }}
+                            className="rounded-sm font-mono text-xs break-all text-accent-ink hover:underline"
+                          >
+                            {r.service}
+                          </Link>
+                        ) : (
+                          <p className="font-mono text-xs break-all">{r.service}</p>
+                        )}
+                      </TableCell>
+                      <TableCell className="align-top whitespace-normal">
+                        <StatusDot state={headline.dot} label={t(headline.labelKey)} />
+                        {detail ? (
+                          <p className="text-xs break-words text-muted-foreground">{detail}</p>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="align-top text-sm whitespace-normal">
+                        {t("ingressPage.routes.ready", { ready: readyCount(r) })}
+                      </TableCell>
+                    </TableRow>
+                    {expanded ? (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell
+                          colSpan={4}
+                          id={panel}
+                          className="bg-muted/50 p-4 whitespace-normal"
+                        >
+                          <ol
+                            aria-label={t("ingressPage.routes.conditionsList", { host })}
+                            className="flex flex-col gap-3"
+                          >
+                            {(r.conditions ?? []).map((c) => {
+                              const reason = reasonOf(c, r, t);
+                              return (
+                                <li key={c.code} className="flex flex-col gap-0.5">
+                                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
+                                    <StatusDot
+                                      state={conditionDot(c)}
+                                      label={t(`ingressPage.conditions.state.${c.state}`)}
+                                    />
+                                    <span>{t(`ingressPage.conditions.name.${c.code}`)}</span>
+                                  </div>
+                                  {reason ? (
+                                    <p className="text-xs break-words text-muted-foreground">
+                                      {reason}
+                                    </p>
+                                  ) : null}
+                                </li>
+                              );
+                            })}
+                          </ol>
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
+          {rows.length > SHOWN ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="self-start max-md:h-11"
+              aria-expanded={all}
+              onClick={() => setAll(!all)}
+            >
+              {all
+                ? t("ingressPage.routes.showFewer")
+                : t("ingressPage.routes.showAll", { count: rows.length })}
+            </Button>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

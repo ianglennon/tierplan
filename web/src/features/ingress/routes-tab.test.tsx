@@ -18,6 +18,8 @@ type Json = Record<string, unknown>;
 
 let answer: () => Response;
 let client: QueryClient;
+let swarm: boolean;
+let me: ReturnType<typeof makeMe>;
 
 function condition(code: string, state = "ready", over: Json = {}): Json {
   return { code, state, reason: "", message: "", ...over };
@@ -56,13 +58,21 @@ function serve(routes: Json[]) {
 beforeEach(() => {
   setCsrfToken(null);
   serve([]);
+  swarm = false;
+  me = makeMe({ envs: { [ENV]: "viewer" } });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+      if (path === "/api/me") return Response.json(me);
       if (path === `/api/env/${ENV}/ingress/routes`) return answer();
+      if (path === "/api/environments") {
+        return Response.json({
+          items: [{ id: ENV, name: "Lab", envType: swarm ? "swarm" : "standalone", enabled: true }],
+          total: 1,
+        });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -474,6 +484,165 @@ describe("the Ingress page's Routes tab", () => {
       fireEvent.click(screen.getByRole("radio", { name: "Needs attention" }));
       expect(within(t).queryByText("a.example.com")).toBeNull();
       expect(within(t).getByText("b.example.com")).toBeTruthy();
+    });
+  });
+
+  describe("show ten, links, proxy logs and every state (D-11, D-03, S2, S8)", () => {
+    const many = (n: number): Json[] =>
+      Array.from({ length: n }, (_, i) =>
+        route({ hostname: `h${String(i).padStart(2, "0")}.example.com` }),
+      );
+    const bodyRows = (t: HTMLElement) => within(t).getAllByRole("row").slice(1);
+
+    it("shows the first ten of twelve, then all of them, then ten again", async () => {
+      serve(many(12));
+      mount();
+      const t = await table();
+      expect(bodyRows(t)).toHaveLength(10);
+      const more = screen.getByRole("button", { name: "Show all 12" });
+      fireEvent.click(more);
+      expect(bodyRows(t)).toHaveLength(12);
+      fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+      expect(bodyRows(t)).toHaveLength(10);
+    });
+
+    it("cuts the filtered list, not the whole one", async () => {
+      serve([...many(12), route({ hostname: "odd.example.com" })]);
+      mount();
+      const t = await table();
+      fireEvent.change(screen.getByRole("textbox", { name: "Filter routes" }), {
+        target: { value: "h0" },
+      });
+      expect(bodyRows(t)).toHaveLength(10);
+      expect(screen.queryByRole("button", { name: /Show all/ })).toBeNull();
+    });
+
+    it("links the stack to its page and draws the service as text on a standalone host", async () => {
+      serve([route()]);
+      mount();
+      const t = await table();
+      expect(within(t).getByRole("link", { name: "shop" }).getAttribute("href")).toBe(
+        "/env/e1/stacks/s1",
+      );
+      expect(within(t).queryByRole("link", { name: "web" })).toBeNull();
+      expect(within(t).getByText("web")).toBeTruthy();
+    });
+
+    it("links the service to its page on a swarm, by its swarm name", async () => {
+      swarm = true;
+      serve([route()]);
+      mount();
+      const t = await table();
+      const link = await within(t).findByRole("link", { name: "web" });
+      expect(link.getAttribute("href")).toBe("/env/e1/services/shop_web");
+    });
+
+    it("links to the proxy service's logs on a swarm for a reader of services", async () => {
+      swarm = true;
+      serve([route()]);
+      mount();
+      const link = await screen.findByRole("link", { name: "View proxy logs" });
+      expect(link.getAttribute("href")).toBe("/env/e1/services/tierplan-ingress/logs");
+    });
+
+    it("links to the proxy container's logs on a standalone host", async () => {
+      serve([route()]);
+      mount();
+      const link = await screen.findByRole("link", { name: "View proxy logs" });
+      expect(link.getAttribute("href")).toBe("/env/e1/containers/tierplan-ingress-proxy-1/logs");
+    });
+
+    it("does not draw the proxy logs link to someone who may not read them", async () => {
+      swarm = true;
+      me = makeMe({ permissions: { global: [], environments: { [ENV]: ["ingress.read"] } } });
+      serve([route()]);
+      mount();
+      await table();
+      await waitFor(() =>
+        expect(within(document.body).getAllByRole("link").length).toBeGreaterThan(0),
+      );
+      expect(screen.queryByRole("link", { name: "View proxy logs" })).toBeNull();
+    });
+
+    it("says ingress is off, and tells a reader to ask an Admin", async () => {
+      answer = () => Response.json({ enabled: false, routes: [] });
+      mount();
+      expect(await screen.findByText("Ingress is off")).toBeTruthy();
+      expect(
+        screen.getByText(/Ingress serves your stacks' hostnames over HTTPS, with a certificate/),
+      ).toBeTruthy();
+      expect(screen.getByText(/Ask an Admin to turn it on\./)).toBeTruthy();
+      expect(screen.queryByRole("table")).toBeNull();
+    });
+
+    it("does not tell an Admin to ask an Admin", async () => {
+      me = makeMe({ envs: { [ENV]: "admin" } });
+      answer = () => Response.json({ enabled: false, routes: [] });
+      mount();
+      expect(await screen.findByText("Ingress is off")).toBeTruthy();
+      expect(screen.queryByText(/Ask an Admin/)).toBeNull();
+    });
+
+    it("says there are no routes yet when ingress is on and nothing is held", async () => {
+      serve([]);
+      mount();
+      expect(await screen.findByText("No routes yet")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "A route appears when a stack has tierplan.ingress.* labels and is deployed. The Expose panel in the stack editor writes them.",
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByRole("table")).toBeNull();
+    });
+
+    it("says no route matches a filter, and Clear filter brings every row back", async () => {
+      serve(many(3));
+      mount();
+      const t = await table();
+      fireEvent.change(screen.getByRole("textbox", { name: "Filter routes" }), {
+        target: { value: "zzz" },
+      });
+      expect(screen.getByText("No route matches “zzz”.")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+      expect(bodyRows(t)).toHaveLength(3);
+      expect(
+        (screen.getByRole("textbox", { name: "Filter routes" }) as HTMLInputElement).value,
+      ).toBe("");
+    });
+
+    it("refetches when Retry reading routes is pressed after a failed read", async () => {
+      answer = () => Response.json({ title: "boom", status: 500 }, { status: 500 });
+      mount();
+      const retry = await screen.findByRole("button", { name: "Retry reading routes" });
+      serve([route()]);
+      fireEvent.click(retry);
+      expect(await table()).toBeTruthy();
+    });
+
+    it("draws a route whose conditions are unknown with a grey Unknown headline and no error", async () => {
+      const unread = (code: string) =>
+        condition(code, "unknown", { reason: "engine_unreadable", message: "engine down" });
+      serve([
+        route({
+          state: "unknown",
+          conditions: [
+            "claim_held",
+            "network_attached",
+            "backend_healthy",
+            "certificate_ready",
+            "applied",
+          ].map(unread),
+        }),
+      ]);
+      mount();
+      const t = await table();
+      const row = rowOf(t, "app.example.com");
+      const word = within(row).getByText("Unknown");
+      expect((word.previousElementSibling as HTMLElement).className).toContain("bg-status-unknown");
+      expect(
+        within(row).getByText("TierPlan couldn't read this environment just now."),
+      ).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
     });
   });
 });
