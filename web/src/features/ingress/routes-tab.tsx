@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ChevronDown } from "lucide-react";
 import { Fragment, useState } from "react";
+import { Trans } from "react-i18next";
 
 import type { HealthState } from "@/api/environments";
 
@@ -528,7 +529,23 @@ function HeldRow({ row, envId }: { row: IngressRoute; envId: string }) {
       <TableCell className="align-top whitespace-normal">
         <StatusDot state="unknown" label={t(`ingressPage.routes.${word}.status`)} />
         <p className="text-xs break-words text-muted-foreground">
-          {t(`ingressPage.routes.${word}.detail`)}
+          {claim ? (
+            t("ingressPage.routes.claim.detail")
+          ) : (
+            <Trans
+              i18nKey="ingressPage.routes.reserved.detail"
+              ns="ingressPage"
+              components={{
+                domains: (
+                  <Link
+                    to="/env/$envId/ingress/domains"
+                    params={{ envId }}
+                    className="rounded-sm text-accent-ink hover:underline"
+                  />
+                ),
+              }}
+            />
+          )}
         </p>
       </TableCell>
       <TableCell className="align-top text-sm whitespace-normal">

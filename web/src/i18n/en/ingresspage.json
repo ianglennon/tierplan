@@ -46,7 +46,7 @@
       "reserved": {
         "badge": "Reserved",
         "status": "Reserved",
-        "detail": "Held back on the Domains tab. No stack can claim it."
+        "detail": "Held back on the <domains>Domains tab</domains>. No stack can claim it."
       },
       "empty": {
         "title": "No routes yet",

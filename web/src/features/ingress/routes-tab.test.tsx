@@ -407,13 +407,24 @@ describe("the Ingress page's Routes tab", () => {
       const kept = rowOf(t, "kept.example.com");
       expect(within(kept).getByText("Reserved", { selector: "[data-slot=badge]" })).toBeTruthy();
       expect(within(kept).getAllByText("Reserved")).toHaveLength(2);
-      expect(
-        within(kept).getByText("Held back on the Domains tab. No stack can claim it."),
-      ).toBeTruthy();
+      expect(kept.textContent).toContain("Held back on the Domains tab. No stack can claim it.");
       // The stack column, the Conditions column and the Certificate column all say nothing.
       expect(within(kept).getAllByText("—")).toHaveLength(3);
       expect(within(kept).queryByRole("button")).toBeNull();
-      expect(within(kept).queryByRole("link")).toBeNull();
+      // The only link is the words "Domains tab" (D-11, U-16).
+      expect(within(kept).getAllByRole("link")).toHaveLength(1);
+    });
+
+    it("links the words Domains tab of a reserved row to the Domains tab of this environment", async () => {
+      serve(mixed());
+      mount();
+      const t = await table();
+      const link = within(rowOf(t, "kept.example.com")).getByRole("link", { name: "Domains tab" });
+      expect(link.getAttribute("href")).toBe(`/env/${ENV}/ingress/domains`);
+      // A claim row has no such link: it points at its stack.
+      expect(
+        within(rowOf(t, "held.example.com")).queryByRole("link", { name: "Domains tab" }),
+      ).toBeNull();
     });
 
     it("always writes the summary line, zero counts included", async () => {

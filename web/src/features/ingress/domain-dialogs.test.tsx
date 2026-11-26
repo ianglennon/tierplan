@@ -291,3 +291,123 @@ describe("the Replace token dialog", () => {
     for (const input of document.querySelectorAll("input")) expect(input.value).not.toBe(TOKEN);
   });
 });
+
+describe("the Delete domain dialog (U-09)", () => {
+  const TITLE = "Delete apps.example.com?";
+
+  async function open() {
+    return openFromMenu("Delete domain…", TITLE);
+  }
+
+  it("says what happens to the certificates and keeps the destructive confirm disabled until the suffix is typed", async () => {
+    const dialog = await open();
+    expect(
+      within(dialog).getByText(
+        "Its 4 certificates stop renewing and expire. Hostnames under it can't be claimed any more.",
+      ),
+    ).toBeTruthy();
+    const confirm = within(dialog).getByRole("button", { name: "Delete domain" });
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    expect(confirm.getAttribute("data-variant") ?? confirm.className).toMatch(/destructive/);
+    const field = within(dialog).getByLabelText("Type apps.example.com to confirm");
+    fireEvent.change(field, { target: { value: "apps.example.co" } });
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(field, { target: { value: "apps.example.com" } });
+    expect(confirm.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("sends the delete once, closes, and reads the lists again", async () => {
+    writeAnswer = () => Response.json({ certificatesLeft: 4 });
+    const dialog = await open();
+    fireEvent.change(within(dialog).getByLabelText("Type apps.example.com to confirm"), {
+      target: { value: "apps.example.com" },
+    });
+    const confirm = within(dialog).getByRole("button", { name: "Delete domain" });
+    items = [];
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ method: "DELETE", path: BASE });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await screen.findByText("Deleted apps.example.com.");
+    expect(await screen.findByText("No domains yet")).toBeTruthy();
+  });
+
+  it("also closes when the server answers 204 because no certificates were left", async () => {
+    writeAnswer = () => new Response(null, { status: 204 });
+    const dialog = await open();
+    fireEvent.change(within(dialog).getByLabelText("Type apps.example.com to confirm"), {
+      target: { value: "apps.example.com" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete domain" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(writes).toHaveLength(1);
+  });
+
+  it("shows the server's list of stacks under Stacks still use this domain and keeps the domain", async () => {
+    const detail =
+      "“apps.example.com” cannot be deleted while hostnames under it are claimed by: shop in Production. Remove those hostnames from the stacks first.";
+    writeAnswer = () => problem(409, "ingress_domain_in_use", detail);
+    const dialog = await open();
+    fireEvent.change(within(dialog).getByLabelText("Type apps.example.com to confirm"), {
+      target: { value: "apps.example.com" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete domain" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(within(alert).getByText("Stacks still use this domain")).toBeTruthy();
+    expect(alert.textContent).toContain(detail);
+    expect(alert.getAttribute("data-variant") ?? alert.className).toMatch(/destructive/);
+    expect(screen.getByRole("dialog", { name: TITLE })).toBeTruthy();
+    expect(writes).toHaveLength(1);
+  });
+
+  it("shows any other refusal as the server worded it, without the stacks title", async () => {
+    writeAnswer = () =>
+      problem(409, "ingress_domain_cleanup_pending", "2 DNS records are still being removed.");
+    const dialog = await open();
+    fireEvent.change(within(dialog).getByLabelText("Type apps.example.com to confirm"), {
+      target: { value: "apps.example.com" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete domain" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("2 DNS records are still being removed.");
+    expect(within(alert).queryByText("Stacks still use this domain")).toBeNull();
+  });
+
+  it("sends nothing on Keep domain", async () => {
+    const dialog = await open();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep domain" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(writes).toHaveLength(0);
+  });
+});
+
+describe("the row menu without ingress.manage", () => {
+  it("draws the three items disabled for a Viewer and opens no dialog", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mount();
+    const table = await screen.findByRole("table", { name: "Domains" });
+    fireEvent.keyDown(within(table).getByRole("button", { name: "Actions for apps.example.com" }), {
+      key: "Enter",
+    });
+    const menu = await screen.findAllByRole("menuitem");
+    expect(menu).toHaveLength(3);
+    for (const item of menu) {
+      expect(item.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(item);
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(writes).toHaveLength(0);
+  });
+
+  it("draws them enabled for an Admin", async () => {
+    mount();
+    const table = await screen.findByRole("table", { name: "Domains" });
+    fireEvent.keyDown(within(table).getByRole("button", { name: "Actions for apps.example.com" }), {
+      key: "Enter",
+    });
+    for (const item of await screen.findAllByRole("menuitem")) {
+      expect(item.getAttribute("aria-disabled")).toBeNull();
+    }
+  });
+});

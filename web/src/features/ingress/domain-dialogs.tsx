@@ -7,14 +7,17 @@ import { IngressActionError, type IngressDomain } from "@/api/ingress";
 import {
   type DomainIssuer,
   useChangeIssuer,
+  useDeleteDomain,
   useIssuerPreview,
   useReplaceDomainToken,
 } from "@/api/ingress-domains";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { matchesName, TypeToConfirm } from "@/components/type-to-confirm";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -299,6 +302,113 @@ function ReplaceTokenForm({
         <Button type="submit" className={TOUCH_HEIGHT} disabled={token === "" || replace.isPending}>
           {replace.isPending ? <Spinner aria-hidden="true" /> : null}
           {t("ingressPage.domains.replaceToken.submit")}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+// The problem type of the server's refusal to delete a domain that stacks still hold names under.
+const DOMAIN_IN_USE = "ingress_domain_in_use";
+
+// DeleteDomainDialog deletes a domain after its suffix is typed (U-09, UI-SPEC S5). The confirm is the destructive
+// button and stays disabled until the suffix matches. When stacks still hold names under the domain the server refuses
+// and lists them in its detail: the dialog draws that as text under "Stacks still use this domain" and nothing is
+// deleted. Any other refusal (DNS records still being removed) reads as the server worded it.
+export function DeleteDomainDialog({ envId, domain, onClose }: DomainDialogProps) {
+  const shown = useShownDomain(domain);
+  return (
+    <Dialog open={domain !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent aria-describedby={undefined}>
+        {shown ? <DeleteDomainForm envId={envId} domain={shown} onClose={onClose} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteDomainForm({
+  envId,
+  domain,
+  onClose,
+}: {
+  envId: string;
+  domain: IngressDomain;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const remove = useDeleteDomain(envId);
+  const [typed, setTyped] = useState("");
+  const sending = useRef(false);
+  const confirmed = matchesName(typed, domain.suffix);
+
+  function submit(event?: FormEvent) {
+    event?.preventDefault();
+    if (!confirmed || remove.isPending || sending.current) return;
+    sending.current = true;
+    remove.mutate(
+      { domainId: domain.id },
+      {
+        onSettled: () => {
+          sending.current = false;
+        },
+        onSuccess: () => {
+          toastSuccess(t("ingressPage.domains.delete.done", { suffix: domain.suffix }));
+          onClose();
+        },
+      },
+    );
+  }
+
+  const inUse = remove.error instanceof IngressActionError && remove.error.type === DOMAIN_IN_USE;
+
+  return (
+    <form noValidate onSubmit={submit} className="flex flex-col gap-4">
+      <DialogHeader>
+        <DialogTitle className="break-words">
+          {t("ingressPage.domains.delete.title", { suffix: domain.suffix })}
+        </DialogTitle>
+        <DialogDescription>
+          {t("ingressPage.domains.delete.body", { count: domain.certificates })}
+        </DialogDescription>
+      </DialogHeader>
+      {remove.isError ? (
+        inUse ? (
+          <Alert variant="destructive" role="alert">
+            <AlertTitle>{t("ingressPage.domains.delete.inUse")}</AlertTitle>
+            <AlertDescription className="break-words">
+              {(remove.error instanceof IngressActionError ? remove.error.detail : undefined) ??
+                t("common.mutationFailed")}
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <Refusal error={remove.error} />
+        )
+      ) : null}
+      <TypeToConfirm
+        name={domain.suffix}
+        value={typed}
+        onChange={setTyped}
+        onConfirm={submit}
+        disabled={remove.isPending}
+      />
+      <DialogFooter>
+        <Button
+          type="button"
+          variant="outline"
+          className={TOUCH_HEIGHT}
+          disabled={remove.isPending}
+          onClick={onClose}
+        >
+          {t("ingressPage.domains.delete.keep")}
+        </Button>
+        <Button
+          type="submit"
+          variant="destructive"
+          className={TOUCH_HEIGHT}
+          disabled={!confirmed || remove.isPending}
+        >
+          {remove.isPending ? <Spinner aria-hidden="true" /> : null}
+          {t("ingressPage.domains.delete.submit")}
         </Button>
       </DialogFooter>
     </form>
