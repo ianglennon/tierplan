@@ -4,10 +4,16 @@
 package api_test
 
 import (
+	"context"
+	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/audit/audittest"
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 )
 
 // The claim proofs of the audit table test (A-01, A-06, D-22): each ingress claim, replacement, release and refusal is its own
@@ -123,4 +129,88 @@ func TestAuditProofClaimReleased(t *testing.T) {
 		t.Errorf("ingress.claim_released rows = %d, want only the removal's", n)
 	}
 	audittest.AssertNoSecrets(t, append(released, replaced...))
+}
+
+// wantNoOtherEnvironment fails the test when the row names the other environment or its stack, which the refusal's own
+// message would have (A-01, T-27-24).
+func wantNoOtherEnvironment(t *testing.T, row audit.Row, seed ingressWorldSeed) {
+	t.Helper()
+	text := row.Reason + " " + row.TargetID + " " + row.EnvID
+	for k, v := range row.Details {
+		text += " " + k + "=" + v
+	}
+	for _, name := range []string{seed.otherStack, seed.otherEnvID, seed.otherEnvName, seed.otherStackID} {
+		if name != "" && strings.Contains(text, name) {
+			t.Errorf("%s row %q names %q of the other environment", row.Action, text, name)
+		}
+	}
+}
+
+func TestAuditProofClaimedFailure(t *testing.T) {
+	t.Parallel()
+	const host = "race.apps.example.com"
+	f, e := stackEnvTuned(t, func(f *envFix) { claimBeforeJob(f, host) })
+	seed := seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "proof-claimed-failure")
+
+	// The other environment's stack takes the name after the gate found it free, so the store refuses the first claim.
+	if job := jobOf(t, f, f.deployDraft(t, admin, st.ID, ingressCompose(host))); job.State == "done" {
+		t.Fatalf("job = %+v, want it failed", job)
+	}
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressClaimed)
+	row := onlyClaimRow(t, rows, audit.ActionIngressClaimed)
+	if row.Result != string(audit.ResultFailure) || row.Reason != ingress.CodeHostTaken {
+		t.Errorf("result = %q reason %q, want a failure with %s", row.Result, row.Reason, ingress.CodeHostTaken)
+	}
+	if row.ActorName != "envadmin-1" || row.TargetType != "stack" || row.TargetID != st.ID || row.EnvID != e.ID {
+		t.Errorf("row = %+v, want the deployer, on the stack", row)
+	}
+	wantDetails(t, row, map[string]string{"stack": st.Name, "hostnames": host, "count": "1"})
+	wantNoOtherEnvironment(t, row, seed)
+	if n := len(audittest.Rows(t, f.st, audit.ActionIngressClaimReplaced)); n != 0 {
+		t.Errorf("ingress.claim_replaced rows = %d, want none", n)
+	}
+	audittest.AssertNoSecrets(t, rows)
+}
+
+func TestAuditProofClaimReplacedFailure(t *testing.T) {
+	t.Parallel()
+	const late = "late.apps.example.com"
+	var armed atomic.Bool
+	var domainID, envID string
+	f, e := stackEnvTuned(t, func(f *envFix) {
+		// After the gate found the name free, an Admin reserves it, so the store refuses the claim.
+		f.stackBeforeJob = func(ctx context.Context) {
+			if !armed.CompareAndSwap(true, false) {
+				return
+			}
+			if _, _, err := f.stackDeps.Ingress.Reserve(ctx, ingressstore.ReserveInput{EnvID: envID, DomainID: domainID, Hostname: late, Actor: "admin"}, nil); err != nil {
+				panic("the reservation was refused: " + err.Error())
+			}
+		}
+	})
+	seed := seedIngressWorld(t, f, e)
+	domainID, envID = seed.domainID, e.ID
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "proof-replaced-failure")
+	f.deployGood(t, admin, st.ID, ingressCompose("a.apps.example.com"))
+	armed.Store(true)
+
+	if job := jobOf(t, f, f.deployDraft(t, admin, st.ID, ingressCompose("a.apps.example.com", late))); job.State == "done" {
+		t.Fatalf("job = %+v, want it failed", job)
+	}
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressClaimReplaced)
+	row := onlyClaimRow(t, rows, audit.ActionIngressClaimReplaced)
+	if row.Result != string(audit.ResultFailure) || row.Reason != ingress.CodeHostReserved {
+		t.Errorf("result = %q reason %q, want a failure with %s", row.Result, row.Reason, ingress.CodeHostReserved)
+	}
+	wantDetails(t, row, map[string]string{"stack": st.Name, "hostnames": "a.apps.example.com, " + late, "count": "2"})
+	wantNoOtherEnvironment(t, row, seed)
+	if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"a.apps.example.com"}) {
+		t.Errorf("claims = %v, want the stack still holding a.apps.example.com", got)
+	}
+	audittest.AssertNoSecrets(t, rows)
 }
