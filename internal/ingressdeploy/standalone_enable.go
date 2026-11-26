@@ -131,6 +131,7 @@ func (s *Service) runStandaloneEnable(ctx context.Context, r *jobs.Reporter, rel
 					r.Finish(id, jobs.ItemCancelled, jobs.CodeCancelled, "", nil)
 				}
 			}
+			s.auditJobFailed(ctx, actor, audit.ActionIngressEnabled, info.ID, steps[i].ids[0], jobs.CodeCancelled)
 			return
 		}
 		if len(st.ids) == 1 {
@@ -144,6 +145,11 @@ func (s *Service) runStandaloneEnable(ctx context.Context, r *jobs.Reporter, rel
 		var se *stepError
 		if errors.As(err, &se) {
 			code, detail = se.code, se.detail
+		}
+		step := st.ids[0]
+		if errors.Is(err, errSystemFailed) {
+			// The deploy ended its own items with codes of its own; the row names the step as a whole.
+			step, code = auditStepSystem, CodeEnableSystemFailed
 		}
 		s.log().Warn("an ingress enable step failed", "environment", info.ID, "step", st.ids[0], "code", code, "error", err)
 		s.noteEnableFailed(ctx, info.ID)
@@ -163,6 +169,7 @@ func (s *Service) runStandaloneEnable(ctx context.Context, r *jobs.Reporter, rel
 				r.Finish(id, jobs.ItemSkipped, CodeNotRun, codeMessages[CodeNotRun], nil)
 			}
 		}
+		s.auditJobFailed(ctx, actor, audit.ActionIngressEnabled, info.ID, step, code)
 		return
 	}
 }

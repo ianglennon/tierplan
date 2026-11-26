@@ -404,6 +404,7 @@ func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func
 		if ctx.Err() != nil {
 			run.stop(item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
+			s.auditJobFailed(ctx, actor, audit.ActionIngressDisabled, info.ID, item, jobs.CodeCancelled)
 			return
 		}
 		r.Update(item, func(it *jobs.Item) { it.State = jobs.ItemRunning })
@@ -411,6 +412,7 @@ func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func
 			if ctx.Err() != nil {
 				run.stop(item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 				run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
+				s.auditJobFailed(ctx, actor, audit.ActionIngressDisabled, info.ID, item, jobs.CodeCancelled)
 				return
 			}
 			code, detail := CodeNotRun, ""
@@ -421,6 +423,7 @@ func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func
 			s.log().Warn("an ingress disable step failed", "environment", info.ID, "step", item, "code", code, "error", err)
 			run.stop(item, jobs.ItemFailed, code, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
+			s.auditJobFailed(ctx, actor, audit.ActionIngressDisabled, info.ID, item, code)
 			return
 		}
 	}
