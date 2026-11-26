@@ -9,10 +9,12 @@ import (
 	"encoding/pem"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/audit/audittest"
+	"github.com/ianglennon/tierplan/internal/ingress"
 )
 
 // The certificate proofs of the audit table test (A-01 class P, D-23): each drives the real scheduler or order store to
@@ -102,4 +104,71 @@ func TestAuditProofCertFailed(t *testing.T) {
 	proofDetails(t, got, map[string]string{"hostname": "app.example.com", "issuer": IssuerProduction, "reason": acme.ClassDNSTokenInvalid})
 	// A failed first run holds no key; the PEM marker check in AssertNoSecrets still guards the row.
 	audittest.AssertNoSecrets(t, rows, rigToken)
+}
+
+// A renewal at half life writes one success row that adds the renewal basis.
+func TestAuditProofCertRenewed(t *testing.T) {
+	ctx := context.Background()
+	g := newRenewRig(t, true)
+	m, first := g.issueOne("app.example.com")
+	m.round(ctx) // gives the certificate its renewal clock
+	due := g.live("app.example.com")
+	g.clock.Advance(due.RenewAt.Sub(g.clock.Now()))
+	m.round(ctx)
+	if end := g.awaitEnd(); end.outcome != OutcomeRenewed {
+		t.Fatalf("the run ended %q, want renewed", end.outcome)
+	}
+	row := g.live("app.example.com")
+
+	rows := audittest.Rows(t, g.st, audit.ActionIngressCertRenewed)
+	got := proofRow(t, rows, audit.ActionIngressCertRenewed)
+	proofSystemRow(t, got, audit.ResultSuccess, first.ID, "env-1")
+	proofDetails(t, got, map[string]string{"hostname": "app.example.com", "issuer": IssuerProduction, "basis": string(acme.BasisHalf)})
+	audittest.AssertNoSecrets(t, rows, keySecrets(t, g, row)...)
+}
+
+// An expired certificate nobody refers to is deleted past the grace: one success row says why and where it came from.
+func TestAuditProofCertDeleted(t *testing.T) {
+	ctx := context.Background()
+	g := newRenewRig(t, true)
+	m, first := g.issueOne("app.example.com")
+	secrets := keySecrets(t, g, first)
+	g.claim()
+	m.round(ctx)
+	g.clock.Advance(Grace + time.Minute)
+	m.round(ctx)
+	g.clock.Advance(first.NotAfter.Sub(g.clock.Now()) + time.Minute)
+	m.round(ctx)
+	if !g.gone("app.example.com") {
+		t.Fatal("the expired unreferenced certificate is still there")
+	}
+
+	rows := audittest.Rows(t, g.st, audit.ActionIngressCertDeleted)
+	got := proofRow(t, rows, audit.ActionIngressCertDeleted)
+	proofSystemRow(t, got, audit.ResultSuccess, first.ID, "env-1")
+	proofDetails(t, got, map[string]string{"hostname": "app.example.com", "reason": DeletedExpiredUnreferenced, "source": SourceACME})
+	audittest.AssertNoSecrets(t, rows, secrets...)
+}
+
+// A hostname released by one environment and claimed by another under the same issuer moves the certificate: one success
+// row in the new environment names both ends.
+func TestAuditProofCertMoved(t *testing.T) {
+	ctx := context.Background()
+	g := newMgrRig(t, nil, "")
+	d2 := g.secondEnv(ingress.IssuerProduction, rigToken)
+	m, first := g.issueOne("app.example.com")
+	secrets := keySecrets(t, g, first)
+	g.claim()
+	m.round(ctx)
+	g.claimIn("env-2", "stack-2", "app.example.com")
+	m.round(ctx)
+
+	rows := audittest.Rows(t, g.st, audit.ActionIngressCertMoved)
+	got := proofRow(t, rows, audit.ActionIngressCertMoved)
+	proofSystemRow(t, got, audit.ResultSuccess, first.ID, "env-2")
+	proofDetails(t, got, map[string]string{
+		"hostname": "app.example.com", "from_env": "env-1", "to_env": "env-2", "from_domain": g.domain.ID, "to_domain": d2.ID,
+		"outcome": movedRepointed, "cause": causeClaim,
+	})
+	audittest.AssertNoSecrets(t, rows, secrets...)
 }
