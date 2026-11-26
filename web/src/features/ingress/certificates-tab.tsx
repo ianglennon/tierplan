@@ -16,13 +16,20 @@ import {
   ingressCertificatesQuery,
 } from "@/api/ingress-certs";
 import { CertExpiry } from "@/components/cert-expiry";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime, useNow } from "@/components/relative-time";
 import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -34,6 +41,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { RequestCertificateDialog } from "@/features/ingress/certificate-dialogs";
 import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -99,7 +107,9 @@ export function CertificatesTab({
   const query = useQuery(ingressCertificatesQuery(envId));
   const budget = useQuery(ingressCertificateBudgetQuery(envId));
   const status = useQuery(ingressStatusQuery(envId));
-  const manage = useNeeds("ingress.manage", envId).allowed;
+  const needs = useNeeds("ingress.manage", envId);
+  const manage = needs.allowed;
+  const [requesting, setRequesting] = useState(false);
   const [filter, setFilter] = useState(host ?? "");
   const [showing, setShowing] = useState(host);
   const [all, setAll] = useState(false);
@@ -138,6 +148,18 @@ export function CertificatesTab({
           </EmptyTitle>
           <EmptyDescription>{t("ingressPage.certs.empty.body")}</EmptyDescription>
         </EmptyHeader>
+        {manage ? (
+          <EmptyContent>
+            <Button type="button" className="max-md:h-11" onClick={() => setRequesting(true)}>
+              {t("ingressPage.certs.request.button")}
+            </Button>
+            <RequestCertificateDialog
+              envId={envId}
+              open={requesting}
+              onOpenChange={setRequesting}
+            />
+          </EmptyContent>
+        ) : null}
       </Empty>
     );
   }
@@ -185,7 +207,19 @@ export function CertificatesTab({
             {t("ingressPage.certs.showing", { host: showing })}
           </Button>
         ) : null}
+        <NeedsTooltip reason={needs.reason}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="max-md:h-11 md:ms-auto"
+            onClick={() => setRequesting(true)}
+          >
+            {t("ingressPage.certs.request.button")}
+          </Button>
+        </NeedsTooltip>
       </div>
+      <RequestCertificateDialog envId={envId} open={requesting} onOpenChange={setRequesting} />
       <Table aria-label={t("ingressPage.certs.label")}>
         <TableHeader>
           <TableRow>

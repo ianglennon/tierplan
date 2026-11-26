@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
-import { IngressLoadError, ingressKey, ingressRefetchInterval } from "@/api/ingress";
+import {
+  IngressActionError,
+  IngressLoadError,
+  ingressKey,
+  ingressRefetchInterval,
+} from "@/api/ingress";
 import { readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 
@@ -60,5 +65,95 @@ export function ingressCertificateBudgetQuery(envId: string) {
     },
     retry: false,
     refetchInterval: () => ingressRefetchInterval(false, visible()),
+  });
+}
+
+// The certificates and the weekly budget are read together, and every write to one changes the other, so a
+// successful write refreshes both at once (D-12).
+function useRefreshCertificates(envId: string) {
+  const queryClient = useQueryClient();
+  return async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ingressCertificatesQuery(envId).queryKey }),
+      queryClient.invalidateQueries({ queryKey: ingressCertificateBudgetQuery(envId).queryKey }),
+    ]);
+  };
+}
+
+// refused is a write the server answered with a problem: its status and its own sentence, as sent.
+function refused(error: unknown, response: Response): IngressActionError {
+  const problem = readProblem(error, response);
+  return new IngressActionError(problem.status, problem.detail);
+}
+
+// useRequestCertificate asks for a certificate for a hostname ahead of any stack's claim (D-12). It needs
+// ingress.manage, which the server checks.
+export function useRequestCertificate(envId: string) {
+  const refresh = useRefreshCertificates(envId);
+  return useMutation({
+    mutationFn: async (hostname: string): Promise<IngressCert> => {
+      const { data, error, response } = await api.POST("/api/env/{envId}/ingress/certificates", {
+        params: { path: { envId } },
+        body: { hostname },
+      });
+      if (!data) throw refused(error, response);
+      return data;
+    },
+    onSuccess: refresh,
+  });
+}
+
+// useRetryCertificate orders a failed certificate again now instead of at its next planned attempt.
+export function useRetryCertificate(envId: string) {
+  const refresh = useRefreshCertificates(envId);
+  return useMutation({
+    mutationFn: async (certId: string): Promise<void> => {
+      const { error, response } = await api.POST(
+        "/api/env/{envId}/ingress/certificates/{certId}/retry",
+        { params: { path: { envId, certId } } },
+      );
+      if (!response.ok) throw refused(error, response);
+    },
+    onSuccess: refresh,
+  });
+}
+
+export interface CertificateUpload {
+  hostname: string;
+  certificatePem: string;
+  privateKeyPem: string;
+}
+
+// useUploadCertificate sends a certificate chain and its private key for a hostname. The key is in the request
+// body and nowhere else: the mutation is dropped from the cache the moment it settles (gcTime 0), so the variables
+// that hold it do not outlive the dialog (T-27-58).
+export function useUploadCertificate(envId: string) {
+  const refresh = useRefreshCertificates(envId);
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (upload: CertificateUpload): Promise<void> => {
+      const { error, response } = await api.POST("/api/env/{envId}/ingress/certificates/upload", {
+        params: { path: { envId } },
+        body: upload,
+      });
+      if (!response.ok) throw refused(error, response);
+    },
+    onSuccess: refresh,
+  });
+}
+
+// useSwitchCertificateToACME returns an uploaded hostname to Let's Encrypt.
+export function useSwitchCertificateToACME(envId: string) {
+  const refresh = useRefreshCertificates(envId);
+  return useMutation({
+    mutationFn: async (certId: string): Promise<IngressCert> => {
+      const { data, error, response } = await api.POST(
+        "/api/env/{envId}/ingress/certificates/{certId}/acme",
+        { params: { path: { envId, certId } } },
+      );
+      if (!data) throw refused(error, response);
+      return data;
+    },
+    onSuccess: refresh,
   });
 }

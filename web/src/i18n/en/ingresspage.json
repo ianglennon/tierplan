@@ -143,7 +143,64 @@
         "noHeadroom": "TierPlan orders no more until a slot opens <time/>.",
         "shared": "Other names under {{domain}} share this budget."
       },
-      "showing": "Showing {{host}}. Show all"
+      "showing": "Showing {{host}}. Show all",
+      "request": {
+        "button": "Request certificate",
+        "title": "Request a certificate",
+        "hostname": "Hostname",
+        "helper": "Under a domain registered on the Domains tab. TierPlan orders it before a stack claims the name.",
+        "submit": "Request certificate",
+        "discard": "Discard request",
+        "done": "Requested a certificate for {{host}}."
+      },
+      "menu": {
+        "actionsFor": "Actions for {{host}}",
+        "view": "View details",
+        "retry": "Retry now",
+        "upload": "Upload certificate…",
+        "switch": "Switch back to Let's Encrypt…"
+      },
+      "retryDone": "Retrying {{host}}.",
+      "upload": {
+        "title": "Upload a certificate for {{host}}",
+        "chain": "Certificate chain (PEM)",
+        "key": "Private key (PEM)",
+        "helper": "TierPlan stores the key sealed and never shows it again.",
+        "submit": "Upload certificate",
+        "discard": "Discard upload"
+      },
+      "switch": {
+        "title": "Switch {{host}} back to Let's Encrypt?",
+        "body": "TierPlan orders a certificate from Let's Encrypt for this name. The uploaded certificate keeps serving until the new one is ready or it expires.",
+        "keep": "Keep uploaded certificate",
+        "confirm": "Switch to Let's Encrypt",
+        "done": "Ordering a Let's Encrypt certificate for {{host}}."
+      },
+      "sheet": {
+        "title": "Certificate details",
+        "source": "Source",
+        "sourceAcme": "Let's Encrypt",
+        "issuer": "Issuer",
+        "issuerProduction": "Production",
+        "issuerStaging": "Staging",
+        "state": "State",
+        "ready": "Ready",
+        "yes": "Yes",
+        "no": "No",
+        "issued": "Issued",
+        "expires": "Expires",
+        "renewal": "Next renewal",
+        "failures": "Consecutive failures",
+        "nextAttempt": "Next attempt",
+        "waitingUntil": "Waiting until",
+        "requested": "Requested",
+        "requestedBy": "by {{user}}",
+        "unreferenced": "Unreferenced since",
+        "stopped": "Stopped reason",
+        "retired": "Retired",
+        "retiredReason": "Retired because",
+        "lastError": "Last error"
+      }
     }
   }
 }
