@@ -1457,7 +1457,7 @@ export interface paths {
         };
         /**
          * List the certificates of an environment
-         * @description Every per-hostname certificate of the environment, live and retired, by hostname: its issuer (staging flagged), source, state and the state in words, whether it is ready to serve, when it was issued and expires, when it renews next and on what basis, its last failure (class, a fixed hint, the capped detail and the time), the failures in a row, when the next attempt is, how long the certificate authority asked TierPlan to wait, why a queued certificate waits (a code, one sentence, the figures and the next slot), who asked for it and when, since when nothing refers to it, and why a retired one was retired. No private key and no sealed value is ever returned. Needs ingress.manage on the environment (its Admin).
+         * @description Every per-hostname certificate of the environment, live and retired, by hostname: its issuer (staging flagged), source, state and the state in words, whether it is ready to serve, when it was issued and expires, when it renews next and on what basis, its last failure (class, a fixed hint, the time and, for callers who hold ingress.manage, the capped detail), the failures in a row, when the next attempt is, how long the certificate authority asked TierPlan to wait, why a queued certificate waits (a code, one sentence, the figures and the next slot), who asked for it (for callers who hold ingress.manage) and when, since when nothing refers to it, and why a retired one was retired. No private key and no sealed value is ever returned. Needs ingress.read on the environment (Viewer).
          */
         get: operations["listIngressCertificates"];
         put?: never;
@@ -1481,7 +1481,7 @@ export interface paths {
         };
         /**
          * Read the weekly new-certificate budget
-         * @description One row per registered domain and issuer the environment's domains use: the new certificates used in the last 7 days (orders in flight and TierPlan's own certificate included), where TierPlan stops (cap), the certificate authority's own limit, the headroom, when the next slot opens, the environment's own domains under it, and whether the budget is shared with another domain or TierPlan's own address, which is never named. The counts are install-wide. Needs ingress.manage on the environment (its Admin).
+         * @description One row per registered domain and issuer the environment's domains use: the new certificates used in the last 7 days (orders in flight and TierPlan's own certificate included), where TierPlan stops (cap), the certificate authority's own limit, the headroom, when the next slot opens, the environment's own domains under it, and whether the budget is shared with another domain or TierPlan's own address, which is never named. The counts are install-wide. Needs ingress.read on the environment (Viewer).
          */
         get: operations["getIngressCertificateBudget"];
         put?: never;
@@ -1601,7 +1601,7 @@ export interface paths {
         };
         /**
          * List the domains of an environment
-         * @description The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS token is saved and when it last changed. The token is never returned. Needs ingress.manage on the environment (its Admin).
+         * @description The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS token is saved and when it last changed. The token is never returned. Needs ingress.read on the environment (Viewer).
          */
         get: operations["listIngressDomains"];
         put?: never;
@@ -1789,7 +1789,7 @@ export interface paths {
         };
         /**
          * Show which ingress join token an environment has
-         * @description Whether the environment has an ingress join token, its generation, when and by whom it was made, and whether it is disabled. Never the token: it is stored only as a hash. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.manage on the environment (its Admin).
+         * @description Whether the environment has an ingress join token, its generation, when and by whom it was made, and whether it is disabled. Never the token: it is stored only as a hash. createdBy is filled only for a caller who also holds ingress.manage on the environment. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.read on the environment (Viewer).
          */
         get: operations["getIngressJoinToken"];
         put?: never;
@@ -1817,7 +1817,7 @@ export interface paths {
         };
         /**
          * List the ingress nodes of an environment
-         * @description Every node that enrolled with the environment's ingress join token, revoked ones included, oldest first: its name, the swarm node it runs on, status, supervisor version and bundle schemas, the bundle it applied and the one it refused, its proxy health, when it was last seen, whether it is connected now, whether it is in sync with the bundle it should hold (a bundle still on its way is pending, not a failure), whether it is incompatible with this server, and for a revoked node who revoked it, why, and the hostnames whose keys it held. Never carries a key or a token. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.manage on the environment (its Admin).
+         * @description Every node that enrolled with the environment's ingress join token, revoked ones included, oldest first: its name, the swarm node it runs on, status, supervisor version and bundle schemas, the bundle it applied and the one it refused, its proxy health, when it was last seen, whether it is connected now, whether it is in sync with the bundle it should hold (a bundle still on its way is pending, not a failure), whether it is incompatible with this server, and for a revoked node who revoked it, why, and the hostnames whose keys it held. currentBundleId is the bundle the nodes should hold now. heldHostnames, revokeReason and revokedBy are filled only for a caller who also holds ingress.manage on the environment. Never carries a key or a token. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.read on the environment (Viewer).
          */
         get: operations["listIngressNodes"];
         put?: never;
@@ -1868,6 +1868,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/routes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the routes of an environment and what each is doing now
+         * @description Answers every route the environment's stacks hold, each with its hostname, path, owner, backend and the state the stack page reads, and the five conditions behind it: claim held, network attached, backend healthy, certificate ready and applied. The state and the conditions are worked out when asked, by the same call as the stack page's routes, from the stored claims, the engine, the proxy's current bundle and what each active node applied; nothing is stored. When the engine cannot be read the state is unknown and the conditions it decides are unknown. The answer never carries a certificate, a key or a token, and never another environment's names. Needs ingress.read on the environment (Viewer).
+         */
+        get: operations["listIngressRoutes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/ingress/status": {
         parameters: {
             query?: never;
@@ -1897,7 +1917,7 @@ export interface paths {
         };
         /**
          * Read the virtual IP status of a swarm
-         * @description Says which address the swarm's ingress answers on and which node holds it (none, one or many), when it last lost its holder, how each node that can hold it stands (its VRRP state, whether its proxy is ready, its keepalived task, its last fault and when TierPlan last heard from it), whether each manager allows privileged services, whether another router uses the router ID, which nodes have clock trouble, the authentication window in seconds and the last pass that kept the service as wanted. A swarm with no virtual IP answers 404 vip_not_enabled. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         * @description Says which address the swarm's ingress answers on and which node holds it (none, one or many), when it last lost its holder, how each node that can hold it stands (its VRRP state, whether its proxy is ready, its keepalived task, its last fault and when TierPlan last heard from it), whether each manager allows privileged services, whether another router uses the router ID, which nodes have clock trouble, the authentication window in seconds and the last pass that kept the service as wanted. A swarm with no virtual IP answers 404 vip_not_enabled. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).
          */
         get: operations["getIngressVIP"];
         /**
@@ -1949,7 +1969,7 @@ export interface paths {
         };
         /**
          * List the moves of a swarm's virtual IP
-         * @description Pages the history of the address moving from one node to another, newest first by time and, for moves at the same instant, newest recorded first. limit is 1 to 100 (50 by default); before is the next of the previous page, an opaque cursor, and a value that is not one is 422 vip_bad_cursor. next is absent on the last page. A swarm with no moves answers an empty list. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         * @description Pages the history of the address moving from one node to another, newest first by time and, for moves at the same instant, newest recorded first. limit is 1 to 100 (50 by default); before is the next of the previous page, an opaque cursor, and a value that is not one is 422 vip_bad_cursor. next is absent on the last page. A swarm with no moves answers an empty list. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).
          */
         get: operations["listIngressVIPMoves"];
         put?: never;
@@ -10476,7 +10496,7 @@ export interface components {
              * @description When an Admin last asked for the certificate ahead of a claim
              */
             requestedAt?: string;
-            /** @description The ID of the user who asked for it */
+            /** @description The ID of the user who asked for it. Filled only for callers who hold ingress.manage on the environment; empty otherwise */
             requestedBy?: string;
             /**
              * Format: date-time
@@ -10559,7 +10579,7 @@ export interface components {
             at?: string;
             /** @description The class of the failure, such as dns_token_invalid or rate_limited */
             class: string;
-            /** @description What the certificate authority or DNS provider answered, capped in length. Only Admins read it here */
+            /** @description What the certificate authority or DNS provider answered, capped in length. Filled only for callers who hold ingress.manage on the environment; empty otherwise */
             detail?: string;
             /** @description One fixed sentence for a person about this class of failure */
             hint: string;
@@ -10570,7 +10590,7 @@ export interface components {
              * @description Where TierPlan stops ordering, which is below the certificate authority's own limit
              */
             cap: number;
-            /** @description Why the certificate waits: no_account, rate_limit_new, rate_limit_duplicate, rate_limit_orders, ca_hold or concurrency */
+            /** @description Why the certificate waits: no_account, rate_limit_new, rate_limit_duplicate, rate_limit_orders, ca_rate_limited or concurrency */
             code: string;
             /** @description The registered domain the budget is counted for */
             domain?: string;
@@ -10640,7 +10660,7 @@ export interface components {
              * @description When an Admin last asked for the certificate ahead of a claim
              */
             requestedAt?: string;
-            /** @description The ID of the user who asked for it */
+            /** @description The ID of the user who asked for it. Filled only for callers who hold ingress.manage on the environment; empty otherwise */
             requestedBy?: string;
             /**
              * Format: date-time
@@ -10856,7 +10876,7 @@ export interface components {
              * @description When the token was made
              */
             createdAt?: string;
-            /** @description Who made it, as recorded in the audit log */
+            /** @description Who made it, as recorded in the audit log. Filled only for a caller who holds ingress.manage on the environment; empty otherwise */
             createdBy: string;
             /** @description True while the token enrols nobody, until the next rotation */
             disabled: boolean;
@@ -10885,7 +10905,7 @@ export interface components {
             createdAt?: string;
             /** @description What the node last reported about its proxy: ok, unhealthy, or empty before it has reported */
             health: string;
-            /** @description Every hostname whose private key this node was ever sent, sorted */
+            /** @description Every hostname whose private key this node was ever sent, sorted. Filled only for a caller who holds ingress.manage on the environment; empty otherwise */
             heldHostnames: string[] | null;
             /** @description The node ID, used in the path of the revoke */
             id: string;
@@ -10904,14 +10924,14 @@ export interface components {
             rejectedBundleId: string;
             /** @description Why it refused that bundle, as a stable code */
             rejectedReason: string;
-            /** @description The reason given when it was revoked */
+            /** @description The reason given when it was revoked. Filled only for a caller who holds ingress.manage on the environment; empty otherwise */
             revokeReason: string;
             /**
              * Format: date-time
              * @description When the node was revoked
              */
             revokedAt?: string;
-            /** @description Who revoked it, as recorded in the audit log */
+            /** @description Who revoked it, as recorded in the audit log. Filled only for a caller who holds ingress.manage on the environment; empty otherwise */
             revokedBy: string;
             /** @description The bundle schemas the node said it can apply; empty until it has said hello */
             schemas: number[] | null;
@@ -10931,6 +10951,8 @@ export interface components {
             version: string;
         };
         IngressNodeListBody: {
+            /** @description The bundle the environment's nodes should hold now; empty when none has been built. Bundle IDs are content hashes, not ordered */
+            currentBundleId: string;
             /** @description One entry per node, oldest first, revoked nodes included */
             items: components["schemas"]["IngressNodeBody"][] | null;
         };
@@ -10990,6 +11012,57 @@ export interface components {
         IngressResumeOutputBody: {
             /** @description True when the environment was paused and is now resumed; false when it was not paused */
             resumed: boolean;
+        };
+        IngressRouteBody: {
+            /** @description The route's five conditions in their fixed order; empty for a claim, a reserved name and a system route */
+            conditions: components["schemas"]["RouteConditionBody"][] | null;
+            /** @description The row's hostname */
+            hostname: string;
+            /**
+             * @description route: a route a stack serves. claim: a hostname a stack holds with no route to serve. reserved: a hostname reserved under a domain that no stack holds
+             * @enum {string}
+             */
+            kind: "route" | "claim" | "reserved";
+            /**
+             * @description stack: a stack owns the hostname. system: TierPlan itself does. Empty for a reserved name, which nothing owns
+             * @enum {string}
+             */
+            ownerKind: "stack" | "system" | "";
+            /** @description The path prefix a route serves, / for the whole host; empty for a claim or a reserved name */
+            path: string;
+            /**
+             * Format: int64
+             * @description The port the proxy sends the route's requests to; 0 for a claim or a reserved name
+             */
+            port: number;
+            /** @description For waiting_certificate, why the certificate is not served: no_certificate or certificate_not_ready. Empty for every other state */
+            reason: string;
+            /**
+             * @description The scheme the proxy speaks to the backend; empty for a claim or a reserved name
+             * @enum {string}
+             */
+            scheme: "http" | "https" | "";
+            /** @description The service's name in the compose file; empty for a claim or a reserved name */
+            service: string;
+            /** @description The ID of the stack that owns the row; empty for a reserved name and for a system claim */
+            stackId: string;
+            /** @description The name of that stack; empty when stackId is */
+            stackName: string;
+            /**
+             * @description What the route is doing now, the same state the stack page reads: serving, pending, waiting_certificate, backend_not_running, not_attached or ingress_off. unknown: the engine could not be read, so what runs is not known. Empty for a claim, a reserved name and a system route. Derived when read, stored nowhere
+             * @enum {string}
+             */
+            state: "serving" | "pending" | "waiting_certificate" | "backend_not_running" | "not_attached" | "ingress_off" | "unknown" | "";
+            /** @description True when state is backend_not_running because the stack is stopped */
+            stopped: boolean;
+            /** @description True when the proxy removes the path prefix before it forwards a request */
+            strip: boolean;
+        };
+        IngressRoutesBody: {
+            /** @description True while the environment's ingress is switched on */
+            enabled: boolean;
+            /** @description The rows of the environment, never another environment's: the routes in hostname, path then service order, then the claims with no route in hostname order, then the reserved names in hostname order; empty when there are none */
+            routes: components["schemas"]["IngressRouteBody"][] | null;
         };
         IngressStatusBody: {
             /** @description True while the proxy writes an access log */
@@ -13806,6 +13879,18 @@ export interface components {
             /** @description The owner of the file; kept */
             uid: string;
         };
+        RouteAppliedBody: {
+            /**
+             * Format: int64
+             * @description The active ingress nodes that applied the current bundle
+             */
+            nodes: number;
+            /**
+             * Format: int64
+             * @description The active ingress nodes the environment has
+             */
+            total: number;
+        };
         RouteCheckBody: {
             /** @description With unmounted on a swarm agent, the command that adds the route mount to the agent service. Absent otherwise: the wording of the standalone and local fixes is the interface's */
             fix?: string;
@@ -13820,6 +13905,24 @@ export interface components {
              * @enum {string}
              */
             state: "ok" | "old_agent" | "unmounted" | "offline" | "failed";
+        };
+        RouteConditionBody: {
+            /** @description How many active ingress nodes applied the bundle; present on the applied condition only */
+            applied?: components["schemas"]["RouteAppliedBody"];
+            /**
+             * @description Which condition this is. claim_held: the stack holds the claim the route sits under. network_attached: the service is on the ingress network. backend_healthy: the service runs at least one replica. certificate_ready: the hostname has a certificate the bundle can carry. applied: every active ingress node applied a bundle that holds the route. A route's conditions always come in this order
+             * @enum {string}
+             */
+            code: "claim_held" | "network_attached" | "backend_healthy" | "certificate_ready" | "applied";
+            /** @description A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the certificate's own failure hint */
+            message: string;
+            /** @description Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle */
+            reason: string;
+            /**
+             * @description ready: the condition holds. not_ready: it was read and does not hold. unknown: what it depends on was not read, for example the engine could not be reached or ingress is off; it is never reported ready
+             * @enum {string}
+             */
+            state: "ready" | "not_ready" | "unknown";
         };
         RunningContainerBody: {
             /** @description The container's ID */
@@ -16655,6 +16758,8 @@ export interface components {
             revision?: number;
         };
         StackRouteBody: {
+            /** @description The route's five conditions in a fixed order: claim_held, network_attached, backend_healthy, certificate_ready, applied. They are derived by the same call as state, so the Ingress page's route list answers the same ones for the same route */
+            conditions: components["schemas"]["RouteConditionBody"][] | null;
             /** @description The route's hostname */
             hostname: string;
             /** @description The path prefix the route serves, / for the whole host */
@@ -22255,6 +22360,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngressResumeOutputBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listIngressRoutes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressRoutesBody"];
                 };
             };
             /** @description Error */
