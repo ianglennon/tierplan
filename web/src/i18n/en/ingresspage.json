@@ -1,0 +1,29 @@
+{
+  "ingressPage": {
+    "page": {
+      "title": "Ingress",
+      "description": "Hostnames this environment serves, their certificates, and the nodes that serve them."
+    },
+    "tabs": {
+      "label": "Ingress sections",
+      "routes": "Routes"
+    },
+    "routes": {
+      "label": "Routes",
+      "loading": "Loading routes",
+      "error": "Couldn't read the routes.",
+      "retry": "Retry reading routes",
+      "columns": {
+        "route": "Route",
+        "stack": "Stack",
+        "status": "Status",
+        "conditions": "Conditions"
+      },
+      "target": "{{scheme}} to port {{port}}",
+      "targetStrip": "{{scheme}} to port {{port}}, path prefix removed",
+      "ready": "{{ready}} of 5 ready",
+      "none": "—",
+      "show": "Show conditions for {{host}}"
+    }
+  }
+}
