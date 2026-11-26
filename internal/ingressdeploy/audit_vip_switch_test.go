@@ -110,8 +110,8 @@ func wantSuccessRow(t *testing.T, rows []audit.Row, action string, details ...st
 }
 
 // TestAuditProofVIPChangedFailure is the proof of A-01 class F for a virtual IP change: a change whose service update is
-// refused, and one whose wait ends past its deadline with a node still on the old configuration, each log one
-// ingress.vip_changed failure row with the step and its code, none of the engine's words and no key.
+// refused logs one ingress.vip_changed failure row with the step and its code, none of the engine's words and no key. A
+// change whose wait ends past its deadline is applied and saved, so it logs no failure row, only the success row.
 func TestAuditProofVIPChangedFailure(t *testing.T) {
 	const newAddress = "10.9.0.60/24"
 	t.Run("the service update is refused", func(t *testing.T) {
@@ -134,7 +134,7 @@ func TestAuditProofVIPChangedFailure(t *testing.T) {
 		}
 		audittest.AssertNoSecrets(t, rows, switchCanary, keyHex)
 	})
-	t.Run("the wait runs out", func(t *testing.T) {
+	t.Run("the wait runs out but the change is saved", func(t *testing.T) {
 		f := newVIPDisableFix(t, vipDisableOpts{})
 		f.enabled()
 		keyHex := f.vipKeyHex()
@@ -145,11 +145,11 @@ func TestAuditProofVIPChangedFailure(t *testing.T) {
 			t.Fatalf("the wait item = %+v, want failed", it)
 		}
 
-		// The swarm took the address and the job saved it, so the success row of the change stays beside the failure row.
+		// The swarm took the address and the job saved it, so the change is one success row and never a failure row besides it.
 		rows := audittest.Rows(t, f.st, audit.ActionIngressVIPChanged)
-		wantFailureRow(t, rows, f.envID, audit.ActionIngressVIPChanged, ingressdeploy.ItemVIPChangeWait, ingressdeploy.CodeVIPChangeFailed)
-		if got := f.auditCountResult(audit.ActionIngressVIPChanged, audit.ResultSuccess); got != 1 {
-			t.Errorf("%d success rows, want the saved change's one", got)
+		wantSuccessRow(t, rows, audit.ActionIngressVIPChanged, "address", "router_id")
+		if n := f.auditCountResult(audit.ActionIngressVIPChanged, audit.ResultFailure); n != 0 {
+			t.Errorf("%d failure rows for a change that was applied: %+v", n, rows)
 		}
 		audittest.AssertNoSecrets(t, rows, keyHex)
 	})
@@ -208,8 +208,8 @@ func TestAuditProofVIPDisabled(t *testing.T) {
 	wantNoKeyShape(t, rows)
 }
 
-// TestCancelledVIPSwitchIsAudited: a change cancelled while it waits for the nodes logs one ingress.vip_changed failure row
-// whose reason is cancelled, beside the success row of the address the swarm had taken and the job saved.
+// TestCancelledVIPSwitchIsAudited: a change cancelled while it waits for the nodes ends its wait item cancelled, and the swarm
+// had taken the address and the job saved it, so its one audit row is the success row and there is no failure row.
 func TestCancelledVIPSwitchIsAudited(t *testing.T) {
 	f := newVIPDisableFix(t, vipDisableOpts{})
 	ctx := testsupport.Context(t)
@@ -236,6 +236,9 @@ func TestCancelledVIPSwitchIsAudited(t *testing.T) {
 	}
 
 	rows := audittest.Rows(t, f.st, audit.ActionIngressVIPChanged)
-	wantFailureRow(t, rows, f.envID, audit.ActionIngressVIPChanged, ingressdeploy.ItemVIPChangeWait, jobs.CodeCancelled)
+	wantSuccessRow(t, rows, audit.ActionIngressVIPChanged, "address", "router_id")
+	if n := f.auditCountResult(audit.ActionIngressVIPChanged, audit.ResultFailure); n != 0 {
+		t.Errorf("%d failure rows for a change that was applied: %+v", n, rows)
+	}
 	audittest.AssertNoSecrets(t, rows, keyHex)
 }
