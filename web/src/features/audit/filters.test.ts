@@ -876,6 +876,8 @@ describe("actionLabel (ingress)", () => {
     "ingress.wipe_done",
     "ingress.deploy_paused",
     "ingress.deploy_resumed",
+    "ingress.claimed",
+    "ingress.vip_moved",
   ];
 
   it("labels every ingress action and lists it in the Action filter", () => {

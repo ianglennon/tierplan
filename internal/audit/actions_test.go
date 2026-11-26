@@ -610,6 +610,49 @@ func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 	}
 }
 
+// phase27DetailKeys pins the detail keys of the two actions Phase 27 closes the ingress list with (D-21, D-22). Neither
+// holds a secret word, so the whole table is recorded through the real Writer.
+var phase27DetailKeys = map[string][]string{
+	audit.ActionIngressClaimed:  {"stack", "hostnames", "count"},
+	audit.ActionIngressVIPMoved: {"from", "to", "reason"},
+}
+
+func TestEveryPhase27ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase27DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if len(phase27DetailKeys) != 2 {
+		t.Fatalf("phase27DetailKeys pins %d actions, want the 2 Phase 27 actions", len(phase27DetailKeys))
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase27DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"ingress.claimed":   audit.ActionIngressClaimed,
+		"ingress.vip_moved": audit.ActionIngressVIPMoved,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+		if strings.Count(constant, ".") != 1 {
+			t.Errorf("%q must have exactly one dot so the audit page finds its label", constant)
+		}
+	}
+}
+
 // The four virtual IP actions can never hold the VRRP key under any name (A-14, D-03, T-26-07): a detail key that is or
 // contains key, secret, token or password is refused by Record and nothing is written, while the documented keys
 // (address, router_id, generation, node, holder, outcome) record. The key generation is a number under "generation".

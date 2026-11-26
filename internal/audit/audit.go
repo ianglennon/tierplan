@@ -368,6 +368,9 @@ const (
 	// A stack's claim on its hostnames was replaced or released (Phase 20 onwards).
 	ActionIngressClaimReplaced = "ingress.claim_replaced"
 	ActionIngressClaimReleased = "ingress.claim_released"
+	// A stack claimed hostnames it did not hold (Phase 27, D-22). Details stack, hostnames, count. A refused claim is the
+	// same action with Result failure, so the first claim of a hostname is told apart from a replacement of a held one.
+	ActionIngressClaimed = "ingress.claimed"
 	// A certificate for a hostname was issued, or its issue failed (Phase 22 onwards).
 	ActionIngressCertIssued = "ingress.cert_issued"
 	ActionIngressCertFailed = "ingress.cert_failed"
@@ -398,6 +401,9 @@ const (
 	ActionIngressVIPDisabled = "ingress.vip_disabled"
 	// vip_handoff: the address was moved off a node before that node was drained (details node, holder, outcome).
 	ActionIngressVIPHandoff = "ingress.vip_handoff"
+	// vip_moved: the address moved between nodes, written by system:ingress in the move's transaction (Phase 27, D-21;
+	// details from, to, reason). Never the key.
+	ActionIngressVIPMoved = "ingress.vip_moved"
 	// The node lifecycle and the ingress join token (Phase 22). A refused enrolment or connect is
 	// ingress.node_enrol_refused (D-35: one action for both, told apart by the "mode" detail, "enrol" or "connect"),
 	// written by an anonymous actor through a throttle and never with an environment, because the environment named in
