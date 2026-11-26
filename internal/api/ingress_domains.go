@@ -412,9 +412,9 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		Path:        "/api/env/{envId}/ingress/domains",
 		Summary:     "List the domains of an environment",
 		Description: "The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS " +
-			"token is saved and when it last changed. The token is never returned. Needs ingress.manage on the environment (its Admin).",
+			"token is saved and when it last changed. The token is never returned. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *ListIngressDomainsInput) (*IngressDomainsOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *ListIngressDomainsInput) (*IngressDomainsOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
