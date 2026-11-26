@@ -167,7 +167,8 @@
         "key": "Private key (PEM)",
         "helper": "TierPlan stores the key sealed and never shows it again.",
         "submit": "Upload certificate",
-        "discard": "Discard upload"
+        "discard": "Discard upload",
+        "done": "Uploaded a certificate for {{host}}."
       },
       "switch": {
         "title": "Switch {{host}} back to Let's Encrypt?",

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -185,5 +185,276 @@ describe("requesting a certificate ahead of a claim", () => {
     fireEvent.click(button);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getAllByText("Needs Admin").length).toBeGreaterThan(0);
+  });
+});
+
+const KEY = "-----BEGIN PRIVATE KEY-----\nSECRETKEYBYTES0123456789\n-----END PRIVATE KEY-----";
+const CHAIN = "-----BEGIN CERTIFICATE-----\nCHAINBYTES\n-----END CERTIFICATE-----";
+
+async function openMenu(host: string) {
+  const button = await screen.findByRole("button", { name: `Actions for ${host}` });
+  fireEvent.keyDown(button, { key: "Enter" });
+  return screen.findByRole("menu");
+}
+
+const itemNames = (menu: HTMLElement) =>
+  within(menu)
+    .getAllByRole("menuitem")
+    .map((i) => i.textContent);
+
+async function openUpload(host = "app.example.com") {
+  const menu = await openMenu(host);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Upload certificate…" }));
+  return screen.findByRole("dialog");
+}
+
+function fillUpload() {
+  fireEvent.change(screen.getByLabelText("Certificate chain (PEM)"), { target: { value: CHAIN } });
+  fireEvent.change(screen.getByLabelText("Private key (PEM)"), { target: { value: KEY } });
+}
+
+describe("the row menu", () => {
+  it("offers Retry now only for failed and renewal_failed rows", async () => {
+    items = [
+      cert({
+        id: "a",
+        hostname: "a.example.com",
+        state: "failed",
+        stateText: "Failed",
+        ready: false,
+      }),
+      cert({
+        id: "b",
+        hostname: "b.example.com",
+        state: "renewal_failed",
+        stateText: "Renewal failed",
+      }),
+      cert({ id: "c", hostname: "c.example.com" }),
+    ];
+    mount();
+    expect(itemNames(await openMenu("a.example.com"))).toContain("Retry now");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(itemNames(await openMenu("b.example.com"))).toContain("Retry now");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(itemNames(await openMenu("c.example.com"))).not.toContain("Retry now");
+  });
+
+  it("posts the retry and says so in a toast", async () => {
+    items = [
+      cert({
+        id: "a",
+        hostname: "a.example.com",
+        state: "failed",
+        stateText: "Failed",
+        ready: false,
+      }),
+    ];
+    answer = (req) =>
+      req.path.endsWith("/retry") ? new Response(null, { status: 202 }) : undefined;
+    mount();
+    fireEvent.click(
+      within(await openMenu("a.example.com")).getByRole("menuitem", { name: "Retry now" }),
+    );
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.path).toBe(`/api/env/${ENV}/ingress/certificates/a/retry`);
+    expect(await screen.findByText("Retrying a.example.com.")).toBeTruthy();
+  });
+
+  it("puts the server's detail in a destructive toast when the retry is refused", async () => {
+    items = [
+      cert({
+        id: "a",
+        hostname: "a.example.com",
+        state: "failed",
+        stateText: "Failed",
+        ready: false,
+      }),
+    ];
+    answer = () =>
+      problem(409, "ingress_cert_blocked", "The certificate is blocked by a rate limit.");
+    mount();
+    fireEvent.click(
+      within(await openMenu("a.example.com")).getByRole("menuitem", { name: "Retry now" }),
+    );
+    expect(await screen.findByText("The certificate is blocked by a rate limit.")).toBeTruthy();
+  });
+
+  it("offers Switch back only for an uploaded row", async () => {
+    items = [
+      cert({
+        id: "u",
+        hostname: "u.example.com",
+        source: "upload",
+        issuer: undefined,
+        state: "uploaded",
+        stateText: "Uploaded",
+      }),
+      cert({ id: "c", hostname: "c.example.com" }),
+    ];
+    mount();
+    expect(itemNames(await openMenu("u.example.com"))).toContain("Switch back to Let's Encrypt…");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(itemNames(await openMenu("c.example.com"))).not.toContain(
+      "Switch back to Let's Encrypt…",
+    );
+  });
+
+  it("draws every write item disabled with the reason for a Viewer", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    items = [
+      cert({
+        id: "u",
+        hostname: "u.example.com",
+        source: "upload",
+        issuer: undefined,
+        state: "uploaded",
+        stateText: "Uploaded",
+      }),
+      cert({
+        id: "a",
+        hostname: "a.example.com",
+        state: "failed",
+        stateText: "Failed",
+        ready: false,
+      }),
+    ];
+    mount();
+    await screen.findByRole("button", { name: "Actions for u.example.com" });
+    await waitFor(() => expect(gets().length).toBeGreaterThan(0));
+    const upload = within(await openMenu("u.example.com")).getByRole("menuitem", {
+      name: "Upload certificate…",
+    });
+    await waitFor(() => expect(upload.getAttribute("aria-disabled")).toBe("true"));
+    const swap = within(screen.getByRole("menu")).getByRole("menuitem", {
+      name: "Switch back to Let's Encrypt…",
+    });
+    expect(swap.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(upload);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(posts()).toHaveLength(0);
+  });
+});
+
+describe("uploading a certificate", () => {
+  it("needs both fields, then posts the chain and key for the row's host", async () => {
+    answer = (req) =>
+      req.path.endsWith("/upload") ? Response.json(cert({ id: "n" }), { status: 201 }) : undefined;
+    mount();
+    const dialog = await openUpload();
+    expect(within(dialog).getByText("Upload a certificate for app.example.com")).toBeTruthy();
+    expect(
+      within(dialog).getByText("TierPlan stores the key sealed and never shows it again."),
+    ).toBeTruthy();
+    const submit = within(dialog).getByRole("button", {
+      name: "Upload certificate",
+    }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Certificate chain (PEM)"), {
+      target: { value: CHAIN },
+    });
+    expect(submit.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Private key (PEM)"), { target: { value: KEY } });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]).toMatchObject({
+      path: `/api/env/${ENV}/ingress/certificates/upload`,
+      body: { hostname: "app.example.com", certificatePem: CHAIN, privateKeyPem: KEY },
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps the text and shows the detail when the upload is refused", async () => {
+    answer = () => problem(422, "ingress_cert_expired", "The certificate has expired.");
+    mount();
+    await openUpload();
+    fillUpload();
+    fireEvent.click(screen.getByRole("button", { name: "Upload certificate" }));
+    expect(await screen.findByText("The certificate has expired.")).toBeTruthy();
+    expect((screen.getByLabelText("Private key (PEM)") as HTMLTextAreaElement).value).toBe(KEY);
+    expect((screen.getByLabelText("Certificate chain (PEM)") as HTMLTextAreaElement).value).toBe(
+      CHAIN,
+    );
+  });
+
+  it("clears both fields after Discard upload and after a success, and never shows the key anywhere", async () => {
+    answer = (req) =>
+      req.path.endsWith("/upload") ? Response.json(cert({ id: "n" }), { status: 201 }) : undefined;
+    mount();
+    await openUpload();
+    fillUpload();
+    fireEvent.click(screen.getByRole("button", { name: "Discard upload" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(posts()).toHaveLength(0);
+    await openUpload();
+    expect((screen.getByLabelText("Private key (PEM)") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByLabelText("Certificate chain (PEM)") as HTMLTextAreaElement).value).toBe(
+      "",
+    );
+    fillUpload();
+    fireEvent.click(screen.getByRole("button", { name: "Upload certificate" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("Uploaded a certificate for app.example.com.")).toBeTruthy();
+    // No toast, live region or alert holds the key text, and the closed form kept nothing of it.
+    const live = document.querySelectorAll("[aria-live], [role=status], [role=alert], [role=log]");
+    for (const el of Array.from(live)) expect(el.textContent).not.toContain("SECRETKEYBYTES");
+    expect(document.body.textContent).not.toContain("SECRETKEYBYTES");
+    await openUpload();
+    expect((screen.getByLabelText("Private key (PEM)") as HTMLTextAreaElement).value).toBe("");
+  });
+});
+
+describe("switching an uploaded hostname back to Let's Encrypt", () => {
+  const uploaded = () => [
+    cert({
+      id: "u",
+      hostname: "u.example.com",
+      source: "upload",
+      issuer: undefined,
+      state: "uploaded",
+      stateText: "Uploaded",
+    }),
+  ];
+
+  async function openSwitch() {
+    const menu = await openMenu("u.example.com");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Switch back to Let's Encrypt…" }));
+    return screen.findByRole("alertdialog");
+  }
+
+  it("sends nothing when the uploaded certificate is kept", async () => {
+    items = uploaded();
+    mount();
+    const dialog = await openSwitch();
+    expect(within(dialog).getByText("Switch u.example.com back to Let's Encrypt?")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep uploaded certificate" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("posts to the acme path on confirm and reads the list again", async () => {
+    items = uploaded();
+    answer = (req) => (req.path.endsWith("/acme") ? Response.json(cert({ id: "q" })) : undefined);
+    mount();
+    const dialog = await openSwitch();
+    const before = gets().length;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Switch to Let's Encrypt" }));
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.path).toBe(`/api/env/${ENV}/ingress/certificates/u/acme`);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(gets().length).toBeGreaterThan(before));
+  });
+
+  it("keeps the dialog open with the server's detail on a refusal", async () => {
+    items = uploaded();
+    answer = () => problem(409, "ingress_domain_not_found", "Register the domain again first.");
+    mount();
+    const dialog = await openSwitch();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Switch to Let's Encrypt" }));
+    expect(await screen.findByText("Register the domain again first.")).toBeTruthy();
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
   });
 });

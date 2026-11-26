@@ -2,18 +2,19 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Info } from "lucide-react";
-import { useState } from "react";
+import { ChevronDown, Ellipsis, Info } from "lucide-react";
+import { useRef, useState } from "react";
 import { Trans } from "react-i18next";
 
 import type { HealthState } from "@/api/environments";
 
-import { ingressStatusQuery } from "@/api/ingress";
+import { IngressActionError, ingressStatusQuery } from "@/api/ingress";
 import {
   type IngressCert,
   type IngressCertBudget,
   ingressCertificateBudgetQuery,
   ingressCertificatesQuery,
+  useRetryCertificate,
 } from "@/api/ingress-certs";
 import { CertExpiry } from "@/components/cert-expiry";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -23,6 +24,12 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Empty,
   EmptyContent,
@@ -41,10 +48,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { RequestCertificateDialog } from "@/features/ingress/certificate-dialogs";
+import {
+  RequestCertificateDialog,
+  SwitchToACMEDialog,
+  UploadCertificateDialog,
+} from "@/features/ingress/certificate-dialogs";
 import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
-import { useNeeds } from "@/hooks/use-needs";
+import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
+import { toastError, toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 // At most this many rows show until the person asks for the rest (UI-SPEC S3, the Routes tab's pattern).
@@ -254,7 +266,7 @@ export function CertificatesTab({
             </TableRow>
           ) : null}
           {shown.map((c) => (
-            <CertRow key={c.id} cert={c} now={now} manage={manage} />
+            <CertRow key={c.id} cert={c} now={now} manage={manage} needs={needs} envId={envId} />
           ))}
         </TableBody>
       </Table>
@@ -317,7 +329,19 @@ function BudgetLine({ budget: b }: { budget: IngressCertBudget }) {
   );
 }
 
-function CertRow({ cert: c, now, manage }: { cert: IngressCert; now: number; manage: boolean }) {
+function CertRow({
+  cert: c,
+  now,
+  manage,
+  needs,
+  envId,
+}: {
+  cert: IngressCert;
+  now: number;
+  manage: boolean;
+  needs: Needs;
+  envId: string;
+}) {
   const t = useT();
   // The page's clock is the judge of expiry: a certificate that ran out a second ago is Expired here even before the
   // server's next read says so, the same as the Expires cell beside it.
@@ -386,7 +410,9 @@ function CertRow({ cert: c, now, manage }: { cert: IngressCert; now: number; man
           <span className="text-sm">{t("ingressPage.certs.none")}</span>
         )}
       </TableCell>
-      <TableCell className="align-top" />
+      <TableCell className="align-top">
+        <CertActions cert={c} envId={envId} needs={needs} />
+      </TableCell>
     </TableRow>
   );
 }
@@ -452,5 +478,121 @@ function NextAttempt({ cert: c }: { cert: IngressCert }) {
         components={{ time: <RelativeTime value={at} /> }}
       />
     </p>
+  );
+}
+
+// CertActions is a row's menu (D-12, UI-SPEC S3). The write items are drawn for everyone and, for a reader, disabled
+// with the reason; the server checks ingress.manage again. Retry is only for a certificate whose order failed, and
+// switching back is only for one that was uploaded.
+function CertActions({
+  cert: c,
+  envId,
+  needs,
+}: {
+  cert: IngressCert;
+  envId: string;
+  needs: Needs;
+}) {
+  const t = useT();
+  const retry = useRetryCertificate(envId);
+  const [uploading, setUploading] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  // Set when an item was chosen, so closing the menu does not hand focus back to its button over the dialog that is
+  // opening; the dialog returns focus to the button when it closes.
+  const chose = useRef(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const canRetry = c.state === "failed" || c.state === "renewal_failed";
+  const canSwitch = c.source === "upload" && c.state !== "retired";
+  const canUpload = c.state !== "retired";
+
+  function choose(action: () => void) {
+    return () => {
+      chose.current = true;
+      action();
+    };
+  }
+
+  function retryNow() {
+    retry.mutate(c.id, {
+      onSuccess: () => toastSuccess(t("ingressPage.certs.retryDone", { host: c.hostname })),
+      onError: (error) =>
+        toastError(
+          (error instanceof IngressActionError ? error.detail : undefined) ??
+            t("common.mutationFailed"),
+        ),
+    });
+  }
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            ref={button}
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="max-md:size-11"
+            aria-label={t("ingressPage.certs.menu.actionsFor", { host: c.hostname })}
+          >
+            <Ellipsis aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          onCloseAutoFocus={(event) => {
+            if (!chose.current) return;
+            chose.current = false;
+            event.preventDefault();
+          }}
+        >
+          {canRetry ? (
+            <NeedsTooltip reason={needs.reason}>
+              <DropdownMenuItem
+                className="max-md:min-h-11"
+                disabled={retry.isPending}
+                onSelect={retryNow}
+              >
+                {t("ingressPage.certs.menu.retry")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          ) : null}
+          {canUpload ? (
+            <NeedsTooltip reason={needs.reason}>
+              <DropdownMenuItem
+                className="max-md:min-h-11"
+                onSelect={choose(() => setUploading(true))}
+              >
+                {t("ingressPage.certs.menu.upload")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          ) : null}
+          {canSwitch ? (
+            <NeedsTooltip reason={needs.reason}>
+              <DropdownMenuItem
+                className="max-md:min-h-11"
+                onSelect={choose(() => setSwitching(true))}
+              >
+                {t("ingressPage.certs.menu.switch")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <UploadCertificateDialog
+        envId={envId}
+        host={c.hostname}
+        open={uploading}
+        onOpenChange={setUploading}
+        returnFocusRef={button}
+      />
+      <SwitchToACMEDialog
+        envId={envId}
+        cert={c}
+        open={switching}
+        onOpenChange={setSwitching}
+        returnFocusRef={button}
+      />
+    </>
   );
 }
