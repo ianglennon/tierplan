@@ -24,7 +24,26 @@
       "ready": "{{ready}} of 5 ready",
       "none": "—",
       "show": "Show conditions for {{host}}",
-      "conditionsList": "Conditions of {{host}}"
+      "conditionsList": "Conditions of {{host}}",
+      "filter": "Filter routes",
+      "filterPlaceholder": "Filter by hostname, stack or service",
+      "view": {
+        "label": "Which routes to show",
+        "all": "All",
+        "attention": "Needs attention"
+      },
+      "summary_one": "{{count}} route: {{serving}} serving, {{attention}} need attention, {{stopped}} stopped.",
+      "summary_other": "{{count}} routes: {{serving}} serving, {{attention}} need attention, {{stopped}} stopped.",
+      "claim": {
+        "badge": "Claim only",
+        "status": "No route",
+        "detail": "A stack holds this name but none of its services serves it."
+      },
+      "reserved": {
+        "badge": "Reserved",
+        "status": "Reserved",
+        "detail": "Held back on the Domains tab. No stack can claim it."
+      }
     },
     "conditions": {
       "state": {

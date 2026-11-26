@@ -311,4 +311,169 @@ describe("the Ingress page's Routes tab", () => {
     expect(pending.className).toContain("animate-pulse");
     expect(pending.className).toContain("motion-reduce:animate-none");
   });
+
+  describe("held and reserved names, the filter and the summary (D-08, D-25, U-16)", () => {
+    const claim = (over: Json = {}): Json => ({
+      kind: "claim",
+      hostname: "held.example.com",
+      path: "",
+      ownerKind: "stack",
+      port: 0,
+      reason: "",
+      scheme: "",
+      service: "",
+      stackId: "s9",
+      stackName: "parked",
+      state: "",
+      stopped: false,
+      strip: false,
+      conditions: [],
+      ...over,
+    });
+    const reserved = (over: Json = {}): Json => ({
+      ...claim(),
+      kind: "reserved",
+      hostname: "kept.example.com",
+      ownerKind: "",
+      stackId: "",
+      stackName: "",
+      ...over,
+    });
+    const mixed = (): Json[] => [
+      route({ hostname: "a.example.com", stackName: "shop", service: "web" }),
+      route({ hostname: "b.example.com", stackName: "blog", service: "web" }),
+      route({
+        hostname: "c.example.com",
+        stackName: "wiki",
+        service: "app",
+        state: "not_attached",
+        conditions: conditions({ network_attached: "not_ready" }),
+      }),
+      route({
+        hostname: "d.example.com",
+        stackName: "old",
+        service: "app",
+        state: "backend_not_running",
+        stopped: true,
+      }),
+      claim(),
+      reserved(),
+    ];
+
+    it("draws the claim and reserved rows after the routes, with their words and no conditions", async () => {
+      serve(mixed());
+      mount();
+      const t = await table();
+      const hosts = within(t)
+        .getAllByRole("row")
+        .slice(1)
+        .map((r) => (r.querySelector("span.font-mono") as HTMLElement).textContent);
+      expect(hosts).toEqual([
+        "a.example.com",
+        "b.example.com",
+        "c.example.com",
+        "d.example.com",
+        "held.example.com",
+        "kept.example.com",
+      ]);
+      const held = rowOf(t, "held.example.com");
+      expect(within(held).getByText("Claim only")).toBeTruthy();
+      expect(within(held).getByText("No route")).toBeTruthy();
+      expect(
+        within(held).getByText("A stack holds this name but none of its services serves it."),
+      ).toBeTruthy();
+      expect(within(held).getByRole("link", { name: "parked" })).toBeTruthy();
+      expect(within(held).getByText("—")).toBeTruthy();
+      expect(within(held).queryByRole("button")).toBeNull();
+      const kept = rowOf(t, "kept.example.com");
+      expect(within(kept).getByText("Reserved", { selector: "[data-slot=badge]" })).toBeTruthy();
+      expect(within(kept).getAllByText("Reserved")).toHaveLength(2);
+      expect(
+        within(kept).getByText("Held back on the Domains tab. No stack can claim it."),
+      ).toBeTruthy();
+      // The stack column and the Conditions column both say nothing.
+      expect(within(kept).getAllByText("—")).toHaveLength(2);
+      expect(within(kept).queryByRole("button")).toBeNull();
+      expect(within(kept).queryByRole("link")).toBeNull();
+    });
+
+    it("always writes the summary line, zero counts included", async () => {
+      serve(mixed());
+      const first = mount();
+      expect(
+        await screen.findByText("4 routes: 2 serving, 1 need attention, 1 stopped."),
+      ).toBeTruthy();
+      first.unmount();
+      serve([]);
+      client.clear();
+      mount();
+      expect(
+        await screen.findByText("0 routes: 0 serving, 0 need attention, 0 stopped."),
+      ).toBeTruthy();
+    });
+
+    it("says route in the singular for one", async () => {
+      serve([route()]);
+      mount();
+      expect(
+        await screen.findByText("1 route: 1 serving, 0 need attention, 0 stopped."),
+      ).toBeTruthy();
+    });
+
+    it("filters on hostname, path, stack and service in any case, before anything is cut", async () => {
+      serve(mixed());
+      mount();
+      const t = await table();
+      const filter = screen.getByRole("textbox", { name: "Filter routes" });
+      expect(filter.getAttribute("placeholder")).toBe("Filter by hostname, stack or service");
+      fireEvent.change(filter, { target: { value: "SHOP" } });
+      expect(within(t).getByText("a.example.com")).toBeTruthy();
+      expect(within(t).queryByText("b.example.com")).toBeNull();
+      fireEvent.change(filter, { target: { value: "APP" } });
+      expect(within(t).queryByText("a.example.com")).toBeNull();
+      expect(within(t).getByText("c.example.com")).toBeTruthy();
+      expect(within(t).getByText("d.example.com")).toBeTruthy();
+      fireEvent.change(filter, { target: { value: "b.EXAMPLE" } });
+      expect(within(t).getByText("b.example.com")).toBeTruthy();
+      expect(within(t).queryByText("c.example.com")).toBeNull();
+    });
+
+    it("matches a path", async () => {
+      serve([
+        route({ hostname: "a.example.com", path: "/Api" }),
+        route({ hostname: "b.example.com" }),
+      ]);
+      mount();
+      const t = await table();
+      fireEvent.change(screen.getByRole("textbox", { name: "Filter routes" }), {
+        target: { value: "/api" },
+      });
+      expect(within(t).getByText("a.example.com/Api")).toBeTruthy();
+      expect(within(t).queryByText("b.example.com")).toBeNull();
+    });
+
+    it("Needs attention leaves only the route that is neither serving, stopped nor off", async () => {
+      serve(mixed());
+      mount();
+      const t = await table();
+      fireEvent.click(screen.getByRole("radio", { name: "Needs attention" }));
+      const rows = within(t).getAllByRole("row").slice(1);
+      expect(rows).toHaveLength(1);
+      expect(within(t).getByText("c.example.com")).toBeTruthy();
+      fireEvent.click(screen.getByRole("radio", { name: "All" }));
+      expect(within(t).getAllByRole("row").slice(1)).toHaveLength(6);
+    });
+
+    it("hides a route that is off from Needs attention", async () => {
+      serve([
+        route({ hostname: "a.example.com", state: "ingress_off" }),
+        route({ hostname: "b.example.com", state: "unknown" }),
+      ]);
+      mount();
+      const t = await table();
+      fireEvent.click(screen.getByRole("radio", { name: "Needs attention" }));
+      expect(within(t).queryByText("a.example.com")).toBeNull();
+      expect(within(t).getByText("b.example.com")).toBeTruthy();
+    });
+  });
 });
