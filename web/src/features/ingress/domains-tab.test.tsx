@@ -20,6 +20,10 @@ let domains: () => Response;
 let status: Json;
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
+// What the server is asked besides the reads: the method, the path and the body of each write.
+let writes: { method: string; path: string; body: string }[];
+// The answer to a write; the default is an empty success.
+let answer: (method: string, path: string) => Response;
 
 function domain(over: Json = {}): Json {
   return {
@@ -45,6 +49,8 @@ function serve(items: Json[]) {
 beforeEach(() => {
   setCsrfToken(null);
   serve([]);
+  writes = [];
+  answer = () => new Response(null, { status: 204 });
   status = { enabled: true };
   me = makeMe({ envs: { [ENV]: "viewer" } });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -55,6 +61,10 @@ beforeEach(() => {
       if (path === "/api/me") return Response.json(me);
       if (path === `/api/env/${ENV}/ingress/domains`) return domains();
       if (path === `/api/env/${ENV}/ingress/status`) return Response.json(status);
+      if (req.method !== "GET") {
+        writes.push({ method: req.method, path, body: await req.clone().text() });
+        return answer(req.method, path);
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -218,5 +228,94 @@ describe("the Ingress page's Domains tab", () => {
       "Delete domain…",
     ]);
     for (const item of items) expect(item.getAttribute("aria-disabled")).toBe("true");
+  });
+});
+
+describe("the reserved names of a domain", () => {
+  const BASE = `/api/env/${ENV}/ingress/domains/d1/reserved`;
+
+  async function expand(suffix = "apps.example.com") {
+    mount();
+    const t = await table();
+    fireEvent.click(within(t).getByRole("button", { name: `Show reserved names for ${suffix}` }));
+    await within(t).findByText("Reserved names");
+    return t;
+  }
+
+  it("says nothing is reserved for a domain with no names", async () => {
+    serve([domain()]);
+    const t = await expand();
+    expect(within(t).getByText("Nothing is reserved.")).toBeTruthy();
+  });
+
+  it("releases a name with no confirmation and reads the list again", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    serve([domain({ reserved: ["held.apps.example.com"] })]);
+    const t = await expand();
+    serve([domain({ reserved: [] })]);
+    fireEvent.click(within(t).getByRole("button", { name: "Release held.apps.example.com" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({
+      method: "DELETE",
+      path: `${BASE}/held.apps.example.com`,
+    });
+    expect(await within(t).findByText("Nothing is reserved.")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("reserves the name an Admin types and reads the list again", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    serve([domain()]);
+    const t = await expand();
+    const field = within(t).getByLabelText("Reserve a name");
+    expect(
+      within(t).getByText("A hostname under apps.example.com. No stack can claim it."),
+    ).toBeTruthy();
+    expect(field.className).toContain("font-mono");
+    expect(
+      within(t).getByRole("button", { name: "Reserve hostname" }).getAttribute("disabled"),
+    ).not.toBeNull();
+    fireEvent.change(field, { target: { value: "new.apps.example.com" } });
+    serve([domain({ reserved: ["new.apps.example.com"] })]);
+    fireEvent.click(within(t).getByRole("button", { name: "Reserve hostname" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({ method: "POST", path: BASE });
+    expect(JSON.parse(writes[0]?.body ?? "{}")).toEqual({ hostname: "new.apps.example.com" });
+    expect(await within(t).findByText("new.apps.example.com")).toBeTruthy();
+    expect((within(t).getByLabelText("Reserve a name") as HTMLInputElement).value).toBe("");
+  });
+
+  it("shows the server's detail under the field when it refuses a name", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    serve([domain()]);
+    answer = () =>
+      Response.json(
+        {
+          title: "Conflict",
+          status: 409,
+          detail: "The name is claimed by the stack shop.",
+        },
+        { status: 409, headers: { "Content-Type": "application/problem+json" } },
+      );
+    const t = await expand();
+    fireEvent.change(within(t).getByLabelText("Reserve a name"), {
+      target: { value: "shop.apps.example.com" },
+    });
+    fireEvent.click(within(t).getByRole("button", { name: "Reserve hostname" }));
+    const detail = await within(t).findByText("The name is claimed by the stack shop.");
+    expect(detail.className).toContain("text-destructive");
+    expect(detail.className).toContain("text-xs");
+  });
+
+  it("draws Reserve and Release disabled with the reason for a Viewer", async () => {
+    serve([domain({ reserved: ["held.apps.example.com"] })]);
+    const t = await expand();
+    const release = within(t).getByRole("button", { name: "Release held.apps.example.com" });
+    expect(release.getAttribute("aria-disabled")).toBe("true");
+    const reserve = within(t).getByRole("button", { name: "Reserve hostname" });
+    expect(reserve.getAttribute("aria-disabled")).toBe("true");
+    expect(within(t).getByLabelText("Reserve a name").getAttribute("disabled")).not.toBeNull();
+    fireEvent.click(release);
+    expect(writes).toHaveLength(0);
   });
 });

@@ -2,10 +2,16 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Ellipsis } from "lucide-react";
-import { Fragment, useState } from "react";
+import { ChevronDown, Ellipsis, X } from "lucide-react";
+import { type FormEvent, Fragment, useId, useState } from "react";
 
-import { type IngressDomain, ingressDomainsQuery, ingressStatusQuery } from "@/api/ingress";
+import {
+  IngressActionError,
+  type IngressDomain,
+  ingressDomainsQuery,
+  ingressStatusQuery,
+} from "@/api/ingress";
+import { useReleaseHostname, useReserveHostname } from "@/api/ingress-domains";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { StatusDot } from "@/components/status-dot";
@@ -19,7 +25,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -159,7 +168,7 @@ export function DomainsTab({ envId }: { envId: string }) {
                         id={panel}
                         className="bg-muted/50 p-4 whitespace-normal"
                       >
-                        <ReservedNames domain={d} />
+                        <ReservedNames envId={envId} domain={d} needs={needs} />
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -249,24 +258,104 @@ function DomainActions({ domain: d, needs }: { domain: IngressDomain; needs: Nee
   );
 }
 
-// ReservedNames is the hostnames held back under one domain, in mono; no stack can claim one.
-function ReservedNames({ domain: d }: { domain: IngressDomain }) {
+// ReservedNames is the hostnames held back under one domain (UI-SPEC S5): each in mono with a button that lifts the
+// hold at once, since lifting a hold is undone by holding the name again, and, below, one field to hold another. A
+// refusal (a name outside the domain, one a stack already claims) reads as the server sent it, under the field. A
+// reader sees every control, disabled with the reason.
+function ReservedNames({
+  envId,
+  domain: d,
+  needs,
+}: {
+  envId: string;
+  domain: IngressDomain;
+  needs: Needs;
+}) {
   const t = useT();
+  const reserve = useReserveHostname(envId);
+  const release = useReleaseHostname(envId);
+  const [name, setName] = useState("");
+  const fieldId = useId();
   const names = d.reserved ?? [];
+  const hostname = name.trim();
+  const failure = reserve.isError ? reserve.error : release.isError ? release.error : undefined;
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!needs.allowed || hostname === "" || reserve.isPending) return;
+    release.reset();
+    reserve.mutate({ domainId: d.id, hostname }, { onSuccess: () => setName("") });
+  }
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <h3 className="text-sm font-semibold">{t("ingressPage.domains.reserved.title")}</h3>
       {names.length === 0 ? (
         <p className="text-xs text-muted-foreground">{t("ingressPage.domains.reserved.none")}</p>
       ) : (
         <ul className="flex flex-col gap-1">
-          {names.map((name) => (
-            <li key={name} className="font-mono text-xs break-all">
-              {name}
+          {names.map((n) => (
+            <li key={n} className="flex items-center gap-1">
+              <span className="font-mono text-xs break-all">{n}</span>
+              <NeedsTooltip reason={needs.reason}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0 max-md:size-11"
+                  aria-label={t("ingressPage.domains.reserved.release", { name: n })}
+                  disabled={release.isPending}
+                  onClick={() => {
+                    reserve.reset();
+                    release.mutate({ domainId: d.id, hostname: n });
+                  }}
+                >
+                  <X aria-hidden="true" />
+                </Button>
+              </NeedsTooltip>
             </li>
           ))}
         </ul>
       )}
+      <form noValidate onSubmit={submit} className="flex flex-col gap-1.5">
+        <div className="flex flex-wrap items-end gap-2">
+          <Field className="max-w-sm min-w-0 flex-1">
+            <FieldLabel htmlFor={fieldId}>{t("ingressPage.domains.reserved.field")}</FieldLabel>
+            <Input
+              id={fieldId}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              disabled={!needs.allowed || reserve.isPending}
+              aria-invalid={reserve.isError}
+              aria-describedby={`${fieldId}-helper${failure ? ` ${fieldId}-error` : ""}`}
+              className="font-mono text-xs max-md:h-11"
+            />
+          </Field>
+          <NeedsTooltip reason={needs.reason}>
+            <Button
+              type="submit"
+              variant="outline"
+              className="max-md:h-11"
+              disabled={needs.allowed && (hostname === "" || reserve.isPending)}
+            >
+              {reserve.isPending ? <Spinner aria-hidden="true" /> : null}
+              {t("ingressPage.domains.reserved.submit")}
+            </Button>
+          </NeedsTooltip>
+        </div>
+        <FieldDescription id={`${fieldId}-helper`}>
+          {t("ingressPage.domains.reserved.helper", { suffix: d.suffix })}
+        </FieldDescription>
+        {failure ? (
+          <p id={`${fieldId}-error`} role="alert" className="text-xs break-words text-destructive">
+            {(failure instanceof IngressActionError ? failure.detail : undefined) ??
+              t("common.mutationFailed")}
+          </p>
+        ) : null}
+      </form>
     </div>
   );
 }

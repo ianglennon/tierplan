@@ -366,7 +366,11 @@
       "show": "Show reserved names for {{suffix}}",
       "reserved": {
         "title": "Reserved names",
-        "none": "Nothing is reserved."
+        "none": "Nothing is reserved.",
+        "release": "Release {{name}}",
+        "field": "Reserve a name",
+        "helper": "A hostname under {{suffix}}. No stack can claim it.",
+        "submit": "Reserve hostname"
       },
       "empty": {
         "title": "No domains yet",
