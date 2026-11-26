@@ -271,6 +271,8 @@ type vipRemoval struct {
 	release func()
 	// onFail, when set, is told the item and the code of a step that failed or was cancelled, before the item ends.
 	onFail func(item, code string)
+	// unmark, when set, clears the reader's disabling mark; freeLock calls it, so it is clear before the job can read as ended.
+	unmark func()
 }
 
 // record tells onFail of a step that failed or was cancelled.
@@ -280,9 +282,12 @@ func (v *vipRemoval) record(item, code string) {
 	}
 }
 
-// freeLock frees the environment's operation lock before the item that ends the job is finished, so a reader that sees the
-// job done finds the lock free.
+// freeLock frees the environment's operation lock and clears the reader's disabling mark before the item that ends the job
+// is finished, so a reader that sees the job done finds the lock free and the mark gone.
 func (v *vipRemoval) freeLock() {
+	if v.unmark != nil {
+		v.unmark()
+	}
 	if v.release != nil {
 		v.release()
 	}
@@ -362,6 +367,7 @@ func (s *Service) removeVIPAudited(ctx context.Context, actor audit.Actor, envID
 	// From here a holder that stops is the switch-off's doing, and the reader keeps reading until the row is gone.
 	s.markVIPDisabling(envID, true)
 	defer s.markVIPDisabling(envID, false)
+	v.unmark = func() { s.markVIPDisabling(envID, false) }
 
 	// stop ends the run at the item that failed or was cancelled.
 	stop := func(i int, err error, detail string) error {
