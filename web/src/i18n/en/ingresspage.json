@@ -23,7 +23,35 @@
       "targetStrip": "{{scheme}} to port {{port}}, path prefix removed",
       "ready": "{{ready}} of 5 ready",
       "none": "—",
-      "show": "Show conditions for {{host}}"
+      "show": "Show conditions for {{host}}",
+      "conditionsList": "Conditions of {{host}}"
+    },
+    "conditions": {
+      "state": {
+        "ready": "Ready",
+        "not_ready": "Not ready",
+        "unknown": "Unknown"
+      },
+      "name": {
+        "claim_held": "Claim held",
+        "network_attached": "Network attached",
+        "backend_healthy": "Backend healthy",
+        "certificate_ready": "Certificate ready",
+        "applied": "Applied on nodes"
+      }
+    },
+    "reasons": {
+      "not_attached": "{{service}} isn't on the ingress network. Redeploy the stack to attach it.",
+      "stack_stopped": "The stack is stopped. Its hostnames stay reserved for it.",
+      "no_running_task": "{{service}} has no running task.",
+      "no_certificate": "No certificate has been asked for yet.",
+      "not_in_bundle": "The proxies' settings don't include this route yet.",
+      "no_nodes": "No node is enrolled to serve it.",
+      "nodes_behind": "On {{applied}} of {{total}} nodes. The rest are still updating.",
+      "ingress_off": "Ingress is off.",
+      "engine_unreadable": "TierPlan couldn't read this environment just now.",
+      "no_bundle": "Ingress hasn't published its settings yet.",
+      "appliedReady": "On {{applied}} of {{total}} nodes."
     }
   }
 }
