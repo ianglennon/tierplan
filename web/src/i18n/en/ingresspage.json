@@ -119,7 +119,29 @@
       "nextAttempt": "Next attempt <time/>",
       "waitingUntil": "Waiting for the authority until <time/>",
       "none": "—",
-      "renewBasis": "How the renewal time is chosen"
+      "renewBasis": "How the renewal time is chosen",
+      "expiredState": "Expired",
+      "renewalDue": "Renewal due",
+      "showDetails": "Show details",
+      "hideDetails": "Hide details",
+      "filter": "Filter certificates",
+      "filterPlaceholder": "Filter by hostname",
+      "noMatch": "No certificate matches “{{filter}}”.",
+      "clearFilter": "Clear filter",
+      "showAll": "Show all {{count}}",
+      "showFewer": "Show fewer",
+      "empty": {
+        "title": "No certificates yet",
+        "body": "A certificate is ordered when a stack claims a hostname under a registered domain, or when you request one."
+      },
+      "budget": {
+        "label": "Certificate budget",
+        "line": "{{domain}}: {{used}} of {{cap}} new certificates used in the last 7 days.",
+        "lineStaging": "{{domain}} (staging): {{used}} of {{cap}} new certificates used in the last 7 days.",
+        "noHeadroom": "TierPlan orders no more until a slot opens <time/>.",
+        "shared": "Other names under {{domain}} share this budget."
+      },
+      "showing": "Showing {{host}}. Show all"
     }
   }
 }
