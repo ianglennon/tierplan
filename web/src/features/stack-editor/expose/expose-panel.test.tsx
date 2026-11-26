@@ -201,3 +201,95 @@ describe("what the panel asks of the server", () => {
     for (const request of fetched) expect(request).toBe(`GET /api/env/${ENV}/ingress/domains`);
   });
 });
+
+// A compose file with one route at the given hostname.
+const withHost = (name: string) =>
+  `services:\n  api:\n    image: nginx\n    deploy:\n      labels:\n        tierplan.ingress.host: ${name}\n        tierplan.ingress.port: "8080"\n`;
+
+const OUTSIDE =
+  "This name isn't under a domain registered for this environment. The check will refuse it.";
+
+describe("registered-domain suggestions (D-20)", () => {
+  it("offers a chip per registered domain for a name under none, and a chip appends its suffix", async () => {
+    domains = ["apps.example.com", "dev.example.com"];
+    const onEdit = mount({ text: withHost("shop") });
+    const first = await screen.findByRole("button", { name: "Add .apps.example.com" });
+    expect(screen.getByRole("button", { name: "Add .dev.example.com" })).toBeTruthy();
+    fireEvent.click(first);
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit.mock.calls[0]?.[0]).toContain("tierplan.ingress.host: shop.apps.example.com");
+  });
+
+  it("warns, without the colour of an error, when the name is outside every domain", async () => {
+    domains = ["apps.example.com"];
+    mount({ text: withHost("shop.other.org") });
+    const warning = await screen.findByText(OUTSIDE);
+    expect(warning.className).not.toContain("text-destructive");
+    expect(warning.getAttribute("role")).toBeNull();
+  });
+
+  it("shows neither a chip nor a warning for a name under a registered domain", async () => {
+    domains = ["apps.example.com"];
+    mount({ text: withHost("shop.apps.example.com") });
+    await settled(client);
+    expect(screen.queryByText(OUTSIDE)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Add \./ })).toBeNull();
+  });
+
+  it("matches a suffix on a dot boundary, and not the suffix alone", async () => {
+    domains = ["apps.example.com"];
+    mount({ text: withHost("notapps.example.com") });
+    expect(await screen.findByText(OUTSIDE)).toBeTruthy();
+    cleanup();
+    mount({ text: withHost("apps.example.com") });
+    expect(await screen.findByText(OUTSIDE)).toBeTruthy();
+  });
+
+  it("offers at most three chips", async () => {
+    domains = ["a.example.com", "b.example.com", "c.example.com", "d.example.com"];
+    mount({ text: withHost("shop") });
+    await screen.findByRole("button", { name: "Add .a.example.com" });
+    expect(screen.getAllByRole("button", { name: /^Add \./ })).toHaveLength(3);
+  });
+
+  it("reacts to what is typed before it is written", async () => {
+    domains = ["apps.example.com"];
+    mount({ text: withHost("shop") });
+    await screen.findByText(OUTSIDE);
+    fireEvent.change(host(), { target: { value: "shop.apps.example.com" } });
+    expect(screen.queryByText(OUTSIDE)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Add \./ })).toBeNull();
+  });
+
+  it("offers no chip to a panel that cannot edit", async () => {
+    domains = ["apps.example.com"];
+    mount({ text: withHost("shop"), readOnly: true });
+    await screen.findByText(OUTSIDE);
+    expect(screen.queryByRole("button", { name: /^Add \./ })).toBeNull();
+  });
+
+  it("leaves the hint out when the read is refused, and the field still commits", async () => {
+    domains = 403;
+    const onEdit = mount({ text: withHost("shop") });
+    await settled(client);
+    expect(screen.queryByText(OUTSIDE)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Add \./ })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.change(host(), { target: { value: "shop.anywhere.org" } });
+    fireEvent.blur(host());
+    expect(onEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the hint out while the read is pending", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    const onEdit = mount({ text: withHost("shop") });
+    expect(screen.queryByText(OUTSIDE)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Add \./ })).toBeNull();
+    fireEvent.change(host(), { target: { value: "shop.anywhere.org" } });
+    fireEvent.blur(host());
+    expect(onEdit).toHaveBeenCalledTimes(1);
+  });
+});

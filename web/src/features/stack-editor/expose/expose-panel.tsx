@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { type KeyboardEvent, useEffect, useId, useMemo, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { Trans } from "react-i18next";
+import { ingressDomainsQuery } from "@/api/ingress";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -44,8 +46,23 @@ interface ExposePanelProps {
 // ExposePanel edits the ingress labels of one service of the open compose file (D-18, UIX-01). It
 // reads the routes back from the text and writes every change through the pure label editor, so
 // the working copy changes and the editor's own stack check validates the result.
-export function ExposePanel({ id, text, target, readOnly, onEdit, onClose }: ExposePanelProps) {
+export function ExposePanel({
+  id,
+  envId,
+  text,
+  target,
+  readOnly,
+  onEdit,
+  onClose,
+}: ExposePanelProps) {
   const t = useT();
+  // The registered domains are a hint (D-20): a read that is pending, refused or failed leaves the
+  // suggestions and the warning out and the fields work as plain inputs.
+  const domains = useQuery(ingressDomainsQuery(envId));
+  const suffixes = useMemo(
+    () => (domains.data?.items ?? []).map((d) => d.suffix.toLowerCase().replace(/^\.+/, "")),
+    [domains.data],
+  );
   const ids = useId();
   const services = useMemo(() => readServiceRoutes(text, "", target).services, [text, target]);
   const [chosen, setChosen] = useState<string | null>(null);
@@ -110,6 +127,7 @@ export function ExposePanel({ id, text, target, readOnly, onEdit, onClose }: Exp
           key={`${service}/${route.name}`}
           idBase={`${ids}-${route.name}`}
           route={route}
+          suffixes={suffixes}
           readOnly={readOnly}
           onSet={(field, value) => set(route.name, field, value)}
         />
@@ -122,6 +140,8 @@ export function ExposePanel({ id, text, target, readOnly, onEdit, onClose }: Exp
 interface RouteFormProps {
   idBase: string;
   route: ExposeRoute;
+  // The suffixes of the environment's registered domains; none until they are read.
+  suffixes: string[];
   readOnly: boolean;
   onSet: (field: RouteField, value: string | boolean) => void;
 }
@@ -129,7 +149,7 @@ interface RouteFormProps {
 // RouteForm is the fields of one route. A text field commits to the compose text when it loses
 // focus or on Enter, not on each keystroke, so the editor's undo history and cursor are left alone
 // and the stack check runs once (U-12).
-function RouteForm({ idBase, route, readOnly, onSet }: RouteFormProps) {
+function RouteForm({ idBase, route, suffixes, readOnly, onSet }: RouteFormProps) {
   const t = useT();
   const locked = (field: RouteField) => readOnly || route.locked[field] !== undefined;
   return (
@@ -147,6 +167,14 @@ function RouteForm({ idBase, route, readOnly, onSet }: RouteFormProps) {
         readOnly={locked("host")}
         validate={(v) => (v === "" ? t("stackEditor.expose.host.required") : null)}
         onCommit={(v) => onSet("host", v)}
+        below={(draft, commit) => (
+          <DomainHint
+            host={draft}
+            suffixes={suffixes}
+            canEdit={!locked("host")}
+            onPick={(suffix) => commit(`${draft.trim().replace(/\.+$/, "")}.${suffix}`)}
+          />
+        )}
       />
       <CommitField
         id={`${idBase}-port`}
@@ -228,6 +256,8 @@ interface CommitFieldProps {
   // The sentence for a value that must not be written, or null when it may be.
   validate: (value: string) => string | null;
   onCommit: (value: string) => void;
+  // What goes under the helper: it is given what is typed, and a way to write a value at once.
+  below?: (draft: string, commitNow: (value: string) => void) => ReactNode;
 }
 
 function CommitField({
@@ -242,6 +272,7 @@ function CommitField({
   readOnly,
   validate,
   onCommit,
+  below,
 }: CommitFieldProps) {
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState<string | null>(null);
@@ -298,6 +329,59 @@ function CommitField({
           {error}
         </FieldError>
       ) : null}
+      {below?.(draft, (next) => {
+        setDraft(next);
+        setError(null);
+        onCommit(next);
+      })}
     </Field>
+  );
+}
+
+// The most chips the hostname field offers (D-20).
+const MAX_CHIPS = 3;
+
+// underSuffix says whether a hostname is strictly below a registered domain, on a dot boundary.
+function underSuffix(host: string, suffix: string): boolean {
+  return host.toLowerCase().endsWith(`.${suffix}`);
+}
+
+interface DomainHintProps {
+  host: string;
+  suffixes: string[];
+  canEdit: boolean;
+  onPick: (suffix: string) => void;
+}
+
+// DomainHint helps to pick a hostname the environment can serve: chips that append a registered
+// domain to a name that is under none, and a plain-text warning for the name the check would
+// refuse. It is a hint: the server's check stays the authority, so the warning is never red.
+function DomainHint({ host, suffixes, canEdit, onPick }: DomainHintProps) {
+  const t = useT();
+  const name = host.trim();
+  if (name === "" || suffixes.length === 0) return null;
+  if (suffixes.some((s) => underSuffix(name, s))) return null;
+  return (
+    <>
+      {canEdit ? (
+        <div className="flex flex-wrap gap-2">
+          {suffixes.slice(0, MAX_CHIPS).map((suffix) => (
+            <Button
+              key={suffix}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="max-md:h-11"
+              onClick={() => onPick(suffix)}
+            >
+              {t("stackEditor.expose.domains.add", { suffix })}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+      <p className="text-xs break-words text-status-warning-text">
+        {t("stackEditor.expose.domains.outside")}
+      </p>
+    </>
   );
 }

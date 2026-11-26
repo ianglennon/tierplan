@@ -165,7 +165,11 @@
       "strip": {
         "label": "Remove the path prefix before passing the request on"
       },
-      "footer": "Changes stay in the editor until you save. Hostnames and ports are checked as you type; problems show below the editor. Labels set in other compose files of this stack aren't shown here."
+      "footer": "Changes stay in the editor until you save. Hostnames and ports are checked as you type; problems show below the editor. Labels set in other compose files of this stack aren't shown here.",
+      "domains": {
+        "add": "Add .{{suffix}}",
+        "outside": "This name isn't under a domain registered for this environment. The check will refuse it."
+      }
     }
   }
 }
