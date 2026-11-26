@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/audit/audittest"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
@@ -60,6 +62,12 @@ func claimAudits(t *testing.T, f *envFix, action string) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// claimWriteAudits counts the audit rows of every kind of claim write: claimed, replaced and released.
+func claimWriteAudits(t *testing.T, f *envFix) int {
+	t.Helper()
+	return claimAudits(t, f, "ingress.claimed") + claimAudits(t, f, "ingress.claim_replaced") + claimAudits(t, f, "ingress.claim_released")
 }
 
 // claimActors are the actor ID and the actor name of each audit row of action, oldest first.
@@ -481,7 +489,7 @@ func routedShop(t *testing.T, quick bool) (s *shopFix, version int64, audits int
 	if got := claimsOf(t, s.f, s.e.ID, s.st.ID); !slices.Equal(got, []string{"shop.apps.example.com"}) {
 		t.Fatalf("claims after the deploy = %v, want the shop's host", got)
 	}
-	return s, configVersion(t, s.f, s.e.ID), claimAudits(t, s.f, "ingress.claim_replaced") + claimAudits(t, s.f, "ingress.claim_released")
+	return s, configVersion(t, s.f, s.e.ID), claimWriteAudits(t, s.f)
 }
 
 // wantClaimsUntouched fails unless the shop still holds its host and no claim write was made since version and audits.
@@ -493,7 +501,7 @@ func wantClaimsUntouched(t *testing.T, s *shopFix, version int64, audits int) {
 	if now := configVersion(t, s.f, s.e.ID); now != version {
 		t.Errorf("config_version went from %d to %d, want it unchanged", version, now)
 	}
-	if n := claimAudits(t, s.f, "ingress.claim_replaced") + claimAudits(t, s.f, "ingress.claim_released"); n != audits {
+	if n := claimWriteAudits(t, s.f); n != audits {
 		t.Errorf("claim audit rows = %d, want %d (no claim write)", n, audits)
 	}
 }
@@ -556,7 +564,7 @@ func TestInterruptedIngressClaimsAreAuditedBySystem(t *testing.T) {
 	if err != nil || len(interrupted) != 1 {
 		t.Fatalf("MarkInterrupted = %+v, %v, want the stack", interrupted, err)
 	}
-	before := claimAudits(t, f, "ingress.claim_replaced")
+	replacedBefore, claimedBefore := claimAudits(t, f, "ingress.claim_replaced"), claimAudits(t, f, "ingress.claimed")
 
 	if err := api.RestoreInterruptedIngressClaims(ctx, f.stackDeps, interrupted); err != nil {
 		t.Fatalf("RestoreInterruptedIngressClaims: %v", err)
@@ -565,14 +573,150 @@ func TestInterruptedIngressClaimsAreAuditedBySystem(t *testing.T) {
 	if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"kept.apps.example.com"}) {
 		t.Errorf("claims = %v, want the last good revision's host", got)
 	}
-	if n := claimAudits(t, f, "ingress.claim_replaced"); n != before+1 {
-		t.Errorf("ingress.claim_replaced rows = %d, want %d", n, before+1)
+	// The restore swaps one hostname for another: it claims the last good one again and lets go of the lost one, so it
+	// records both, each by the system actor.
+	for action, before := range map[string]int{"ingress.claim_replaced": replacedBefore, "ingress.claimed": claimedBefore} {
+		if n := claimAudits(t, f, action); n != before+1 {
+			t.Errorf("%s rows = %d, want %d", action, n, before+1)
+		}
+		var typ, id string
+		if err := f.st.Read.QueryRow(`SELECT actor_type, actor_id FROM audit_log WHERE action = ? ORDER BY seq DESC LIMIT 1`, action).Scan(&typ, &id); err != nil {
+			t.Fatal(err)
+		}
+		if typ != "system" || !strings.HasPrefix(id, "system:") {
+			t.Errorf("%s actor = %s/%s, want the system actor", action, typ, id)
+		}
 	}
-	var typ, id string
-	if err := f.st.Read.QueryRow(`SELECT actor_type, actor_id FROM audit_log WHERE action = 'ingress.claim_replaced' ORDER BY seq DESC LIMIT 1`).Scan(&typ, &id); err != nil {
-		t.Fatal(err)
+}
+
+// claimedHostnames is the hostnames detail of the newest ingress.claimed row of the stack, and how many such rows it has.
+func claimedHostnames(t *testing.T, f *envFix, stackID string) (newest string, rows int) {
+	t.Helper()
+	for _, r := range audittest.Rows(t, f.st, audit.ActionIngressClaimed) {
+		if r.TargetID != stackID {
+			continue
+		}
+		if rows == 0 {
+			newest = r.Details["hostnames"]
+		}
+		rows++
 	}
-	if typ != "system" || !strings.HasPrefix(id, "system:") {
-		t.Errorf("actor = %s/%s, want the system actor", typ, id)
-	}
+	return newest, rows
+}
+
+// Every path that stores a revision's claims records the hostnames it newly claims as ingress.claimed (D-22, A-06).
+func TestIngressClaimedOnEveryPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("manual deploy", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := newStack(t, admin, "claimed-manual")
+
+		f.deployGood(t, admin, st.ID, ingressCompose("m.apps.example.com"))
+
+		if host, n := claimedHostnames(t, f, st.ID); host != "m.apps.example.com" || n != 1 {
+			t.Errorf("ingress.claimed = %q in %d rows, want one row for m.apps.example.com", host, n)
+		}
+	})
+
+	t.Run("roll back", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := newStack(t, admin, "claimed-rollback")
+		f.deployGood(t, admin, st.ID, ingressCompose("old.apps.example.com"))
+		f.deployGood(t, admin, st.ID, ingressCompose("new.apps.example.com"))
+		if host, _ := claimedHostnames(t, f, st.ID); host != "new.apps.example.com" {
+			t.Fatalf("newest ingress.claimed = %q, want the second deploy's host", host)
+		}
+
+		if job := rollbackAs(t, f, admin, st.ID, `{"revision":1}`); job.State != "done" {
+			t.Fatalf("job = %+v, want it done", job)
+		}
+
+		if host, n := claimedHostnames(t, f, st.ID); host != "old.apps.example.com" || n != 3 {
+			t.Errorf("ingress.claimed = %q in %d rows, want the restored host as a third row", host, n)
+		}
+	})
+
+	t.Run("restore", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		st := newStack(t, admin, "claimed-restore")
+		f.deployGood(t, admin, st.ID, ingressCompose("kept.apps.example.com"))
+		if err := f.stackDeps.Ingress.ReleaseStack(context.Background(), e.ID, st.ID, "admin", nil); err != nil {
+			t.Fatal(err)
+		}
+
+		if job := rollbackAs(t, f, admin, st.ID, `{"mode":"restore","revision":1}`); job.State != "done" {
+			t.Fatalf("job = %+v, want it done", job)
+		}
+
+		if host, n := claimedHostnames(t, f, st.ID); host != "kept.apps.example.com" || n != 2 {
+			t.Errorf("ingress.claimed = %q in %d rows, want the host claimed again as a second row", host, n)
+		}
+	})
+
+	t.Run("git auto-deploy", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		seedIngressWorld(t, f, e)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		owner := f.addUser(t, "ia-owner", true)
+		st := newStack(t, admin, "claimed-git")
+		v := saveCompose(t, admin, st.ID, ingressCompose("git.apps.example.com"), "[]")
+		started, err := api.NewStackDeployer(f.stackDeps).DeployDraft(testsupport.Context(t), rbac.OnBehalf("system:gitsync", owner), e.ID, st.ID, v, "poll")
+		if err != nil {
+			t.Fatalf("deploy: %v", err)
+		}
+		if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+			t.Fatalf("job = %+v, want it done", job)
+		}
+
+		var found bool
+		for _, r := range audittest.Rows(t, f.st, audit.ActionIngressClaimed) {
+			if r.TargetID != st.ID {
+				continue
+			}
+			found = true
+			if r.ActorType != "system" || !strings.HasPrefix(r.ActorName, "system:") {
+				t.Errorf("actor = %s/%s, want a system: actor", r.ActorType, r.ActorName)
+			}
+			if r.Details["hostnames"] != "git.apps.example.com" {
+				t.Errorf("hostnames = %q, want git.apps.example.com", r.Details["hostnames"])
+			}
+		}
+		if !found {
+			t.Error("no ingress.claimed row for the automatic deploy")
+		}
+	})
+
+	t.Run("update images claims only a hostname the stack does not hold", func(t *testing.T) {
+		t.Parallel()
+		s, _, audits := routedShop(t, false)
+		_, claimedBefore := claimedHostnames(t, s.f, s.st.ID)
+
+		// Unchanged routes: nothing is recorded (TestIngressClaimsUpdateIsNoOp pins the rest).
+		s.move(t, "web", 'b')
+		s.updateStack(t, s.operator, "stack", "shop", nil)
+		if n := claimWriteAudits(t, s.f); n != audits {
+			t.Fatalf("claim audit rows = %d, want %d: an update that changes no route records nothing", n, audits)
+		}
+
+		// The stack lost its claim outside the deploys; the update keeps the last good revision's routes, so it claims it again.
+		if err := s.f.stackDeps.Ingress.ReleaseStack(context.Background(), s.e.ID, s.st.ID, "admin", nil); err != nil {
+			t.Fatal(err)
+		}
+		s.move(t, "web", 'c')
+		s.updateStack(t, s.operator, "stack", "shop", nil)
+		if host, n := claimedHostnames(t, s.f, s.st.ID); host != "shop.apps.example.com" || n != claimedBefore+1 {
+			t.Errorf("ingress.claimed = %q in %d rows, want the shop's host claimed again (%d rows)", host, n, claimedBefore+1)
+		}
+	})
 }
