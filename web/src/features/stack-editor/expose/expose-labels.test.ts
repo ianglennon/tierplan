@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { readFileSync } from "node:fs";
-
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { type ExposeTarget, setRouteField } from "@/features/stack-editor/expose/expose-labels";
 
@@ -28,11 +26,14 @@ interface GoldenCase {
   output: string;
 }
 
+// The file lives with the Go test that reads it. jsdom replaces the URL class, so the path comes
+// from the directory of this file; import.meta.dirname is vitest's, and not in the type.
+const here = (import.meta as unknown as { dirname: string }).dirname;
+const { readFileSync } = await vi.importActual<{
+  readFileSync(path: string, encoding: "utf8"): string;
+}>("node:fs");
 const golden: GoldenCase[] = JSON.parse(
-  readFileSync(
-    new URL("../../../../../internal/stacks/testdata/expose-golden.json", import.meta.url),
-    "utf8",
-  ),
+  readFileSync(`${here}/../../../../../internal/stacks/testdata/expose-golden.json`, "utf8"),
 );
 
 function apply(text: string, target: ExposeTarget, op: Op): string {
