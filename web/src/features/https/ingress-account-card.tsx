@@ -3,17 +3,39 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
+import { useState } from "react";
 
-import { type IngressAccount, ingressAccountQuery } from "@/api/ingress-account";
+import {
+  type IngressAccount,
+  IngressAccountError,
+  ingressAccountQuery,
+  useAcceptIngressTerms,
+  useResumeIngressCertificates,
+} from "@/api/ingress-account";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { useNow } from "@/components/relative-time";
 import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useInstanceAdmin } from "@/hooks/use-me";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { formatRelative } from "@/lib/format";
+
+// 44px targets under 768px (D-64), the dense 32px size from there up.
+const TOUCH_HEIGHT = "h-11 md:h-8";
 
 // IngressAccountCard is the "Ingress certificates" card of Settings > HTTPS (Phase 27, D-04, UI-SPEC
 // S6b): whether an Admin accepted Let's Encrypt's terms for this install, which no ingress certificate
@@ -59,6 +81,8 @@ function IngressAccountSection() {
 function IngressAccountBody({ account }: { account: IngressAccount }) {
   const t = useT();
   const now = useNow();
+  const needs = useNeeds("settings.write");
+  const [asking, setAsking] = useState<"accept" | "resume" | null>(null);
   const accepted = account.termsAccepted;
   const when = account.termsAcceptedAt
     ? formatRelative(account.termsAcceptedAt, new Date(now), t)
@@ -110,6 +134,136 @@ function IngressAccountBody({ account }: { account: IngressAccount }) {
           <AlertDescription>{t(reasonKey, { reason: account.pausedReason })}</AlertDescription>
         </Alert>
       ) : null}
+      {accepted && !account.paused ? null : (
+        <div className="flex flex-wrap gap-3">
+          {accepted ? null : (
+            <ActionButton
+              needs={needs}
+              onOpen={() => setAsking("accept")}
+              label={t("https.ingressAccount.accept.action")}
+            />
+          )}
+          {account.paused ? (
+            <ActionButton
+              needs={needs}
+              variant="outline"
+              onOpen={() => setAsking("resume")}
+              label={t("https.ingressAccount.resume.action")}
+            />
+          ) : null}
+        </div>
+      )}
+      <ConfirmDialog kind="accept" open={asking === "accept"} onClose={() => setAsking(null)} />
+      <ConfirmDialog kind="resume" open={asking === "resume"} onClose={() => setAsking(null)} />
     </div>
+  );
+}
+
+// ActionButton opens a confirmation. Without settings.write it stays in the tab order, looks disabled
+// and says what it needs (D-19); the server enforces the permission whatever this draws.
+function ActionButton({
+  needs,
+  label,
+  variant,
+  onOpen,
+}: {
+  needs: ReturnType<typeof useNeeds>;
+  label: string;
+  variant?: "outline";
+  onOpen: () => void;
+}) {
+  return (
+    <NeedsTooltip reason={needs.allowed ? undefined : needs.reason}>
+      <Button
+        type="button"
+        variant={variant}
+        className={TOUCH_HEIGHT}
+        disabled={!needs.allowed && !needs.reason}
+        onClick={onOpen}
+      >
+        {label}
+      </Button>
+    </NeedsTooltip>
+  );
+}
+
+// ConfirmDialog is "Accept Let's Encrypt's terms?" and "Resume certificate work?". Nothing closes it
+// while the request is in flight. A refusal stays in the dialog as the server's own sentence (a destructive
+// Alert, never a toast); a success closes it once the account has been read again.
+function ConfirmDialog({
+  kind,
+  open,
+  onClose,
+}: {
+  kind: "accept" | "resume";
+  open: boolean;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const accept = useAcceptIngressTerms();
+  const resume = useResumeIngressCertificates();
+  const mutation = kind === "accept" ? accept : resume;
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const prefix = `https.ingressAccount.${kind}`;
+  const pending = mutation.isPending;
+
+  function change(next: boolean) {
+    if (pending) return;
+    if (!next) {
+      setRefusal(null);
+      onClose();
+    }
+  }
+
+  async function confirm() {
+    if (pending) return;
+    setRefusal(null);
+    try {
+      await mutation.mutateAsync();
+    } catch (error) {
+      setRefusal(
+        error instanceof IngressAccountError && error.detail
+          ? error.detail
+          : t("common.mutationFailed"),
+      );
+      return;
+    }
+    onClose();
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={change}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t(`${prefix}.title`)}</AlertDialogTitle>
+          <AlertDialogDescription>{t(`${prefix}.body`)}</AlertDialogDescription>
+        </AlertDialogHeader>
+        {refusal !== null ? (
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>{refusal}</AlertDescription>
+          </Alert>
+        ) : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending} className={TOUCH_HEIGHT}>
+            {t(`${prefix}.cancel`)}
+          </AlertDialogCancel>
+          <Button
+            type="button"
+            aria-disabled={pending}
+            className={`${TOUCH_HEIGHT} aria-disabled:cursor-not-allowed aria-disabled:opacity-50`}
+            onClick={() => void confirm()}
+          >
+            {pending ? (
+              <>
+                <Spinner aria-hidden="true" role="presentation" />
+                {t(`${prefix}.pending`)}
+              </>
+            ) : (
+              t(`${prefix}.confirm`)
+            )}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
