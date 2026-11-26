@@ -11,6 +11,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/acme/dns"
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/audit/audittest"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 )
 
 // The domain, reservation, issuer, request, retry and handoff proofs of the audit table test (A-01 class P, D-23): each
@@ -168,4 +169,112 @@ func TestAuditProofHostUnreserved(t *testing.T) {
 	}
 	wantDetails(t, row, map[string]string{"suffix": "apps.example.com", "hostname": "admin.apps.example.com"})
 	audittest.AssertNoSecrets(t, rows, ingressToken)
+}
+
+// Changing a domain's issuer writes one row with the new and previous issuer and the two counts the change was confirmed on.
+func TestAuditProofDomainIssuerChanged(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	dom := f.register(t, f.adminA, f.envA, "apps.example.com")
+	f.requestCert(t, f.adminA, f.envA, "web.apps.example.com")
+
+	rec := f.credCall(t, f.adminA, http.MethodPut, issuerPath(f.envA, dom.ID), issuerChangeBody("staging", 1))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("change: %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressDomainIssuerChanged)
+	row := onlyClaimRow(t, rows, audit.ActionIngressDomainIssuerChanged)
+	if row.ActorName != "ing-admin-a" || row.Result != string(audit.ResultSuccess) || row.TargetID != dom.ID || row.EnvID != f.envA {
+		t.Errorf("row = actor %q result %q target %q env %q, want a success by the Admin on the domain", row.ActorName, row.Result, row.TargetID, row.EnvID)
+	}
+	wantDetails(t, row, map[string]string{
+		"suffix": "apps.example.com", "issuer": "staging", "previous": "production", "certificates": "1", "uploads": "0",
+	})
+	audittest.AssertNoSecrets(t, rows, ingressToken)
+}
+
+// Asking for a certificate ahead of any claim writes one row with the hostname and the issuer.
+func TestAuditProofCertRequested(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+
+	c := f.requestCert(t, f.adminA, f.envA, "web.apps.example.com")
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressCertRequested)
+	row := onlyClaimRow(t, rows, audit.ActionIngressCertRequested)
+	if row.ActorName != "ing-admin-a" || row.Result != string(audit.ResultSuccess) || row.TargetID != c.ID || row.EnvID != f.envA {
+		t.Errorf("row = actor %q result %q target %q env %q, want a success by the Admin on the certificate", row.ActorName, row.Result, row.TargetID, row.EnvID)
+	}
+	wantDetails(t, row, map[string]string{"hostname": "web.apps.example.com", "issuer": "production"})
+	audittest.AssertNoSecrets(t, rows, ingressToken)
+}
+
+// Trying a certificate again now writes one row with the hostname.
+func TestAuditProofCertRetried(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	c := f.requestCert(t, f.adminA, f.envA, "web.apps.example.com")
+
+	rec := f.credCall(t, f.adminA, http.MethodPost, certsPath(f.envA, "/", c.ID, "/retry"), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("retry: %d %s, want 202", rec.Code, rec.Body)
+	}
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressCertRetried)
+	row := onlyClaimRow(t, rows, audit.ActionIngressCertRetried)
+	if row.ActorName != "ing-admin-a" || row.Result != string(audit.ResultSuccess) || row.TargetID != c.ID || row.EnvID != f.envA {
+		t.Errorf("row = actor %q result %q target %q env %q, want a success by the Admin on the certificate", row.ActorName, row.Result, row.TargetID, row.EnvID)
+	}
+	wantDetails(t, row, map[string]string{"hostname": "web.apps.example.com"})
+	audittest.AssertNoSecrets(t, rows, ingressToken)
+}
+
+// vrrpKeyProof is a recognisable stand-in for the virtual IP's VRRP key, which the handoff rows must never hold.
+const vrrpKeyProof = "9f3c1a7e5b2d4086a1c3e5f70912b4d6" //nolint:gosec // G101: a recognisable fake key, so the scan can look for it
+
+// Draining the node that holds the virtual IP writes one handoff row, a success when the address moved, with the node, the
+// holder and the outcome and never the VRRP key.
+func TestAuditProofVIPHandoff(t *testing.T) {
+	t.Parallel()
+	vip := &fakeVIP{holder: "node-4", result: ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffMoved, Holder: "wrk-2", HolderNodeID: "node-5"}}
+	f, e := naEnvVIP(t, vip)
+
+	rec := f.setAvailability(t, e, "node-4", `{"availability":"drain","version":3}`)
+	if rec.code != http.StatusOK {
+		t.Fatalf("drain: %d %s, want 200 with the handoff", rec.code, rec.body)
+	}
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressVIPHandoff)
+	row := onlyClaimRow(t, rows, audit.ActionIngressVIPHandoff)
+	if row.Result != string(audit.ResultSuccess) || row.Reason != "" || row.TargetType != "node" || row.TargetID != "node-4" || row.EnvID != e.ID {
+		t.Errorf("row = result %q reason %q target %s/%s env %q, want a success on node-4", row.Result, row.Reason, row.TargetType, row.TargetID, row.EnvID)
+	}
+	wantDetails(t, row, map[string]string{"node": "wrk-1", "holder": "wrk-2", "outcome": ingressdeploy.VIPHandoffMoved})
+	audittest.AssertNoSecrets(t, rows, vrrpKeyProof)
+}
+
+// A handoff that does not finish still lets the drain happen, and writes one failure row whose reason is the outcome.
+func TestAuditProofVIPHandoffFailure(t *testing.T) {
+	t.Parallel()
+	vip := &fakeVIP{holder: "node-4", result: ingressdeploy.VIPHandoff{Outcome: ingressdeploy.VIPHandoffTimeout, Holder: "wrk-2"}}
+	f, e := naEnvVIP(t, vip)
+
+	rec := f.setAvailability(t, e, "node-4", `{"availability":"drain","version":3}`)
+	if rec.code != http.StatusOK {
+		t.Fatalf("drain: %d %s, want 200 with the handoff outcome", rec.code, rec.body)
+	}
+	if ups := f.fake.NodeUpdates(); len(ups) != 1 || ups[0].Spec.Availability != "drain" {
+		t.Errorf("updates = %+v, want the drain made whatever the outcome", ups)
+	}
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressVIPHandoff)
+	row := onlyClaimRow(t, rows, audit.ActionIngressVIPHandoff)
+	if row.Result != string(audit.ResultFailure) || row.Reason != ingressdeploy.VIPHandoffTimeout || row.TargetID != "node-4" || row.EnvID != e.ID {
+		t.Errorf("row = result %q reason %q target %q env %q, want a failure with the outcome as its reason", row.Result, row.Reason, row.TargetID, row.EnvID)
+	}
+	wantDetails(t, row, map[string]string{"node": "wrk-1", "holder": "wrk-2", "outcome": ingressdeploy.VIPHandoffTimeout})
+	audittest.AssertNoSecrets(t, rows, vrrpKeyProof)
 }
