@@ -145,7 +145,27 @@
         "label": "Hostname",
         "helper": "The name people type to reach this service.",
         "required": "Hostname is required."
-      }
+      },
+      "port": {
+        "label": "Port",
+        "helper": "The port the service listens on inside its container.",
+        "required": "Port is required.",
+        "invalid": "Use a port from 1 to 65535."
+      },
+      "path": {
+        "label": "Path",
+        "helper": "Requests below this path go to the service. Empty means the whole host."
+      },
+      "scheme": {
+        "label": "Scheme",
+        "helper": "How the proxy talks to the service.",
+        "http": "http",
+        "https": "https"
+      },
+      "strip": {
+        "label": "Remove the path prefix before passing the request on"
+      },
+      "footer": "Changes stay in the editor until you save. Hostnames and ports are checked as you type; problems show below the editor. Labels set in other compose files of this stack aren't shown here."
     }
   }
 }

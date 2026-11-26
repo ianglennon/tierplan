@@ -14,16 +14,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   type ExposeRoute,
   type ExposeTarget,
   type RouteField,
   readServiceRoutes,
   setRouteField,
+  validatePort,
 } from "@/features/stack-editor/expose/expose-labels";
 import { useT } from "@/i18n/use-t";
 
 interface ExposePanelProps {
+  envId: string;
   // The id the editor's "Expose routes" button names in aria-controls.
   id: string;
   // The compose file as the working copy holds it now.
@@ -110,6 +114,7 @@ export function ExposePanel({ id, text, target, readOnly, onEdit, onClose }: Exp
           onSet={(field, value) => set(route.name, field, value)}
         />
       ))}
+      <p className="text-xs break-words text-muted-foreground">{t("stackEditor.expose.footer")}</p>
     </section>
   );
 }
@@ -126,6 +131,7 @@ interface RouteFormProps {
 // and the stack check runs once (U-12).
 function RouteForm({ idBase, route, readOnly, onSet }: RouteFormProps) {
   const t = useT();
+  const locked = (field: RouteField) => readOnly || route.locked[field] !== undefined;
   return (
     <fieldset
       aria-label={t("stackEditor.expose.route.group", { name: route.name })}
@@ -138,10 +144,72 @@ function RouteForm({ idBase, route, readOnly, onSet }: RouteFormProps) {
         helper={t("stackEditor.expose.host.helper")}
         value={route.host}
         mono
-        readOnly={readOnly || route.locked.host !== undefined}
+        readOnly={locked("host")}
         validate={(v) => (v === "" ? t("stackEditor.expose.host.required") : null)}
         onCommit={(v) => onSet("host", v)}
       />
+      <CommitField
+        id={`${idBase}-port`}
+        label={t("stackEditor.expose.port.label")}
+        helper={t("stackEditor.expose.port.helper")}
+        value={route.port}
+        type="number"
+        inputMode="numeric"
+        readOnly={locked("port")}
+        validate={(v) => {
+          if (v === "") return t("stackEditor.expose.port.required");
+          return validatePort(v) ? null : t("stackEditor.expose.port.invalid");
+        }}
+        onCommit={(v) => onSet("port", v)}
+      />
+      <CommitField
+        id={`${idBase}-path`}
+        label={t("stackEditor.expose.path.label")}
+        helper={t("stackEditor.expose.path.helper")}
+        value={route.path}
+        placeholder="/"
+        mono
+        readOnly={locked("path")}
+        validate={() => null}
+        onCommit={(v) => onSet("path", v)}
+      />
+      <Field>
+        <FieldLabel id={`${idBase}-scheme-label`}>
+          {t("stackEditor.expose.scheme.label")}
+        </FieldLabel>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          value={route.scheme}
+          aria-labelledby={`${idBase}-scheme-label`}
+          aria-describedby={`${idBase}-scheme-helper`}
+          disabled={locked("scheme")}
+          onValueChange={(next) => {
+            // Pressing the chosen one again would clear a group that must always hold one.
+            if (next === "http" || next === "https") onSet("scheme", next);
+          }}
+        >
+          {(["http", "https"] as const).map((scheme) => (
+            <ToggleGroupItem key={scheme} value={scheme} className="max-md:h-11">
+              {t(`stackEditor.expose.scheme.${scheme}`)}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <FieldDescription id={`${idBase}-scheme-helper`} className="text-xs break-words">
+          {t("stackEditor.expose.scheme.helper")}
+        </FieldDescription>
+      </Field>
+      <Field orientation="horizontal">
+        <Switch
+          id={`${idBase}-strip`}
+          checked={route.strip}
+          disabled={locked("strip")}
+          onCheckedChange={(on) => onSet("strip", on)}
+        />
+        <FieldLabel htmlFor={`${idBase}-strip`} className="font-normal break-words">
+          {t("stackEditor.expose.strip.label")}
+        </FieldLabel>
+      </Field>
     </fieldset>
   );
 }
@@ -153,6 +221,9 @@ interface CommitFieldProps {
   // The value the working copy holds.
   value: string;
   mono?: boolean;
+  type?: "text" | "number";
+  inputMode?: "numeric";
+  placeholder?: string;
   readOnly: boolean;
   // The sentence for a value that must not be written, or null when it may be.
   validate: (value: string) => string | null;
@@ -165,6 +236,9 @@ function CommitField({
   helper,
   value,
   mono,
+  type,
+  inputMode,
+  placeholder,
   readOnly,
   validate,
   onCommit,
@@ -199,6 +273,11 @@ function CommitField({
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
       <Input
         id={id}
+        type={type}
+        inputMode={inputMode}
+        min={type === "number" ? 1 : undefined}
+        max={type === "number" ? 65535 : undefined}
+        placeholder={placeholder}
         value={draft}
         readOnly={readOnly}
         aria-readonly={readOnly ? true : undefined}

@@ -641,6 +641,7 @@ export function StackEditorPage({
                   <div className="w-full rounded-md border bg-card xl:w-80 xl:shrink-0 xl:rounded-none xl:border-0 xl:border-l">
                     <ExposePanel
                       id={exposeId}
+                      envId={envId}
                       text={open.content}
                       target={stack.data.target === "standalone" ? "standalone" : "swarm"}
                       readOnly={!canEdit || open.origin === "repo" || fromGit}
