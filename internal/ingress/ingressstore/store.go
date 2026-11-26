@@ -806,8 +806,9 @@ func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingres
 // the same transaction, and the environment's version is raised and its notifier told once. A stack
 // that holds nothing is a no-op.
 //
-// The stack delete path does not call it: the claims go with the stack row and the database trigger counts
-// that change.
+// The stack removal job calls it, through stackops.Ingress, once the engine has nothing of the stack and before the
+// definition is deleted, so the release is audited as ingress.claim_released in the claims' own transaction. The
+// database trigger that counts a change when a stack row goes only backs that up.
 func (s *Store) ReleaseStack(ctx context.Context, envID, stackID, actor string, hook ClaimHook) error {
 	_, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: envID, StackID: stackID, Actor: actor, Hook: hook})
 	return err
