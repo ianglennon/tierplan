@@ -148,7 +148,8 @@ type RevokeIngressNodeOutput struct {
 
 // IngressNodeListBody is every ingress node of an environment.
 type IngressNodeListBody struct {
-	Items []IngressNodeBody `json:"items" doc:"One entry per node, oldest first, revoked nodes included"`
+	Items           []IngressNodeBody `json:"items" doc:"One entry per node, oldest first, revoked nodes included"`
+	CurrentBundleID string            `json:"currentBundleId" doc:"The bundle the environment's nodes should hold now; empty when none has been built. Bundle IDs are content hashes, not ordered"`
 }
 
 // IngressNodeListOutput wraps IngressNodeListBody for huma.
@@ -171,8 +172,9 @@ func ingressNodeSync(n ingresshub.Node, currentID string, haveCurrent bool) stri
 	return ingressSyncPending
 }
 
-// RegisterIngressNodes registers the ingress join token routes, the node list and the revoke of one node. The token and
-// list routes need ingress.manage on the environment (its Admin); the revoke needs environments.revoke on it, the same
+// RegisterIngressNodes registers the ingress join token routes, the node list and the revoke of one node. Making, disabling
+// the token needs ingress.manage on the environment (its Admin); reading the token's details and the node list needs
+// ingress.read (Viewer), with the Admin-only fields filled only for ingress.manage holders (A-04); the revoke needs environments.revoke on it, the same
 // permission as revoking an agent. The routes are always registered; without a Service they answer 503
 // ingress_unavailable.
 func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
@@ -260,9 +262,10 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		Path:        "/api/env/{envId}/ingress/join-token",
 		Summary:     "Show which ingress join token an environment has",
 		Description: "Whether the environment has an ingress join token, its generation, when and by whom it was made, and whether it is disabled. " +
-			"Never the token: it is stored only as a hash. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.manage on the environment (its Admin).",
+			"Never the token: it is stored only as a hash. createdBy is filled only for a caller who also holds ingress.manage on the environment. " +
+			"Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressJoinTokenStatusOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *EnvironmentPathInput) (*IngressJoinTokenStatusOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
@@ -311,9 +314,11 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			"runs on, status, supervisor version and bundle schemas, the bundle it applied and the one it refused, its proxy health, when it was last " +
 			"seen, whether it is connected now, whether it is in sync with the bundle it should hold (a bundle still on its way is pending, not a " +
 			"failure), whether it is incompatible with this server, and for a revoked node who revoked it, why, and the hostnames whose keys it held. " +
-			"Never carries a key or a token. Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.manage on the environment (its Admin).",
+			"currentBundleId is the bundle the nodes should hold now. heldHostnames, revokeReason and revokedBy are filled only for a caller who also holds " +
+			"ingress.manage on the environment. Never carries a key or a token. Answered with Cache-Control no-store. 404 environment_not_found. " +
+			"Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressNodeListOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *EnvironmentPathInput) (*IngressNodeListOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
@@ -334,6 +339,10 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		)
 		if d.CurrentBundle != nil {
 			currentID, haveBndl = d.CurrentBundle(in.EnvID)
+		}
+		currentBundle := ""
+		if haveBndl {
+			currentBundle = currentID
 		}
 		items := make([]IngressNodeBody, 0, len(nodes))
 		for _, n := range nodes {
@@ -357,7 +366,7 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			}
 			items = append(items, b)
 		}
-		return &IngressNodeListOutput{CacheControl: "no-store", Body: IngressNodeListBody{Items: items}}, nil
+		return &IngressNodeListOutput{CacheControl: "no-store", Body: IngressNodeListBody{Items: items, CurrentBundleID: currentBundle}}, nil
 	})
 	httpx.Register(r, huma.Operation{
 		OperationID: "revokeIngressNode",
