@@ -6,6 +6,12 @@ package audit_test
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -381,6 +387,132 @@ func TestIngressActionTable(t *testing.T) {
 			t.Fatalf("verify = %+v, want %d entries and an intact chain", got, recorded)
 		}
 	})
+
+	// A proof is accepted by what its body does, never by its name: it must exist as a top-level func of a _test.go
+	// file and call audittest.AssertNoSecrets, so that no row it provokes can hold a token or a key.
+	t.Run("proofs", func(t *testing.T) {
+		wanted := map[string][]string{} // proof name -> actions that name it
+		for _, r := range ingressActions {
+			for _, name := range append(slices.Clone(r.Proofs), r.Failure) {
+				if name != "" {
+					wanted[name] = append(wanted[name], r.Action)
+				}
+			}
+		}
+		for _, problem := range checkProofs(t, "../../internal", wanted) {
+			t.Error(problem)
+		}
+	})
+}
+
+// checkProofs scans every _test.go file under root and returns one problem per wanted proof that is not a top-level
+// func, or whose body does not call audittest.AssertNoSecrets. wanted maps each proof name to the actions that name it.
+func checkProofs(t *testing.T, root string, wanted map[string][]string) []string {
+	t.Helper()
+	found := map[string]bool{}   // proof name -> declared as a top-level func
+	checked := map[string]bool{} // proof name -> its body calls AssertNoSecrets
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(src), "func Test") {
+			return nil
+		}
+		file, err := parser.ParseFile(fset, path, src, 0)
+		if err != nil {
+			return err
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Body == nil {
+				continue
+			}
+			if _, want := wanted[fn.Name.Name]; !want {
+				continue
+			}
+			found[fn.Name.Name] = true
+			if callsAssertNoSecrets(fn.Body) {
+				checked[fn.Name.Name] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problems []string
+	names := make([]string, 0, len(wanted))
+	for name := range wanted {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		switch {
+		case !found[name]:
+			problems = append(problems, "proof "+name+" ("+strings.Join(wanted[name], ", ")+") is not a top-level func of any _test.go file")
+		case !checked[name]:
+			problems = append(problems, "proof "+name+" ("+strings.Join(wanted[name], ", ")+") never calls audittest.AssertNoSecrets")
+		}
+	}
+	return problems
+}
+
+// callsAssertNoSecrets reports whether body holds a call expression audittest.AssertNoSecrets(...).
+func callsAssertNoSecrets(body *ast.BlockStmt) bool {
+	hit := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return !hit
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "AssertNoSecrets" {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "audittest" {
+			hit = true
+		}
+		return !hit
+	})
+	return hit
+}
+
+// TestIngressActionTableCatchesAProofThatDoesNotCheckForSecrets proves the proof scan refuses a proof that is missing
+// and one that never calls the shared no-secret helper.
+func TestIngressActionTableCatchesAProofThatDoesNotCheckForSecrets(t *testing.T) {
+	dir := t.TempDir()
+	src := `package x
+
+import "testing"
+
+func TestAuditProofChecked(t *testing.T)   { audittest.AssertNoSecrets(t, nil) }
+func TestAuditProofUnchecked(t *testing.T) { _ = t }
+`
+	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	problems := checkProofs(t, dir, map[string][]string{
+		"TestAuditProofChecked":   {"ingress.a"},
+		"TestAuditProofUnchecked": {"ingress.b"},
+		"TestAuditProofGone":      {"ingress.c"},
+	})
+	if len(problems) != 2 {
+		t.Fatalf("problems = %v, want the unchecked and the missing proof", problems)
+	}
+	if !strings.Contains(problems[0], "TestAuditProofGone") || !strings.Contains(problems[0], "not a top-level func") {
+		t.Errorf("problems[0] = %q", problems[0])
+	}
+	if !strings.Contains(problems[1], "TestAuditProofUnchecked") || !strings.Contains(problems[1], "never calls") {
+		t.Errorf("problems[1] = %q", problems[1])
+	}
 }
 
 // TestIngressActionTableCatchesAMissingRow proves the checker reports both ways the table can drift.
