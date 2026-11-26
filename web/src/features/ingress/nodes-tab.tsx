@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
 import { RevokeNodeDialog } from "@/features/ingress/revoke-node-dialog";
+import { VIPMoves } from "@/features/ingress/vip-moves";
 import { VIPStatusCard } from "@/features/ingress/vip-status-card";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { type Needs, useNeeds } from "@/hooks/use-needs";
@@ -194,6 +195,7 @@ export function NodesTab({ envId }: { envId: string }) {
           ))}
         </TableBody>
       </Table>
+      {vip ? <VIPMoves envId={envId} /> : null}
       <RevokeNodeDialog envId={envId} node={revoking} onClose={() => setRevoking(null)} />
     </div>
   );

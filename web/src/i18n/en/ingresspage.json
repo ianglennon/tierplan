@@ -327,7 +327,6 @@
         "move": "{{from}} to {{to}}",
         "noNode": "no node",
         "more": "Show more",
-        "loadingMore": "Loading more…",
         "empty": "The address hasn't moved.",
         "reason": {
           "holder_failed": "The previous holder stopped answering.",

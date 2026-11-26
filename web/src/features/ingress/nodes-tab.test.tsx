@@ -23,6 +23,7 @@ let status: Json;
 let envType: "swarm" | "standalone";
 let vip: () => Response;
 let vipRequests: number;
+let moves: Json[];
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 
@@ -62,6 +63,7 @@ beforeEach(() => {
   status = { enabled: true };
   envType = "standalone";
   vipRequests = 0;
+  moves = [];
   vip = () => Response.json(vipFixture());
   me = makeMe({ envs: { [ENV]: "viewer" } });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -75,6 +77,7 @@ beforeEach(() => {
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType }] });
       }
+      if (path === `/api/env/${ENV}/ingress/vip/moves`) return Response.json({ items: moves });
       if (path === `/api/env/${ENV}/ingress/vip`) {
         vipRequests++;
         return vip();
@@ -345,6 +348,35 @@ describe("the Ingress page's Nodes tab", () => {
       expect(within(rowOf(t, "edge-4")).getByText("Not reporting")).toBeTruthy();
       expect(within(rowOf(t, "edge-5")).getByText("—")).toBeTruthy();
       expect(within(rowOf(t, "solo")).getByText("—")).toBeTruthy();
+    });
+
+    it("orders the card, the node table and the history of moves, in that order", async () => {
+      envType = "swarm";
+      moves = [
+        {
+          at: "2026-11-20T10:00:00Z",
+          fromNodeId: "",
+          fromNode: "",
+          toNodeId: "sw-b",
+          toNode: "node-b",
+          reason: "unknown",
+        },
+      ];
+      serve([node()]);
+      mount();
+      const t = await table();
+      const card = await screen.findByRole("heading", { name: "Virtual IP" });
+      const history = await screen.findByRole("heading", { name: "Address moves" });
+      expect(card.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(t.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(await screen.findByText("no node to node-b")).toBeTruthy();
+    });
+
+    it("draws no history of moves on a standalone environment or a swarm with the virtual IP off", async () => {
+      serve([node()]);
+      mount();
+      await table();
+      expect(screen.queryByRole("heading", { name: "Address moves" })).toBeNull();
     });
 
     it("draws a standby candidate as Standby with no fault line", async () => {
