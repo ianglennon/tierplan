@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/audit"
@@ -99,6 +100,7 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 		"git.manage":             e(rbac.RoleAdmin),
 		"git.instance":           g(true),
 		"ingress.manage":         e(rbac.RoleAdmin),
+		"ingress.read":           e(rbac.RoleViewer),
 	}
 	for name, w := range want {
 		p, ok := m[name]
@@ -122,6 +124,24 @@ func TestRegistryPinsEveryPermissionsScopeMinRoleAndExtra(t *testing.T) {
 	}
 	if _, found := rbac.Lookup("nope.read"); found {
 		t.Error("Lookup found a permission that is not registered")
+	}
+}
+
+// TestIngressManageNamesWritesOnly: D-15 split the ingress reads off ingress.manage, so its registry description names writes
+// only, and ingress.read's names what it never shows.
+func TestIngressManageNamesWritesOnly(t *testing.T) {
+	m := perms(t)
+	manage := m[rbac.PermIngressManage].Description
+	for _, banned := range []string{"list", "read its"} {
+		if strings.Contains(manage, banned) {
+			t.Errorf("ingress.manage description names %q, want writes only: %q", banned, manage)
+		}
+	}
+	read := m[rbac.PermIngressRead].Description
+	for _, want := range []string{"never a DNS token", "never the token"} {
+		if !strings.Contains(read, want) {
+			t.Errorf("ingress.read description lacks %q: %q", want, read)
+		}
 	}
 }
 
