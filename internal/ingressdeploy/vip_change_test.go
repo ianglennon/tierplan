@@ -14,6 +14,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
@@ -82,7 +83,7 @@ func wantChangeRefused(t *testing.T, f *vipDisableFix, req ingressdeploy.VIPRequ
 	if got := len(f.fake.Writes()); got != writes {
 		t.Errorf("a refused change wrote %v", f.fake.Writes()[writes:])
 	}
-	if got := f.auditCount("ingress.vip_changed"); got != 0 {
+	if got := f.auditCountResult("ingress.vip_changed", audit.ResultSuccess); got != 0 {
 		t.Errorf("a refused change wrote %d audit rows", got)
 	}
 	if _, held := f.locks.Held(f.envID); held {
@@ -245,7 +246,7 @@ func TestChangeVIP(t *testing.T) {
 		if after, _ := f.istore.GetVIP(ctx, f.envID); after != before {
 			t.Errorf("an unchanged request touched the row: %+v, was %+v", after, before)
 		}
-		if got := f.auditCount("ingress.vip_changed"); got != 0 {
+		if got := f.auditCountResult("ingress.vip_changed", audit.ResultSuccess); got != 0 {
 			t.Errorf("an unchanged request wrote %d audit rows", got)
 		}
 	})
@@ -388,7 +389,7 @@ func TestChangeVIPWaitsForTheRoll(t *testing.T) {
 		if _, held := f.locks.Held(f.envID); !held {
 			t.Errorf("wait %d: the operation lock is free while the roll runs", n)
 		}
-		if got := f.auditCount("ingress.vip_changed"); got != 0 {
+		if got := f.auditCountResult("ingress.vip_changed", audit.ResultSuccess); got != 0 {
 			t.Errorf("wait %d: the change is audited before it is made", n)
 		}
 		switch n {
@@ -412,7 +413,7 @@ func TestChangeVIPWaitsForTheRoll(t *testing.T) {
 	if row, _ := f.istore.GetVIP(ctx, f.envID); row.Prefix().String() != newAddress {
 		t.Errorf("row = %v, want %s", row.Prefix(), newAddress)
 	}
-	if got := f.auditCount("ingress.vip_changed"); got != 1 {
+	if got := f.auditCountResult("ingress.vip_changed", audit.ResultSuccess); got != 1 {
 		t.Errorf("audit rows = %d, want 1", got)
 	}
 }
@@ -439,7 +440,7 @@ func TestChangeVIPThatTakesTooLongIsSaved(t *testing.T) {
 	if row, _ := f.istore.GetVIP(testsupport.Context(t), f.envID); row.Prefix().String() != newAddress {
 		t.Errorf("row = %v, want %s", row.Prefix(), newAddress)
 	}
-	if got := f.auditCount("ingress.vip_changed"); got != 1 {
+	if got := f.auditCountResult("ingress.vip_changed", audit.ResultSuccess); got != 1 {
 		t.Errorf("audit rows = %d, want 1", got)
 	}
 	if _, held := f.locks.Held(f.envID); held {
@@ -475,7 +476,7 @@ func TestChangeVIPTheSwarmRolledBackIsNotSaved(t *testing.T) {
 	if after, _ := f.istore.GetVIP(ctx, f.envID); after != before {
 		t.Errorf("a rolled-back change touched the row: %+v, was %+v", after, before)
 	}
-	if got := f.auditCount("ingress.vip_changed"); got != 0 {
+	if got := f.auditCountResult("ingress.vip_changed", audit.ResultSuccess); got != 0 {
 		t.Errorf("a rolled-back change wrote %d audit rows", got)
 	}
 	if _, held := f.locks.Held(f.envID); held {
@@ -568,7 +569,7 @@ func TestChangeVIPTheSwarmIsRollingBackIsNotSaved(t *testing.T) {
 			if after, _ := f.istore.GetVIP(ctx, f.envID); after != before {
 				t.Errorf("the row was touched: %+v, was %+v", after, before)
 			}
-			if got := f.auditCount("ingress.vip_changed"); got != 0 {
+			if got := f.auditCountResult("ingress.vip_changed", audit.ResultSuccess); got != 0 {
 				t.Errorf("audit rows = %d, want none", got)
 			}
 		})

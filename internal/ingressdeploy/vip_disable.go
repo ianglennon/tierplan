@@ -167,7 +167,11 @@ func (s *Service) DisableVIP(ctx context.Context, actor audit.Actor, owner, envI
 	}
 	return s.startEnable(ctx, JobKindVIPDisable, owner, info, EnableRequest{}, pre, specs,
 		func(jctx context.Context, r *jobs.Reporter, release func()) {
-			if err := s.removeVIP(jctx, actor, envID, r, release); err != nil {
+			// A step that fails or is cancelled is audited as it ends its item (A-01); the ensure loop's removal is not.
+			onFail := func(item, code string) {
+				s.auditJobFailed(jctx, actor, audit.ActionIngressVIPDisabled, envID, item, code)
+			}
+			if err := s.removeVIPAudited(jctx, actor, envID, r, release, onFail); err != nil {
 				s.log().Warn("a virtual IP switch-off did not finish", "environment", envID, "error", err)
 				if r != nil && jctx.Err() == nil {
 					r.Output(vipLeftText)
@@ -265,6 +269,15 @@ func (s *Service) waitKeepalivedGone(ctx context.Context, envID string, deadline
 type vipRemoval struct {
 	r       *jobs.Reporter
 	release func()
+	// onFail, when set, is told the item and the code of a step that failed or was cancelled, before the item ends.
+	onFail func(item, code string)
+}
+
+// record tells onFail of a step that failed or was cancelled.
+func (v *vipRemoval) record(item, code string) {
+	if v.onFail != nil {
+		v.onFail(item, code)
+	}
 }
 
 // freeLock frees the environment's operation lock before the item that ends the job is finished, so a reader that sees the
@@ -289,6 +302,7 @@ func (v *vipRemoval) done(item string, result map[string]string) {
 
 // failed ends the item with vip_remove_failed and the sentence of the item, and the engine's own words when detail is set.
 func (v *vipRemoval) failed(item, detail string) {
+	v.record(item, CodeVIPRemoveFailed)
 	if v.r == nil {
 		return
 	}
@@ -322,7 +336,13 @@ func (v *vipRemoval) skip(from int, state, code string) {
 // enabled 0, which a later call finishes. A wait that ran out is not the end: the secret is still tried, and the row is kept.
 // An environment with no virtual IP is ErrVIPNotEnabled. The caller holds the environment's operation lock.
 func (s *Service) removeVIP(ctx context.Context, actor audit.Actor, envID string, r *jobs.Reporter, release func()) error {
-	v := &vipRemoval{r: r, release: release}
+	return s.removeVIPAudited(ctx, actor, envID, r, release, nil)
+}
+
+// removeVIPAudited is removeVIP that also tells onFail, when set, of each step that fails or is cancelled, just before the
+// step's item ends, so the switch-off's own job can write the audit row of a failed run.
+func (s *Service) removeVIPAudited(ctx context.Context, actor audit.Actor, envID string, r *jobs.Reporter, release func(), onFail func(item, code string)) error {
+	v := &vipRemoval{r: r, release: release, onFail: onFail}
 	cfg, err := s.d.Store.GetVIP(ctx, envID)
 	if errors.Is(err, ingressstore.ErrVIPNotFound) {
 		return ErrVIPNotEnabled
@@ -347,6 +367,7 @@ func (s *Service) removeVIP(ctx context.Context, actor audit.Actor, envID string
 	stop := func(i int, err error, detail string) error {
 		v.freeLock()
 		if ctx.Err() != nil {
+			v.record(vipDisableItems[i], jobs.CodeCancelled)
 			if r != nil {
 				r.Finish(vipDisableItems[i], jobs.ItemCancelled, jobs.CodeCancelled, "", nil)
 			}

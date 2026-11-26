@@ -257,6 +257,8 @@ func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release fu
 	for i, st := range steps {
 		taken := run.serviceID != "" // an earlier step ended well, so the swarm took the new configuration
 		if ctx.Err() != nil && !taken {
+			// The row is written before the items that end the job, so a reader that sees the job over finds it (A-01).
+			s.auditJobFailed(ctx, actor, audit.ActionIngressVIPChanged, envID, st.item, jobs.CodeCancelled)
 			run.stop(st.item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 			return
@@ -264,6 +266,7 @@ func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release fu
 		r.Update(st.item, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 		if err := st.do(ctx); err != nil {
 			if ctx.Err() != nil && !taken {
+				s.auditJobFailed(ctx, actor, audit.ActionIngressVIPChanged, envID, st.item, jobs.CodeCancelled)
 				run.stop(st.item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 				run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 				return
@@ -277,6 +280,7 @@ func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release fu
 			if !errors.Is(err, errVIPChangeUndone) {
 				r.Output(vipChangeLeftText)
 			}
+			s.auditJobFailed(ctx, actor, audit.ActionIngressVIPChanged, envID, st.item, CodeVIPChangeFailed)
 			run.stop(st.item, jobs.ItemFailed, CodeVIPChangeFailed, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
 			return
@@ -566,9 +570,11 @@ func (e *vipChangeRun) wait(ctx context.Context) error {
 	s.log().Warn("a virtual IP change saves its address before every node has restarted", "environment", e.envID, "error", err)
 	e.r.Output(vipChangeSlowText)
 	if ctx.Err() != nil {
+		s.auditJobFailed(ctx, e.actor, audit.ActionIngressVIPChanged, e.envID, ItemVIPChangeWait, jobs.CodeCancelled)
 		e.r.Finish(ItemVIPChangeWait, jobs.ItemCancelled, jobs.CodeCancelled, "", nodes)
 		return nil
 	}
+	s.auditJobFailed(ctx, e.actor, audit.ActionIngressVIPChanged, e.envID, ItemVIPChangeWait, CodeVIPChangeFailed)
 	e.r.Finish(ItemVIPChangeWait, jobs.ItemFailed, CodeVIPChangeFailed, vipChangeMessages[ItemVIPChangeWait], nodes)
 	return nil
 }
