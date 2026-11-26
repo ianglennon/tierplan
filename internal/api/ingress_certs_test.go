@@ -523,3 +523,46 @@ func TestIngressCertificateDetailOnlyForManagers(t *testing.T) {
 		t.Errorf("the rows differ beyond the two fields:\nadmin  %v\nviewer %v", admin, view)
 	}
 }
+
+// UIX-03 edges: at the injected instant T a certificate that expired one second ago is expired, one due to renew
+// exactly at T keeps that renewAt and is not expired, and the list is by hostname whatever the order of creation.
+func TestIngressCertificatesClockEdgesAndOrder(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "example.com")
+	zz := f.requestCert(t, f.adminA, f.envA, "zz.example.com")
+	aa := f.requestCert(t, f.adminA, f.envA, "aa.example.com")
+	mm := f.requestCert(t, f.adminA, f.envA, "mm.example.com")
+	now := f.clk.now().UTC()
+	f.setCert(t, aa.ID, `chain_pem = 'chain', not_after = ?`, now.Add(-time.Second).UnixNano())
+	f.setCert(t, mm.ID, `chain_pem = 'chain', not_after = ?, renew_at = ?`, now.Add(30*24*time.Hour).UnixNano(), now.UnixNano())
+	_ = zz
+
+	rec := f.credCall(t, f.adminA, http.MethodGet, certsPath(f.envA), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d %s, want 200", rec.Code, rec.Body)
+	}
+	var l struct {
+		Items []struct {
+			Hostname string `json:"hostname"`
+			State    string `json:"state"`
+			RenewAt  string `json:"renewAt"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &l); err != nil || len(l.Items) != 3 {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	var order []string
+	for _, it := range l.Items {
+		order = append(order, it.Hostname)
+	}
+	if want := []string{"aa.example.com", "mm.example.com", "zz.example.com"}; !reflect.DeepEqual(order, want) {
+		t.Errorf("order = %v, want %v", order, want)
+	}
+	if l.Items[0].State != "expired" {
+		t.Errorf("a certificate that expired one second ago is %q, want expired", l.Items[0].State)
+	}
+	if l.Items[1].State == "expired" || l.Items[1].RenewAt != now.Format(time.RFC3339Nano) {
+		t.Errorf("a certificate renewing exactly now: state %q renewAt %q, want not expired and renewAt %s", l.Items[1].State, l.Items[1].RenewAt, now.Format(time.RFC3339Nano))
+	}
+}

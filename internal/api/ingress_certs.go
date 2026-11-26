@@ -59,7 +59,7 @@ type IngressCertDeps struct {
 
 // IngressCertQueueBody says why a queued certificate waits.
 type IngressCertQueueBody struct {
-	Code       string     `json:"code" doc:"Why the certificate waits: no_account, rate_limit_new, rate_limit_duplicate, rate_limit_orders, ca_hold or concurrency"`
+	Code       string     `json:"code" doc:"Why the certificate waits: no_account, rate_limit_new, rate_limit_duplicate, rate_limit_orders, ca_rate_limited or concurrency"`
 	Reason     string     `json:"reason" doc:"The reason in one sentence, built from the figures below; it never carries the certificate authority's own words"`
 	Used       int        `json:"used" doc:"How many of the budget is used"`
 	Cap        int        `json:"cap" doc:"Where TierPlan stops ordering, which is below the certificate authority's own limit"`
