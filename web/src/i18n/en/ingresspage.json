@@ -249,6 +249,7 @@
       "refused": "Refused {{id}}: {{reason}}",
       "revoke": {
         "button": "Revoke",
+        "buttonFor": "Revoke {{name}}",
         "title": "Revoke {{name}}?",
         "body": "This node stops serving routes now and its key is refused. It can't enrol again with the join token it holds, unless you allow that below.",
         "reason": "Reason",

@@ -3,11 +3,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { useState } from "react";
 import { Trans } from "react-i18next";
 
 import type { HealthState } from "@/api/environments";
 import { ingressStatusQuery } from "@/api/ingress";
 import { type IngressNode, ingressNodesQuery } from "@/api/ingress-nodes";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -23,7 +25,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
-import { useNeeds } from "@/hooks/use-needs";
+import { RevokeNodeDialog } from "@/features/ingress/revoke-node-dialog";
+import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 // How much of a bundle ID is shown: the IDs are content hashes, so a prefix tells two apart (A-05).
@@ -79,6 +82,8 @@ export function NodesTab({ envId }: { envId: string }) {
   const query = useQuery(ingressNodesQuery(envId));
   const status = useQuery(ingressStatusQuery(envId));
   const manage = useNeeds("ingress.manage", envId).allowed;
+  const revokeNeeds = useNeeds("environments.revoke", envId);
+  const [revoking, setRevoking] = useState<IngressNode | null>(null);
 
   if (query.isPending) return <Loading />;
   if (query.isError) {
@@ -120,32 +125,37 @@ export function NodesTab({ envId }: { envId: string }) {
 
   const currentBundleId = query.data.currentBundleId;
   return (
-    <Table aria-label={t("ingressPage.nodes.label")}>
-      <TableHeader>
-        <TableRow>
-          <TableHead scope="col">{t("ingressPage.nodes.columns.node")}</TableHead>
-          <TableHead scope="col">{t("ingressPage.nodes.columns.enrolment")}</TableHead>
-          <TableHead scope="col">{t("ingressPage.nodes.columns.supervisor")}</TableHead>
-          <TableHead scope="col">{t("ingressPage.nodes.columns.health")}</TableHead>
-          <TableHead scope="col">{t("ingressPage.nodes.columns.bundle")}</TableHead>
-          <TableHead scope="col">{t("ingressPage.nodes.columns.lastSeen")}</TableHead>
-          <TableHead scope="col">
-            <span className="sr-only">{t("ingressPage.nodes.columns.actions")}</span>
-          </TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {items.map((n) => (
-          <NodeRow
-            key={n.id}
-            envId={envId}
-            node={n}
-            currentBundleId={currentBundleId}
-            manage={manage}
-          />
-        ))}
-      </TableBody>
-    </Table>
+    <>
+      <Table aria-label={t("ingressPage.nodes.label")}>
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col">{t("ingressPage.nodes.columns.node")}</TableHead>
+            <TableHead scope="col">{t("ingressPage.nodes.columns.enrolment")}</TableHead>
+            <TableHead scope="col">{t("ingressPage.nodes.columns.supervisor")}</TableHead>
+            <TableHead scope="col">{t("ingressPage.nodes.columns.health")}</TableHead>
+            <TableHead scope="col">{t("ingressPage.nodes.columns.bundle")}</TableHead>
+            <TableHead scope="col">{t("ingressPage.nodes.columns.lastSeen")}</TableHead>
+            <TableHead scope="col">
+              <span className="sr-only">{t("ingressPage.nodes.columns.actions")}</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {items.map((n) => (
+            <NodeRow
+              key={n.id}
+              envId={envId}
+              node={n}
+              currentBundleId={currentBundleId}
+              manage={manage}
+              revokeNeeds={revokeNeeds}
+              onRevoke={setRevoking}
+            />
+          ))}
+        </TableBody>
+      </Table>
+      <RevokeNodeDialog envId={envId} node={revoking} onClose={() => setRevoking(null)} />
+    </>
   );
 }
 
@@ -166,11 +176,15 @@ function NodeRow({
   node: n,
   currentBundleId,
   manage,
+  revokeNeeds,
+  onRevoke,
 }: {
   envId: string;
   node: IngressNode;
   currentBundleId: string;
   manage: boolean;
+  revokeNeeds: Needs;
+  onRevoke: (node: IngressNode) => void;
 }) {
   const t = useT();
   const revoked = n.status === "revoked";
@@ -252,7 +266,22 @@ function NodeRow({
       <TableCell className="align-top text-sm whitespace-normal">
         {n.lastSeenAt ? <RelativeTime value={n.lastSeenAt} /> : t("ingressPage.nodes.never")}
       </TableCell>
-      <TableCell className="align-top" />
+      <TableCell className="align-top">
+        {revoked ? null : (
+          <NeedsTooltip reason={revokeNeeds.reason}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="max-md:h-11"
+              aria-label={t("ingressPage.nodes.revoke.buttonFor", { name: n.name })}
+              onClick={() => onRevoke(n)}
+            >
+              {t("ingressPage.nodes.revoke.button")}
+            </Button>
+          </NeedsTooltip>
+        )}
+      </TableCell>
     </TableRow>
   );
 }
