@@ -348,3 +348,55 @@ func TestListIngressRoutesIngressOff(t *testing.T) {
 		t.Errorf("last row = %+v, want the reserved name still listed", res)
 	}
 }
+
+func TestListIngressRoutesDegrades(t *testing.T) {
+	t.Parallel()
+	const host = "app.apps.example.com"
+	nodes := []ingresshub.Node{{Status: "active", AppliedBundleID: "b1"}}
+
+	t.Run("an engine that cannot be read leaves the engine's conditions unknown and still answers 200", func(t *testing.T) {
+		t.Parallel()
+		f, _, viewer, src, _ := swarmRoutesRig(t, host, shopService(1, ingress.NetworkName))
+		*src = *servedBundle(host, nodes...)
+		f.fake.LoseQuorum()
+
+		got, raw := ingressRoutesOf(t, viewer) // fails the test on any status but 200
+		if len(got.Routes) < 1 {
+			t.Fatalf("answer = %+v, want the route", got)
+		}
+		r := got.Routes[0]
+		if r.Kind != "route" || r.State != "unknown" || r.Reason != "" {
+			t.Errorf("route = %+v, want state unknown, never serving or a backend fault", r)
+		}
+		for _, code := range []string{"network_attached", "backend_healthy"} {
+			if c := condOf(t, r, code); c.State != "unknown" || c.Reason != "engine_unreadable" || c.Message == "" {
+				t.Errorf("%s = %+v, want unknown engine_unreadable with a sentence", code, c)
+			}
+		}
+		// What the engine does not decide is derived as usual.
+		for _, code := range []string{"claim_held", "certificate_ready", "applied"} {
+			if c := condOf(t, r, code); c.State != "ready" {
+				t.Errorf("%s = %+v, want ready, derived from the bundle and the nodes", code, c)
+			}
+		}
+		if strings.Contains(raw, "quorum") || strings.Contains(raw, "leader") {
+			t.Errorf("the answer carries the engine's own words: %s", raw)
+		}
+	})
+
+	t.Run("with no current bundle the bundle conditions are unknown and the state follows the legacy rules", func(t *testing.T) {
+		t.Parallel()
+		_, _, viewer, _, _ := swarmRoutesRig(t, host, shopService(1, ingress.NetworkName))
+		got, _ := ingressRoutesOf(t, viewer)
+		r := got.Routes[0]
+		if r.State != "pending" {
+			t.Errorf("state = %q, want pending: the engine reads fine and nothing has been published", r.State)
+		}
+		for _, code := range []string{"certificate_ready", "applied"} {
+			if c := condOf(t, r, code); c.State != "unknown" || c.Reason != "no_bundle" {
+				t.Errorf("%s = %+v, want unknown no_bundle", code, c)
+			}
+		}
+	})
+
+}
