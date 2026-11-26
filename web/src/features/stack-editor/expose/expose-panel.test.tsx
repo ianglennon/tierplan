@@ -4,8 +4,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { ExposePanel } from "@/features/stack-editor/expose/expose-panel";
+import { makeMe } from "@/test-me";
 import "@/i18n";
 import { settled } from "@/test-settle";
 
@@ -48,7 +48,14 @@ afterEach(() => {
   client.clear();
 });
 
-function mount(over: { text?: string; target?: "swarm" | "standalone"; readOnly?: boolean } = {}) {
+function mount(
+  over: {
+    text?: string;
+    target?: "swarm" | "standalone";
+    readOnly?: boolean;
+    gitSource?: boolean;
+  } = {},
+) {
   const onEdit = vi.fn<(text: string) => void>();
   render(
     <QueryClientProvider client={client}>
@@ -58,6 +65,7 @@ function mount(over: { text?: string; target?: "swarm" | "standalone"; readOnly?
         text={over.text ?? FILE}
         target={over.target ?? "swarm"}
         readOnly={over.readOnly ?? false}
+        gitSource={over.gitSource}
         onEdit={onEdit}
         onClose={() => {}}
       />
@@ -364,5 +372,107 @@ describe("two copies of the ingress labels (D-18)", () => {
     const next = onEdit.mock.calls[0]?.[0] ?? "";
     expect(next).not.toContain("old.apps.example.com");
     expect(next).toContain("shop.apps.example.com");
+  });
+});
+
+// Read-only modes, locked values and a YAML error (plan 27-26, D-20, A-09, Pitfall 9).
+const NOT_EDITABLE = [
+  "Add a route",
+  /^Remove route/,
+  /^Move to/,
+  "Remove the ignored copy",
+  /^Add \./,
+] as const;
+
+describe("a panel that cannot edit (D-20)", () => {
+  it("says the labels live in Git and offers no change", async () => {
+    domains = ["apps.example.com"];
+    const onEdit = mount({ readOnly: true, gitSource: true });
+    expect(
+      screen.getByText("This stack comes from a Git repository. Change the labels there."),
+    ).toBeTruthy();
+    expect(host().readOnly).toBe(true);
+    expect(host().getAttribute("aria-readonly")).toBe("true");
+    expect(port().readOnly).toBe(true);
+    await settled(client);
+    for (const name of NOT_EDITABLE) expect(screen.queryByRole("button", { name })).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: "https" }));
+    fireEvent.click(screen.getByRole("switch", { name: /Remove the path prefix/ }));
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it("says what a person without stacks.update needs, from the server's own list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+        return Response.json({ items: [] });
+      }),
+    );
+    mount({ readOnly: true });
+    expect(await screen.findByText("Read-only. Needs Operator.")).toBeTruthy();
+    for (const name of NOT_EDITABLE) expect(screen.queryByRole("button", { name })).toBeNull();
+  });
+
+  it("still says it is read-only when the reason is unknown", () => {
+    mount({ readOnly: true });
+    expect(screen.getByText("Read-only.")).toBeTruthy();
+  });
+
+  it("draws no notice for a panel that can edit", () => {
+    mount();
+    expect(screen.queryByText(/Read-only/)).toBeNull();
+    expect(screen.queryByText(/Git repository/)).toBeNull();
+  });
+});
+
+describe("a value the panel cannot rewrite (Pitfall 9)", () => {
+  // Built apart so the linter does not read a compose variable as a broken template string.
+  const REF = "$" + "{APP_HOST}";
+  const VARIABLE = `services:\n  api:\n    image: nginx\n    deploy:\n      labels:\n        tierplan.ingress.host: "${REF}"\n        tierplan.ingress.port: "8080"\n`;
+  const ANCHOR =
+    'x-labels: &ingress\n  tierplan.ingress.host: shop.apps.example.com\nservices:\n  api:\n    image: nginx\n    deploy:\n      labels:\n        <<: *ingress\n        tierplan.ingress.port: "8080"\n';
+  const NOTE = "Set by a variable or anchor. Change it in the file.";
+
+  it("shows a variable's host read-only with its sentence, and edits the others around it", () => {
+    const onEdit = mount({ text: VARIABLE });
+    expect(host().value).toBe(REF);
+    expect(host().readOnly).toBe(true);
+    expect(host().getAttribute("aria-readonly")).toBe("true");
+    expect(screen.getAllByText(NOTE)).toHaveLength(1);
+    expect(port().readOnly).toBe(false);
+    fireEvent.change(host(), { target: { value: "other.example.com" } });
+    fireEvent.blur(host());
+    expect(onEdit).not.toHaveBeenCalled();
+    fireEvent.change(port(), { target: { value: "9090" } });
+    fireEvent.blur(port());
+    const next = onEdit.mock.calls[0]?.[0] ?? "";
+    expect(next).toContain('tierplan.ingress.port: "9090"');
+    expect(next).toContain(`"${REF}"`);
+  });
+
+  it("shows a value that comes from an anchor read-only", () => {
+    const onEdit = mount({ text: ANCHOR });
+    expect(host().value).toBe("shop.apps.example.com");
+    expect(host().readOnly).toBe(true);
+    expect(screen.getAllByText(NOTE).length).toBeGreaterThan(0);
+    fireEvent.change(host(), { target: { value: "x.example.com" } });
+    fireEvent.blur(host());
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+});
+
+describe("a compose file that is not YAML", () => {
+  it("shows only the neutral YAML error", () => {
+    mount({ text: "services:\n  api: [unclosed\n" });
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe(
+      "The compose file has a YAML error, so the panel can't read it. Fix it in the editor first.",
+    );
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a route" })).toBeNull();
+    expect(alert.className).not.toContain("text-destructive");
   });
 });

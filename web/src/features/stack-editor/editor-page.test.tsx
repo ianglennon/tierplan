@@ -1998,6 +1998,47 @@ describe("Expose", () => {
     expect(puts()).toHaveLength(0);
   });
 
+  it("is read-only for a Viewer, says what it needs, and offers no change", async () => {
+    server.role = "viewer";
+    server.draft = () =>
+      Response.json(
+        draftBody({ files: [{ path: "compose.yaml", content: EXPOSED, secret: false }] }),
+      );
+    mount();
+    await ready();
+    fireEvent.click(await screen.findByRole("button", { name: "Expose routes" }));
+    expect(await screen.findByText("Read-only. Needs Operator.")).toBeTruthy();
+    const host = screen.getByRole("textbox", { name: "Hostname" }) as HTMLInputElement;
+    expect(host.readOnly).toBe(true);
+    expect(host.getAttribute("aria-readonly")).toBe("true");
+    for (const name of ["Add a route", /^Remove route/, /^Move to/, "Remove the ignored copy"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    fireEvent.change(host, { target: { value: "new.apps.example.com" } });
+    fireEvent.blur(host);
+    expect(editorText()).toBe(EXPOSED);
+  });
+
+  it("is read-only for a repository file and says the labels are changed in Git", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [{ path: "compose.yaml", content: EXPOSED, secret: false, origin: "repo" }],
+        }),
+      );
+    mount();
+    await ready();
+    fireEvent.click(await screen.findByRole("button", { name: "Expose routes" }));
+    expect(
+      await screen.findByText("This stack comes from a Git repository. Change the labels there."),
+    ).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "Hostname" }) as HTMLInputElement).readOnly).toBe(
+      true,
+    );
+    expect(screen.queryByRole("button", { name: "Add a route" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove route/ })).toBeNull();
+  });
+
   it("is not offered on a file that is not a compose file", async () => {
     server.draft = () =>
       Response.json(

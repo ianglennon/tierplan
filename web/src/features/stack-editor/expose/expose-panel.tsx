@@ -645,6 +645,8 @@ function CommitField({
   }, [value]);
 
   function commit() {
+    // A read-only field never writes, whatever reached its draft.
+    if (readOnly) return;
     const next = draft.trim();
     if (next === value) {
       setError(null);
