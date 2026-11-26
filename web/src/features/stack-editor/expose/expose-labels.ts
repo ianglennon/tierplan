@@ -315,6 +315,34 @@ function routesOf(entries: Entry[]): ExposeRoute[] {
   return [...routes.values()];
 }
 
+// lookup finds a key of a map the way compose reads it: a key of the map itself, else the first
+// of its merge keys that has it, looking through aliases.
+function lookup(doc: Document.Parsed, map: YAMLMap, key: string, depth = 0): unknown {
+  if (depth > 8) return undefined;
+  const pair = findPair(map, key);
+  if (pair) return isAlias(pair.value) ? pair.value.resolve(doc) : pair.value;
+  for (const p of map.items) {
+    if (keyOf(p) !== "<<") continue;
+    for (const merged of mergedMaps(doc, p.value)) {
+      const v = lookup(doc, merged, key, depth + 1);
+      if (v !== undefined) return v;
+    }
+  }
+  return undefined;
+}
+
+// readEntries are the entries of a located block for reading. A block the editor cannot write, one
+// that is an alias or comes in through a merge key, is still read, with every entry locked.
+function readEntries(doc: Document.Parsed, svc: YAMLMap, where: Where, at: BlockRef): Entry[] {
+  if (at.state === "found") return entriesOf(doc, at.block);
+  if (at.state === "absent") return [];
+  let holder: unknown = svc;
+  if (where === "deploy") holder = isMap(holder) ? lookup(doc, holder, "deploy") : undefined;
+  const labels = isMap(holder) ? lookup(doc, holder, "labels") : undefined;
+  if (!isMap(labels) && !isSeq(labels)) return [];
+  return entriesOf(doc, labels).map((e) => ({ ...e, lock: "anchor", direct: false, ref: null }));
+}
+
 // listServices are the names of the services of the file, in file order. A file that is not valid
 // YAML has none.
 export function listServices(text: string): string[] {
@@ -345,8 +373,8 @@ export function readServiceRoutes(text: string, service: string, target: ExposeT
 
   const right = locate(svc, whereOf(target));
   const wrong = locate(svc, otherWhere(whereOf(target)));
-  const rightEntries = right.state === "found" ? entriesOf(doc, right.block) : [];
-  const wrongHas = wrong.state === "found" && entriesOf(doc, wrong.block).some(isIngress);
+  const rightEntries = readEntries(doc, svc, whereOf(target), right);
+  const wrongHas = readEntries(doc, svc, otherWhere(whereOf(target)), wrong).some(isIngress);
   const rightHas = rightEntries.some(isIngress);
   return {
     services: names,
@@ -624,5 +652,64 @@ export function removeRoute(
     );
   }
   pruneEmpty(svc, where);
+  return render(doc, text);
+}
+
+// ---- labels in the wrong place, or in both ----
+
+// ingressOf are the ingress entries of a block.
+function ingressOf(doc: Document.Parsed, block: Block): Entry[] {
+  return entriesOf(doc, block).filter(isIngress);
+}
+
+// moveToTarget moves the tierplan.ingress.* entries from the block the target does not read to the
+// one it reads, keeping their form: a list's items stay items and a map's pairs stay pairs, as the
+// very nodes, so quotes and comments go with them. When the target's block already exists in the
+// other form the entries are written in that form. It does nothing unless the labels sit only in
+// the wrong block, and it never moves a value set by an anchor or a merge key.
+export function moveToTarget(text: string, service: string, target: ExposeTarget): string {
+  const doc = load(text);
+  const svc = doc ? serviceOf(doc, service) : null;
+  if (!doc || !svc) return text;
+  const where = whereOf(target);
+  const from = locate(svc, otherWhere(where));
+  const to = locate(svc, where);
+  if (from.state !== "found" || to.state === "locked") return text;
+  const moving = ingressOf(doc, from.block);
+  if (moving.length === 0) return text;
+  if (moving.some((e) => !e.direct || e.anchored || e.lock === "anchor")) return text;
+  if (to.state === "found" && ingressOf(doc, to.block).length > 0) return text;
+
+  const block =
+    to.state === "found"
+      ? to.block
+      : ensureBlock(doc, svc, where, isMap(from.block) ? "map" : "list");
+  if (!block) return text;
+  for (const e of moving) {
+    if (isMap(block) === isMap(from.block)) (block.items as unknown[]).push(e.ref);
+    else appendEntry(doc, block, e.key, e.value);
+  }
+  removeEntries(from.block, moving);
+  pruneEmpty(svc, otherWhere(where));
+  return render(doc, text);
+}
+
+// removeIgnoredCopy deletes the tierplan.ingress.* entries from the block the target does not read,
+// when the block it does read has them too: that copy is the one the server ignores. It never
+// deletes the only copy, and it leaves the text alone when an entry comes from an anchor or a merge
+// key.
+export function removeIgnoredCopy(text: string, service: string, target: ExposeTarget): string {
+  const doc = load(text);
+  const svc = doc ? serviceOf(doc, service) : null;
+  if (!doc || !svc) return text;
+  const where = whereOf(target);
+  const ignored = locate(svc, otherWhere(where));
+  const used = locate(svc, where);
+  if (ignored.state !== "found" || used.state !== "found") return text;
+  if (ingressOf(doc, used.block).length === 0) return text;
+  const going = ingressOf(doc, ignored.block);
+  if (going.length === 0 || going.some((e) => !e.direct || e.anchored)) return text;
+  removeEntries(ignored.block, going);
+  pruneEmpty(svc, otherWhere(where));
   return render(doc, text);
 }
