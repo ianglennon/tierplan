@@ -176,6 +176,18 @@
         "after": "."
       }
     },
+    "ingressAccount": {
+      "title": "Ingress certificates",
+      "body": "TierPlan orders certificates for ingress hostnames from Let's Encrypt. Before it orders the first one, an Admin accepts Let's Encrypt's terms for this install.",
+      "accepted": "Terms accepted {{time}}",
+      "notAccepted": "Terms not accepted",
+      "notAcceptedNote": "No certificate is ordered until the terms are accepted.",
+      "termsLink": "Read the {{issuer}} terms",
+      "paused": "Certificate work is paused: {{reason}}.",
+      "pausedRestore": "Certificate work is paused after a restore.",
+      "loadFailed": "Couldn't read the certificate account.",
+      "retry": "Retry reading the certificate account"
+    },
     "acme": {
       "title": "Let's Encrypt",
       "description": "Get a free certificate that browsers trust. TierPlan orders it, renews it by itself and switches to it without a restart. Nobody is signed out.",

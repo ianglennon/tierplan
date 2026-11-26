@@ -10,6 +10,7 @@ import { hasEnvLocks } from "@/features/https/card-state";
 import { CertificateCard } from "@/features/https/certificate-card";
 import { EnvLockNotice } from "@/features/https/env-lock-notice";
 import { HstsCard } from "@/features/https/hsts-card";
+import { IngressAccountCard } from "@/features/https/ingress-account-card";
 import { TestDirectoryAlert } from "@/features/https/state-alerts";
 import { useT } from "@/i18n/use-t";
 
@@ -32,6 +33,7 @@ export function HttpsPage() {
       <AcmeCard />
       <HstsCard />
       <AgentTrustCard />
+      <IngressAccountCard />
     </div>
   );
 }
