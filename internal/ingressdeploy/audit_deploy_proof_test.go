@@ -52,3 +52,97 @@ func TestAuditProofAccessLogsChanged(t *testing.T) {
 	}
 	audittest.AssertNoSecrets(t, rows, tok.Token)
 }
+
+// issueToken rotates the environment's join token and returns the new one, the secret every proof below passes to
+// AssertNoSecrets.
+func (r *rig) issueToken() string {
+	r.t.Helper()
+	tok, err := r.svc.IssueJoinToken(testsupport.Context(r.t), testActor, testOwner, r.envID, "203.0.113.5", "test-ua")
+	if err != nil {
+		r.t.Fatalf("IssueJoinToken: %v", err)
+	}
+	return tok.Token
+}
+
+// pause pauses the environment as a restore does.
+func (r *rig) pause() {
+	r.t.Helper()
+	if _, err := r.istore.SetPaused(testsupport.Context(r.t), r.envID, true, audit.SystemRestore.ID, nil); err != nil {
+		r.t.Fatalf("SetPaused: %v", err)
+	}
+}
+
+// A-01 class A: an Admin resuming a paused environment writes one ingress.deploy_resumed success row by the Admin, with no
+// details; the join token is in no row.
+func TestAuditProofDeployResumed(t *testing.T) {
+	ctx := testsupport.Context(t)
+	r := enabledRig(t, rigOptions{})
+	token := r.issueToken()
+	r.pause()
+	if changed, err := r.svc.Resume(ctx, testActor, r.envID); err != nil || !changed {
+		t.Fatalf("Resume = %v, %v; want true", changed, err)
+	}
+
+	rows := audittest.Rows(t, r.st, audit.ActionIngressDeployResumed)
+	row := onlyDeployRow(t, rows, audit.ActionIngressDeployResumed)
+	wantDeployRow(t, row, testActor, r.envID)
+	if len(row.Details) != 0 {
+		t.Errorf("details = %v, want none", row.Details)
+	}
+	audittest.AssertNoSecrets(t, rows, token)
+}
+
+// A-01 class A: the first ensure pass over an environment a restore paused writes one ingress.deploy_paused success row by
+// system:ingress; a second pass writes no second one; the join token is in no row.
+func TestAuditProofDeployPaused(t *testing.T) {
+	r := enabledRig(t, rigOptions{})
+	token := r.issueToken()
+	r.pause()
+	r.round()
+	r.round()
+
+	rows := audittest.Rows(t, r.st, audit.ActionIngressDeployPaused)
+	row := onlyDeployRow(t, rows, audit.ActionIngressDeployPaused)
+	wantDeployRow(t, row, audit.SystemIngress, r.envID)
+	if len(row.Details) != 0 {
+		t.Errorf("details = %v, want none", row.Details)
+	}
+	audittest.AssertNoSecrets(t, rows, token)
+}
+
+// A-01 class A: a switch-off that cannot reach a worker's agent queues its cache volume wipe and writes one
+// ingress.wipe_queued success row by the Admin who switched ingress off, with the node's name and nothing else; the join
+// token is in no row.
+func TestAuditProofWipeQueued(t *testing.T) {
+	f := newDisableFix(t, disableOpts{worker: true, workerAway: true})
+	token := f.issueToken()
+	wantDisableDone(t, f.disable(seesAll))
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressWipeQueued)
+	row := onlyDeployRow(t, rows, audit.ActionIngressWipeQueued)
+	wantDeployRow(t, row, testActor, f.envID)
+	if len(row.Details) != 1 || row.Details["node"] != workerNode.Name {
+		t.Errorf("details = %v, want exactly node %q", row.Details, workerNode.Name)
+	}
+	audittest.AssertNoSecrets(t, rows, token)
+}
+
+// A-01 class A: the wipe loop, once the worker's agent is back, removes the queued volume and writes one
+// ingress.wipe_done success row by system:ingress with the node's name and nothing else; the join token is in no row.
+func TestAuditProofWipeDone(t *testing.T) {
+	f, _ := awayFix(t)
+	token := f.issueToken()
+	f.reconnect()
+	f.svc.WipeRound(testsupport.Context(t))
+	if hasVolume(t, f.worker) || f.pendingCount() != 0 {
+		t.Fatal("the wipe pass did not wipe the worker's cache volume")
+	}
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressWipeDone)
+	row := onlyDeployRow(t, rows, audit.ActionIngressWipeDone)
+	wantDeployRow(t, row, audit.SystemIngress, f.envID)
+	if len(row.Details) != 1 || row.Details["node"] != workerNode.Name {
+		t.Errorf("details = %v, want exactly node %q", row.Details, workerNode.Name)
+	}
+	audittest.AssertNoSecrets(t, rows, token)
+}
