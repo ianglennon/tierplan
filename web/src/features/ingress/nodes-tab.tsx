@@ -8,7 +8,7 @@ import { Trans } from "react-i18next";
 
 import type { HealthState } from "@/api/environments";
 import { ingressStatusQuery } from "@/api/ingress";
-import { type IngressNode, ingressNodesQuery } from "@/api/ingress-nodes";
+import { type IngressNode, ingressNodesQuery, ingressVIPQuery } from "@/api/ingress-nodes";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { StatusDot } from "@/components/status-dot";
@@ -26,6 +26,8 @@ import {
 } from "@/components/ui/table";
 import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
 import { RevokeNodeDialog } from "@/features/ingress/revoke-node-dialog";
+import { VIPStatusCard } from "@/features/ingress/vip-status-card";
+import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -81,6 +83,11 @@ export function NodesTab({ envId }: { envId: string }) {
   const t = useT();
   const query = useQuery(ingressNodesQuery(envId));
   const status = useQuery(ingressStatusQuery(envId));
+  // The virtual IP belongs to a swarm only (Pitfall 14): a standalone environment never asks for it. A swarm with none
+  // answers null, which is the "off" line, not an error.
+  const swarm = useEnvIsSwarm(envId);
+  const vipQuery = useQuery(ingressVIPQuery(envId, swarm));
+  const vip = vipQuery.data ?? null;
   const manage = useNeeds("ingress.manage", envId).allowed;
   const revokeNeeds = useNeeds("environments.revoke", envId);
   const [revoking, setRevoking] = useState<IngressNode | null>(null);
@@ -125,7 +132,11 @@ export function NodesTab({ envId }: { envId: string }) {
 
   const currentBundleId = query.data.currentBundleId;
   return (
-    <>
+    <div className="flex flex-col gap-4">
+      {swarm && vipQuery.isSuccess && vip === null ? (
+        <p className="text-sm text-muted-foreground">{t("ingressPage.nodes.vip.off")}</p>
+      ) : null}
+      {vip ? <VIPStatusCard vip={vip} /> : null}
       <Table aria-label={t("ingressPage.nodes.label")}>
         <TableHeader>
           <TableRow>
@@ -155,7 +166,7 @@ export function NodesTab({ envId }: { envId: string }) {
         </TableBody>
       </Table>
       <RevokeNodeDialog envId={envId} node={revoking} onClose={() => setRevoking(null)} />
-    </>
+    </div>
   );
 }
 

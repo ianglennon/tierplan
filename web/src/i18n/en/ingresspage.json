@@ -220,7 +220,8 @@
         "health": "Proxy health",
         "bundle": "Bundle",
         "lastSeen": "Last seen",
-        "actions": "Actions"
+        "actions": "Actions",
+        "vip": "Virtual IP"
       },
       "enrolled": "Enrolled <time/>",
       "never": "Never",
@@ -262,6 +263,79 @@
         "doneBody": "Rotate the join token. It is still mounted in that node's container.",
         "held": "This node may still hold the keys for: <names/>. Request new certificates for them.",
         "close": "Close details"
+      },
+      "vip": {
+        "title": "Virtual IP",
+        "loading": "Loading the virtual IP",
+        "error": "Couldn't read the virtual IP.",
+        "retry": "Retry reading the virtual IP",
+        "off": "The virtual IP is off. Turn it on in Settings.",
+        "holder": {
+          "one": "Held by {{node}}",
+          "none": "No node holds the address",
+          "many": "More than one node holds the address",
+          "since": "Since <time/>"
+        },
+        "address": "Address",
+        "routerId": "Router ID",
+        "routerDerived": "chosen by TierPlan",
+        "keyGeneration": "Key generation",
+        "lastCheck": "Last check",
+        "lastCheckFailed": "Failed <time/>: {{error}}",
+        "lastCheckNever": "Not run yet",
+        "foreignRouter": {
+          "title": "Another router uses this router ID"
+        },
+        "clock": {
+          "title": "A node's clock is out of step",
+          "body": "{{nodes}} are too far from the others. The virtual IP rejects adverts more than {{window}} s old, so the nodes may stop hearing each other. Fix the clock on those nodes."
+        },
+        "managers": {
+          "label": "Managers",
+          "manager": "Manager",
+          "privileged": "Privileged services",
+          "note": "Note",
+          "allows": "Allowed",
+          "refuses": "Refused",
+          "unknown": "Unknown",
+          "localSocket": "Reached through TierPlan's own Docker socket, so it counts as allowed.",
+          "setting": "Set <setting/> on this manager's agent.",
+          "unreadable": "TierPlan couldn't read the managers just now."
+        },
+        "state": {
+          "MASTER": "Holds the address",
+          "BACKUP": "Standby",
+          "FAULT": "Fault",
+          "STOP": "Stopped",
+          "none": "Not reporting"
+        },
+        "notCandidate": "—",
+        "lastCheckDone": "<time/>",
+        "lastCheckFailedNoTime": "Failed: {{error}}"
+      },
+      "moves": {
+        "title": "Address moves",
+        "label": "Address moves",
+        "loading": "Loading the address moves",
+        "error": "Couldn't read the address moves.",
+        "retry": "Retry reading the address moves",
+        "columns": {
+          "when": "When",
+          "move": "Move",
+          "why": "Why"
+        },
+        "move": "{{from}} to {{to}}",
+        "noNode": "no node",
+        "more": "Show more",
+        "loadingMore": "Loading more…",
+        "empty": "The address hasn't moved.",
+        "reason": {
+          "holder_failed": "The previous holder stopped answering.",
+          "probe_failing": "The previous holder's proxy stopped answering.",
+          "drain_handoff": "The previous holder was drained.",
+          "disabled": "The virtual IP was turned off.",
+          "unknown": "TierPlan couldn't tell why."
+        }
       }
     }
   }

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NodesTab } from "@/features/ingress/nodes-tab";
+import { vipFixture } from "@/features/ingress/vip-fixture";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -19,6 +20,9 @@ type Json = Record<string, unknown>;
 
 let nodes: () => Response;
 let status: Json;
+let envType: "swarm" | "standalone";
+let vip: () => Response;
+let vipRequests: number;
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 
@@ -56,6 +60,9 @@ beforeEach(() => {
   setCsrfToken(null);
   serve([]);
   status = { enabled: true };
+  envType = "standalone";
+  vipRequests = 0;
+  vip = () => Response.json(vipFixture());
   me = makeMe({ envs: { [ENV]: "viewer" } });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
@@ -65,6 +72,13 @@ beforeEach(() => {
       if (path === "/api/me") return Response.json(me);
       if (path === `/api/env/${ENV}/ingress/nodes`) return nodes();
       if (path === `/api/env/${ENV}/ingress/status`) return Response.json(status);
+      if (path === "/api/environments") {
+        return Response.json({ items: [{ id: ENV, name: "Prod", envType }] });
+      }
+      if (path === `/api/env/${ENV}/ingress/vip`) {
+        vipRequests++;
+        return vip();
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -272,5 +286,46 @@ describe("the Ingress page's Nodes tab", () => {
     serve([node()]);
     retry.click();
     expect(await table()).toBeTruthy();
+  });
+
+  describe("the virtual IP card (D-06)", () => {
+    it("draws the card before the node table on a swarm with the virtual IP on", async () => {
+      envType = "swarm";
+      serve([node()]);
+      mount();
+      const t = await table();
+      const heading = await screen.findByRole("heading", { name: "Virtual IP" });
+      expect(heading.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getByText("Held by node-b")).toBeTruthy();
+      expect(screen.queryByText("The virtual IP is off. Turn it on in Settings.")).toBeNull();
+    });
+
+    it("never asks for the virtual IP on a standalone environment and draws none of it", async () => {
+      envType = "standalone";
+      serve([node()]);
+      mount();
+      await table();
+      await waitFor(() => expect(screen.queryByText("Loading nodes")).toBeNull());
+      expect(vipRequests).toBe(0);
+      expect(screen.queryByRole("heading", { name: "Virtual IP" })).toBeNull();
+      expect(screen.queryByText(/The virtual IP is off/)).toBeNull();
+    });
+
+    it("says the virtual IP is off on a swarm that has none, not an error", async () => {
+      envType = "swarm";
+      vip = () =>
+        Response.json(
+          { type: "vip_not_enabled", title: "Not Found", status: 404, detail: "No VIP." },
+          { status: 404, headers: { "Content-Type": "application/problem+json" } },
+        );
+      serve([node()]);
+      mount();
+      await table();
+      expect(
+        await screen.findByText("The virtual IP is off. Turn it on in Settings."),
+      ).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Virtual IP" })).toBeNull();
+      expect(screen.queryByText("Couldn't read the nodes.")).toBeNull();
+    });
   });
 });
