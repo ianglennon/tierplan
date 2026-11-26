@@ -154,6 +154,31 @@ describe("Ingress certificates card: the account read", () => {
     expect(card().queryByRole("link", { name: "Read the staging terms" })).toBeNull();
   });
 
+  it("never puts an address that is not https in a link, and shows its text instead", async () => {
+    account = () =>
+      Response.json(
+        accountOf({
+          directories: [
+            {
+              issuer: "production",
+              url: "https://acme.example/directory",
+              termsOfService: "javascript:alert(1)",
+            },
+            {
+              issuer: "staging",
+              url: "https://acme.example/staging",
+              termsOfService: "http://example.com/terms",
+            },
+          ],
+        }),
+      );
+    await ready();
+    expect(card().queryAllByRole("link")).toHaveLength(0);
+    expect(card().getByText("Read the production terms").closest("a")).toBeNull();
+    expect(card().getByText("Read the staging terms").closest("a")).toBeNull();
+    expect(document.querySelector('a[href^="javascript"]')).toBeNull();
+  });
+
   it("draws no link and no list for a server that named no terms address", async () => {
     account = () => Response.json(accountOf({ directories: null }));
     await ready();

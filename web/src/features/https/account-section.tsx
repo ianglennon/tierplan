@@ -27,6 +27,7 @@ import { errorCopy } from "@/features/https/copy";
 import { LockedIcon, LockedNote } from "@/features/https/locked-note";
 import { Sentence, SLOT } from "@/features/https/sentence";
 import { useT } from "@/i18n/use-t";
+import { httpsUrl } from "@/lib/https-url";
 import { toastSuccess } from "@/lib/toast";
 import { z } from "@/lib/zod-config";
 
@@ -47,17 +48,6 @@ const schema = z.object({
 });
 
 type Values = z.infer<typeof schema>;
-
-// httpsUrl is the address when it is an https: URL, else undefined. The terms address comes from
-// the CA, so it is linked only when it is plainly a web address.
-function httpsUrl(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  try {
-    return new URL(value).protocol === "https:" ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 interface AccountSectionProps {
   account: ACMEAccount | undefined;

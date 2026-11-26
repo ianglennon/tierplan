@@ -33,6 +33,7 @@ import { useInstanceAdmin } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { formatRelative } from "@/lib/format";
+import { httpsUrl } from "@/lib/https-url";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
@@ -87,8 +88,11 @@ function IngressAccountBody({ account }: { account: IngressAccount }) {
   const when = account.termsAcceptedAt
     ? formatRelative(account.termsAcceptedAt, new Date(now), t)
     : "";
-  // The server names a terms address only when the directory advertised one just now.
-  const links = (account.directories ?? []).filter((d) => d.termsOfService !== "");
+  // The server names a terms address only when the directory advertised one just now. The address comes from the CA, so it
+  // is linked only when it is an https: address; any other is shown as plain text, never put in an href.
+  const links = (account.directories ?? [])
+    .filter((d) => d.termsOfService !== "")
+    .map((d) => ({ issuer: d.issuer, href: httpsUrl(d.termsOfService) }));
   const reasonKey =
     account.pausedReason === "restore"
       ? "https.ingressAccount.pausedRestore"
@@ -116,14 +120,18 @@ function IngressAccountBody({ account }: { account: IngressAccount }) {
         <ul className="flex flex-col gap-1 text-sm">
           {links.map((d) => (
             <li key={d.issuer}>
-              <a
-                href={d.termsOfService}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded-sm underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-              >
-                {t("https.ingressAccount.termsLink", { issuer: d.issuer })}
-              </a>
+              {d.href ? (
+                <a
+                  href={d.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-sm underline underline-offset-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  {t("https.ingressAccount.termsLink", { issuer: d.issuer })}
+                </a>
+              ) : (
+                <span>{t("https.ingressAccount.termsLink", { issuer: d.issuer })}</span>
+              )}
             </li>
           ))}
         </ul>
