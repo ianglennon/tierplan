@@ -43,6 +43,8 @@ type StackRouteBody struct {
 	State    string `json:"state" enum:"serving,pending,waiting_certificate,backend_not_running,not_attached,ingress_off" doc:"serving: every active ingress node applied a bundle that holds the route. pending: the route is not in the current bundle yet, or not every active node has applied it. waiting_certificate: the route is left out until its hostname has a certificate, and reason says why. backend_not_running: the service runs no replica, or the stack is stopped. not_attached: the service is not on the ingress network, so it needs a redeploy. ingress_off: the environment's ingress is switched off. Derived when read, stored nowhere"`
 	Reason   string `json:"reason" doc:"For waiting_certificate, why the certificate is not served: no_certificate (none yet) or certificate_not_ready (one exists and cannot be served yet). Empty for every other state"`
 	Stopped  bool   `json:"stopped" doc:"True when state is backend_not_running because the stack is stopped. A stopped stack keeps its hostnames"`
+	// Conditions are the route's five conditions, derived by the same call that derives the state.
+	Conditions []RouteConditionBody `json:"conditions" doc:"The route's five conditions in a fixed order: claim_held, network_attached, backend_healthy, certificate_ready, applied. They are derived by the same call as state, so the Ingress page's route list answers the same ones for the same route"`
 }
 
 // StackRoutesBody is the routes a stack holds.
@@ -57,6 +59,7 @@ type StackRoutesOutput struct {
 }
 
 func registerStackRoutes(r *httpx.Router, d StacksDeps) {
+	registerIngressRoutes(r, d)
 	httpx.Register(r, huma.Operation{
 		OperationID: "getStackRoutes", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/routes",
 		Summary: "What each route of a stack is doing now",
@@ -100,21 +103,26 @@ func getStackRoutes(ctx context.Context, d StacksDeps, in *StackPathInput) (*Sta
 	input := stackops.RouteStateInput{
 		Enabled: snap.Settings.Enabled, Stopped: st.Stopped, Routes: routes,
 	}
-	// What runs and what the nodes hold matter only to a route that gets that far in the order of the states. A swarm
-	// stack is read from the swarm, a standalone one from the host's own containers.
-	if input.Enabled && !input.Stopped {
-		read := readRunning
-		if st.Target != stacks.TargetSwarm {
-			read = readRunningStandalone
-		}
-		if err := read(ctx, d, env.ID, st, &input); err != nil {
-			return nil, snapshotProblem(d.Log, env.ID, err)
+	// What runs matters only to a route that gets that far in the order of the states. A swarm stack is read from the
+	// swarm, a standalone one from the host's own containers. What the bundle and the nodes say is read whenever ingress
+	// is on, so a stopped stack's conditions say the same as the Ingress page's.
+	if input.Enabled {
+		if !input.Stopped {
+			read := readRunning
+			if st.Target != stacks.TargetSwarm {
+				read = readRunningStandalone
+			}
+			if err := read(ctx, d, env.ID, st, &input); err != nil {
+				return nil, snapshotProblem(d.Log, env.ID, err)
+			}
 		}
 		d.readBundleState(ctx, env.ID, &input)
+		d.readCertMessages(ctx, env.ID, &input)
 	}
 	for _, s := range stackops.RouteStates(input) {
 		out.Body.Routes = append(out.Body.Routes, StackRouteBody{
 			Hostname: s.Hostname, Path: s.Path, Service: s.Service, State: s.State, Reason: s.Reason, Stopped: s.Stopped,
+			Conditions: conditionBodies(s.Conditions, s.Service),
 		})
 	}
 	return out, nil
@@ -123,10 +131,17 @@ func getStackRoutes(ctx context.Context, d StacksDeps, in *StackPathInput) (*Sta
 // readRunning reads, in one read of the swarm, how many replicas of each of the stack's services run and whether each
 // is on the ingress network.
 func readRunning(ctx context.Context, d StacksDeps, envID string, st stackops.Stack, in *stackops.RouteStateInput) error {
+	return readSwarm(ctx, d, envID, func(cluster dockerx.ClusterRead, nets []dockerx.NetworkRow) {
+		in.Running, in.Attached = serviceFactsOf(cluster, nets, st.Name)
+	})
+}
+
+// readSwarm reads the swarm once, its services and its networks, and hands both to use. The environment read and the
+// stack read take their facts from the same read.
+func readSwarm(ctx context.Context, d StacksDeps, envID string, use func(dockerx.ClusterRead, []dockerx.NetworkRow)) error {
 	if d.Clusters == nil {
 		return errors.New("api: no cluster reader to read the swarm with")
 	}
-	in.Running, in.Attached = map[string]int{}, map[string]bool{}
 	return d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
 		cluster, err := c.Cluster(ctx)
 		if err != nil {
@@ -136,31 +151,41 @@ func readRunning(ctx context.Context, d StacksDeps, envID string, st stackops.St
 		if err != nil {
 			return err
 		}
-		var netID string
-		for _, n := range nets {
-			if n.Name == ingress.NetworkName {
-				netID = n.ID
-				break
-			}
-		}
-		prefix := st.Name + "_"
-		for _, row := range cluster.Services {
-			if row.Stack == st.Name && strings.HasPrefix(row.Name, prefix) {
-				in.Running[strings.TrimPrefix(row.Name, prefix)] = int(min(row.Running, math.MaxInt32))
-			}
-		}
-		for _, ref := range cluster.ServiceRefs {
-			if !strings.HasPrefix(ref.Name, prefix) {
-				continue
-			}
-			for _, n := range ref.Networks {
-				if n == ingress.NetworkName || netID != "" && n == netID {
-					in.Attached[strings.TrimPrefix(ref.Name, prefix)] = true
-				}
-			}
-		}
+		use(cluster, nets)
 		return nil
 	})
+}
+
+// serviceFactsOf groups what one swarm read says by stack: how many replicas of each service of the stack run and
+// whether each is on the ingress network, by compose service name. A service belongs to the stack when it carries the
+// stack's namespace label and its name starts with the stack's name and an underscore. The ingress network is found by
+// name or by ID, since a service's spec may name either.
+func serviceFactsOf(cluster dockerx.ClusterRead, nets []dockerx.NetworkRow, stackName string) (running map[string]int, attached map[string]bool) {
+	running, attached = map[string]int{}, map[string]bool{}
+	var netID string
+	for _, n := range nets {
+		if n.Name == ingress.NetworkName {
+			netID = n.ID
+			break
+		}
+	}
+	prefix := stackName + "_"
+	for _, row := range cluster.Services {
+		if row.Stack == stackName && strings.HasPrefix(row.Name, prefix) {
+			running[strings.TrimPrefix(row.Name, prefix)] = int(min(row.Running, math.MaxInt32))
+		}
+	}
+	for _, ref := range cluster.ServiceRefs {
+		if !strings.HasPrefix(ref.Name, prefix) {
+			continue
+		}
+		for _, n := range ref.Networks {
+			if n == ingress.NetworkName || netID != "" && n == netID {
+				attached[strings.TrimPrefix(ref.Name, prefix)] = true
+			}
+		}
+	}
+	return running, attached
 }
 
 // readRunningStandalone reads, from the environment's one host, how many containers of each of the stack's services run
@@ -197,8 +222,9 @@ func readRunningStandalone(ctx context.Context, d StacksDeps, envID string, st s
 }
 
 // readBundleState fills in what the reconciler and the nodes say: the routes the current bundle left out and why, the
-// ones it holds, and whether every active node applied it. Only the certificate reasons count as a wait. With no
-// sources the routes are pending: nothing says a node has them.
+// ones it holds, how many active nodes there are and how many applied it, and whether the environment has a bundle at
+// all. Only the certificate reasons count as a wait. With no sources the routes are pending: nothing says a node has
+// them.
 func (d StacksDeps) readBundleState(ctx context.Context, envID string, in *stackops.RouteStateInput) {
 	src := d.IngressRoutes
 	if src == nil {
@@ -215,6 +241,7 @@ func (d StacksDeps) readBundleState(ctx context.Context, envID string, in *stack
 	if !have || bundle.ID == "" {
 		return
 	}
+	in.BundleKnown = true
 	in.InBundle = map[stackops.RouteKey]bool{}
 	for _, r := range bundle.Manifest.Routes {
 		in.InBundle[stackops.RouteKey{Hostname: r.Hostname, Path: pathOrRoot(r.PathPrefix)}] = true
@@ -224,19 +251,50 @@ func (d StacksDeps) readBundleState(ctx context.Context, envID string, in *stack
 		d.Log.WarnContext(ctx, "the ingress nodes could not be read for a stack's route states", "environment", envID, "error", err)
 		return
 	}
-	active := 0
 	in.NodesApplied = true
 	for _, n := range nodes {
 		if n.Status != "active" {
 			continue
 		}
-		active++
-		if n.AppliedBundleID != bundle.ID {
+		in.ActiveNodes++
+		if n.AppliedBundleID == bundle.ID {
+			in.AppliedNodes++
+		} else {
 			in.NodesApplied = false
 		}
 	}
-	if active == 0 {
+	if in.ActiveNodes == 0 {
 		in.NodesApplied = false
+	}
+}
+
+// readCertMessages fills in, for each hostname the current bundle left out because its certificate is not ready, the
+// certificate's own failure hint. It reads the certificate state and never the certificate. A read that fails leaves
+// the messages out: the condition still names its reason.
+func (d StacksDeps) readCertMessages(ctx context.Context, envID string, in *stackops.RouteStateInput) {
+	ops := d.ingressOps()
+	if ops == nil {
+		return
+	}
+	var hosts []string
+	for key, reason := range in.Skipped {
+		if reason == stackops.ReasonCertificateNotReady {
+			hosts = append(hosts, key.Hostname)
+		}
+	}
+	if len(hosts) == 0 {
+		return
+	}
+	states, err := ops.CertStates(ctx, envID, hosts)
+	if err != nil {
+		d.Log.WarnContext(ctx, "the certificates could not be read for route conditions", "environment", envID, "error", err)
+		return
+	}
+	in.CertMessages = map[string]string{}
+	for host, st := range states {
+		if st.State == stackops.CertWaiting && st.Reason != "" {
+			in.CertMessages[host] = st.Reason
+		}
 	}
 }
 
