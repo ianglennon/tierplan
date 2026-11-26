@@ -17,6 +17,7 @@ const ENV = "e1";
 type Json = Record<string, unknown>;
 
 let answer: () => Response;
+let certs: () => Response;
 let client: QueryClient;
 let swarm: boolean;
 let me: ReturnType<typeof makeMe>;
@@ -55,9 +56,15 @@ function serve(routes: Json[]) {
   answer = () => Response.json({ enabled: true, routes });
 }
 
+function serveCerts(...hostnames: string[]) {
+  certs = () =>
+    Response.json({ items: hostnames.map((hostname, i) => ({ id: `c${i}`, hostname })) });
+}
+
 beforeEach(() => {
   setCsrfToken(null);
   serve([]);
+  certs = () => Response.json({ items: [] });
   swarm = false;
   me = makeMe({ envs: { [ENV]: "viewer" } });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -67,6 +74,7 @@ beforeEach(() => {
       const path = new URL(req.url).pathname;
       if (path === "/api/me") return Response.json(me);
       if (path === `/api/env/${ENV}/ingress/routes`) return answer();
+      if (path === `/api/env/${ENV}/ingress/certificates`) return certs();
       if (path === "/api/environments") {
         return Response.json({
           items: [{ id: ENV, name: "Lab", envType: swarm ? "swarm" : "standalone", enabled: true }],
@@ -129,7 +137,7 @@ describe("the Ingress page's Routes tab", () => {
       within(t)
         .getAllByRole("columnheader")
         .map((h) => h.textContent),
-    ).toEqual(["Route", "Stack", "Status", "Conditions"]);
+    ).toEqual(["Route", "Stack", "Status", "Conditions", "Certificate"]);
     const serving = within(t).getByText("app.example.com");
     expect(serving.className).toContain("font-mono");
     expect(serving.className).toContain("break-all");
@@ -393,7 +401,8 @@ describe("the Ingress page's Routes tab", () => {
         within(held).getByText("A stack holds this name but none of its services serves it."),
       ).toBeTruthy();
       expect(within(held).getByRole("link", { name: "parked" })).toBeTruthy();
-      expect(within(held).getByText("—")).toBeTruthy();
+      // Conditions and Certificate both say nothing.
+      expect(within(held).getAllByText("—")).toHaveLength(2);
       expect(within(held).queryByRole("button")).toBeNull();
       const kept = rowOf(t, "kept.example.com");
       expect(within(kept).getByText("Reserved", { selector: "[data-slot=badge]" })).toBeTruthy();
@@ -401,8 +410,8 @@ describe("the Ingress page's Routes tab", () => {
       expect(
         within(kept).getByText("Held back on the Domains tab. No stack can claim it."),
       ).toBeTruthy();
-      // The stack column and the Conditions column both say nothing.
-      expect(within(kept).getAllByText("—")).toHaveLength(2);
+      // The stack column, the Conditions column and the Certificate column all say nothing.
+      expect(within(kept).getAllByText("—")).toHaveLength(3);
       expect(within(kept).queryByRole("button")).toBeNull();
       expect(within(kept).queryByRole("link")).toBeNull();
     });
@@ -643,6 +652,49 @@ describe("the Ingress page's Routes tab", () => {
         within(row).getByText("TierPlan couldn't read this environment just now."),
       ).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
+  describe("the Certificate column", () => {
+    it("links a route whose hostname has a certificate to it, and shows a dash otherwise", async () => {
+      serve([
+        route(),
+        route({ hostname: "bare.example.com", service: "api", stackName: "legacy", stackId: "s2" }),
+      ]);
+      serveCerts("app.example.com", "other.example.com");
+      mount();
+      const t = await table();
+      const link = await within(rowOf(t, "app.example.com")).findByRole("link", {
+        name: "View certificate for app.example.com",
+      });
+      expect(link.textContent).toBe("View certificate");
+      expect(link.getAttribute("href")).toBe(
+        `/env/${ENV}/ingress/certificates?host=app.example.com`,
+      );
+      const bare = rowOf(t, "bare.example.com");
+      expect(within(bare).queryByRole("link", { name: /View certificate/ })).toBeNull();
+      expect(within(bare).getByText("—")).toBeTruthy();
+    });
+
+    it("compares hostnames without regard to case and ignores the path", async () => {
+      serve([route({ hostname: "App.Example.com", path: "/api" })]);
+      serveCerts("app.example.com");
+      mount();
+      const t = await table();
+      expect(
+        await within(t).findByRole("link", { name: "View certificate for App.Example.com/api" }),
+      ).toBeTruthy();
+    });
+
+    it("shows a dash while the certificates cannot be read", async () => {
+      serve([route()]);
+      certs = () => Response.json({ title: "boom" }, { status: 500 });
+      mount();
+      const t = await table();
+      await waitFor(() =>
+        expect(within(t).queryByRole("link", { name: /View certificate/ })).toBeNull(),
+      );
+      expect(within(rowOf(t, "app.example.com")).getByText("—")).toBeTruthy();
     });
   });
 });

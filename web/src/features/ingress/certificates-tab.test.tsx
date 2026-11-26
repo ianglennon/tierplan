@@ -474,4 +474,46 @@ describe("the Ingress page's Certificates tab", () => {
       await waitFor(() => expect(screen.queryByText("Ingress is off")).toBeNull());
     });
   });
+
+  describe("opened from a route (?host=)", () => {
+    const twoCerts = () => serve([cert(), cert({ id: "c2", hostname: "beta.example.com" })]);
+
+    it("fills the filter with the host, shows only that row and a chip that shows all again", async () => {
+      twoCerts();
+      mount("app.example.com");
+      const t = await table();
+      expect(within(t).getAllByRole("row")).toHaveLength(2);
+      expect(within(t).queryByText("beta.example.com")).toBeNull();
+      const box = screen.getByRole("textbox", { name: "Filter certificates" }) as HTMLInputElement;
+      expect(box.value).toBe("app.example.com");
+      fireEvent.click(screen.getByRole("button", { name: "Showing app.example.com. Show all" }));
+      expect(box.value).toBe("");
+      expect(within(t).getAllByRole("row")).toHaveLength(3);
+      expect(screen.queryByRole("button", { name: /^Showing / })).toBeNull();
+    });
+
+    it("tells the route to take the host out of the address when the chip is used", async () => {
+      twoCerts();
+      const onShowAll = vi.fn();
+      render(
+        <QueryClientProvider client={client}>
+          <TestRouter>
+            <TooltipProvider>
+              <CertificatesTab envId={ENV} host="app.example.com" onShowAll={onShowAll} />
+            </TooltipProvider>
+          </TestRouter>
+        </QueryClientProvider>,
+      );
+      await table();
+      fireEvent.click(screen.getByRole("button", { name: "Showing app.example.com. Show all" }));
+      expect(onShowAll).toHaveBeenCalledTimes(1);
+    });
+
+    it("draws no chip when the tab is opened without a host", async () => {
+      twoCerts();
+      mount();
+      await table();
+      expect(screen.queryByRole("button", { name: /^Showing / })).toBeNull();
+    });
+  });
 });
