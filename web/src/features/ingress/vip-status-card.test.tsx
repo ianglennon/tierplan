@@ -83,3 +83,63 @@ describe("the virtual IP status card: holder and facts", () => {
     expect(cell.className).not.toContain("text-status-warning-text");
   });
 });
+
+describe("the virtual IP status card: warnings and managers", () => {
+  it("draws no warning and no managers table that has nothing to say beyond the managers", () => {
+    card();
+    expect(screen.queryByText("Another router uses this router ID")).toBeNull();
+    expect(screen.queryByText("A node's clock is out of step")).toBeNull();
+    expect(screen.getByRole("table", { name: "Managers" })).toBeTruthy();
+  });
+
+  it("warns that another router uses the router ID, with the sender when one is reported", () => {
+    card({ foreignRouter: { detected: true, sender: "192.168.10.7" } });
+    const alert = screen.getByText("Another router uses this router ID").closest("[role=alert]");
+    expect(alert?.textContent).toContain(
+      "192.168.10.7 sends virtual router adverts with router ID 51 that this swarm's key doesn't match.",
+    );
+  });
+
+  it("warns about a foreign router without a sender in the general sentence", () => {
+    card({ foreignRouter: { detected: true } });
+    const alert = screen.getByText("Another router uses this router ID").closest("[role=alert]");
+    expect(alert?.textContent).toContain("Something on the network sends virtual router adverts");
+    expect(alert?.textContent).toContain("router ID 51");
+  });
+
+  it("warns that a node's clock is out of step, naming the nodes and the window", () => {
+    card({ clockSkewNodes: ["sw-a", "sw-z"], authWindowSeconds: 30 });
+    const alert = screen.getByText("A node's clock is out of step").closest("[role=alert]");
+    expect(alert?.textContent).toContain("node-a, sw-z are too far from the others.");
+    expect(alert?.textContent).toContain("more than 30 s old");
+  });
+
+  it("lists each manager with its privileged-services policy and the note that goes with it", () => {
+    card({
+      managers: [
+        { nodeId: "sw-a", hostname: "node-a", state: "allows", localSocket: false },
+        { nodeId: "sw-b", hostname: "node-b", state: "refuses", localSocket: false },
+        { nodeId: "sw-c", hostname: "node-c", state: "unknown", localSocket: false },
+        { nodeId: "sw-d", hostname: "node-d", state: "allows", localSocket: true },
+      ],
+    });
+    const table = screen.getByRole("table", { name: "Managers" });
+    const row = (n: string) => within(table).getByText(n).closest("tr") as HTMLElement;
+    expect(within(row("node-a")).getByText("Allowed")).toBeTruthy();
+    expect(within(row("node-b")).getByText("Refused")).toBeTruthy();
+    const setting = within(row("node-b")).getByText(
+      "TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true",
+    );
+    expect(setting.className).toContain("font-mono");
+    expect(within(row("node-c")).getByText("Unknown")).toBeTruthy();
+    expect(
+      within(row("node-d")).getByText(/Reached through TierPlan's own Docker socket/),
+    ).toBeTruthy();
+  });
+
+  it("replaces the managers table with one line when the managers could not be read", () => {
+    card({ managersReadable: false, managers: [] });
+    expect(screen.queryByRole("table", { name: "Managers" })).toBeNull();
+    expect(screen.getByText("TierPlan couldn't read the managers just now.")).toBeTruthy();
+  });
+});

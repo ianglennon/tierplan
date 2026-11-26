@@ -300,6 +300,71 @@ describe("the Ingress page's Nodes tab", () => {
       expect(screen.queryByText("The virtual IP is off. Turn it on in Settings.")).toBeNull();
     });
 
+    function candidate(over: Json) {
+      return {
+        nodeId: "sw1",
+        hostname: "edge-1",
+        vrrpState: "BACKUP",
+        proxyReady: true,
+        taskState: "running",
+        lastFault: "",
+        lastHeard: "2026-11-20T10:05:00Z",
+        ...over,
+      };
+    }
+
+    it("joins each candidate's VRRP state onto its node row, and draws a dash for a node that is not one", async () => {
+      envType = "swarm";
+      vip = () =>
+        Response.json(
+          vipFixture({
+            candidates: [
+              candidate({ nodeId: "sw1", vrrpState: "MASTER" }),
+              candidate({ nodeId: "sw2", vrrpState: "FAULT", lastFault: "script_failed" }),
+              candidate({ nodeId: "sw3", vrrpState: "STOP" }),
+              candidate({ nodeId: "sw4", vrrpState: "" }),
+            ] as never,
+          }),
+        );
+      serve([
+        node(),
+        node({ id: "n2", name: "edge-2", swarmNodeId: "sw2" }),
+        node({ id: "n3", name: "edge-3", swarmNodeId: "sw3" }),
+        node({ id: "n4", name: "edge-4", swarmNodeId: "sw4" }),
+        node({ id: "n5", name: "edge-5", swarmNodeId: "sw9" }),
+        node({ id: "n6", name: "solo", swarmNodeId: "" }),
+      ]);
+      mount();
+      const t = await table();
+      await screen.findByRole("columnheader", { name: "Virtual IP" });
+      expect(within(rowOf(t, "edge-1")).getByText("Holds the address")).toBeTruthy();
+      const two = rowOf(t, "edge-2");
+      expect(within(two).getByText("Fault")).toBeTruthy();
+      expect(within(two).getByText("script_failed")).toBeTruthy();
+      expect(within(rowOf(t, "edge-3")).getByText("Stopped")).toBeTruthy();
+      expect(within(rowOf(t, "edge-4")).getByText("Not reporting")).toBeTruthy();
+      expect(within(rowOf(t, "edge-5")).getByText("—")).toBeTruthy();
+      expect(within(rowOf(t, "solo")).getByText("—")).toBeTruthy();
+    });
+
+    it("draws a standby candidate as Standby with no fault line", async () => {
+      envType = "swarm";
+      vip = () => Response.json(vipFixture({ candidates: [candidate({})] as never }));
+      serve([node()]);
+      mount();
+      const row = rowOf(await table(), "edge-1");
+      expect(await within(row).findByText("Standby")).toBeTruthy();
+      expect(within(row).queryByText("script_failed")).toBeNull();
+    });
+
+    it("has no Virtual IP column on a swarm with the virtual IP off or on a standalone environment", async () => {
+      envType = "standalone";
+      serve([node()]);
+      mount();
+      await table();
+      expect(screen.queryByRole("columnheader", { name: "Virtual IP" })).toBeNull();
+    });
+
     it("never asks for the virtual IP on a standalone environment and draws none of it", async () => {
       envType = "standalone";
       serve([node()]);
@@ -325,6 +390,7 @@ describe("the Ingress page's Nodes tab", () => {
         await screen.findByText("The virtual IP is off. Turn it on in Settings."),
       ).toBeTruthy();
       expect(screen.queryByRole("heading", { name: "Virtual IP" })).toBeNull();
+      expect(screen.queryByRole("columnheader", { name: "Virtual IP" })).toBeNull();
       expect(screen.queryByText("Couldn't read the nodes.")).toBeNull();
     });
   });

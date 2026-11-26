@@ -8,7 +8,12 @@ import { Trans } from "react-i18next";
 
 import type { HealthState } from "@/api/environments";
 import { ingressStatusQuery } from "@/api/ingress";
-import { type IngressNode, ingressNodesQuery, ingressVIPQuery } from "@/api/ingress-nodes";
+import {
+  type IngressNode,
+  type IngressVIPCandidate,
+  ingressNodesQuery,
+  ingressVIPQuery,
+} from "@/api/ingress-nodes";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { StatusDot } from "@/components/status-dot";
@@ -75,6 +80,24 @@ function sync(n: IngressNode): { state: HealthState; key: string } {
   }
 }
 
+// candidateState is the dot and the key of the words for what a candidate's keepalived last said (UI-SPEC S4): holding the
+// address and standing by are both healthy, a fault is a warning, a stopped one is not a fault, and one that has said
+// nothing is not reporting.
+function candidateState(c: IngressVIPCandidate): { state: HealthState; key: string } {
+  switch (c.vrrpState) {
+    case "MASTER":
+      return { state: "online", key: "ingressPage.nodes.vip.state.MASTER" };
+    case "BACKUP":
+      return { state: "online", key: "ingressPage.nodes.vip.state.BACKUP" };
+    case "FAULT":
+      return { state: "degraded", key: "ingressPage.nodes.vip.state.FAULT" };
+    case "STOP":
+      return { state: "unknown", key: "ingressPage.nodes.vip.state.STOP" };
+    default:
+      return { state: "unknown", key: "ingressPage.nodes.vip.state.none" };
+  }
+}
+
 // NodesTab is the Nodes tab of the Ingress page (UIX-04, UI-SPEC S4, D-13): every ingress node of the environment
 // with its enrolment, supervisor version, proxy health, the bundle it applied against the one it should hold, and
 // when it was last heard from. Bundle IDs are unordered content hashes, so the table never says how far behind a node
@@ -131,6 +154,8 @@ export function NodesTab({ envId }: { envId: string }) {
   }
 
   const currentBundleId = query.data.currentBundleId;
+  // The Virtual IP column is a join of the candidates onto the ingress nodes by swarm node ID, not a second list.
+  const candidates = vip ? new Map((vip.candidates ?? []).map((c) => [c.nodeId, c])) : null;
   return (
     <div className="flex flex-col gap-4">
       {swarm && vipQuery.isSuccess && vip === null ? (
@@ -146,6 +171,9 @@ export function NodesTab({ envId }: { envId: string }) {
             <TableHead scope="col">{t("ingressPage.nodes.columns.health")}</TableHead>
             <TableHead scope="col">{t("ingressPage.nodes.columns.bundle")}</TableHead>
             <TableHead scope="col">{t("ingressPage.nodes.columns.lastSeen")}</TableHead>
+            {candidates ? (
+              <TableHead scope="col">{t("ingressPage.nodes.columns.vip")}</TableHead>
+            ) : null}
             <TableHead scope="col">
               <span className="sr-only">{t("ingressPage.nodes.columns.actions")}</span>
             </TableHead>
@@ -158,6 +186,7 @@ export function NodesTab({ envId }: { envId: string }) {
               envId={envId}
               node={n}
               currentBundleId={currentBundleId}
+              candidates={candidates}
               manage={manage}
               revokeNeeds={revokeNeeds}
               onRevoke={setRevoking}
@@ -186,6 +215,7 @@ function NodeRow({
   envId,
   node: n,
   currentBundleId,
+  candidates,
   manage,
   revokeNeeds,
   onRevoke,
@@ -193,6 +223,8 @@ function NodeRow({
   envId: string;
   node: IngressNode;
   currentBundleId: string;
+  // The virtual IP's candidates by swarm node ID; null when the environment has no virtual IP, which leaves out its column.
+  candidates: Map<string, IngressVIPCandidate> | null;
   manage: boolean;
   revokeNeeds: Needs;
   onRevoke: (node: IngressNode) => void;
@@ -202,6 +234,8 @@ function NodeRow({
   const enrol = enrolment(n);
   const proxy = health(n);
   const bundle = sync(n);
+  const candidate = candidates && n.swarmNodeId !== "" ? candidates.get(n.swarmNodeId) : undefined;
+  const vrrp = candidate ? candidateState(candidate) : null;
   return (
     <TableRow>
       <TableCell className="align-top whitespace-normal">
@@ -277,6 +311,24 @@ function NodeRow({
       <TableCell className="align-top text-sm whitespace-normal">
         {n.lastSeenAt ? <RelativeTime value={n.lastSeenAt} /> : t("ingressPage.nodes.never")}
       </TableCell>
+      {candidates ? (
+        <TableCell className="align-top whitespace-normal">
+          {candidate && vrrp ? (
+            <>
+              <StatusDot state={vrrp.state} label={t(vrrp.key)} />
+              {candidate.vrrpState === "FAULT" && candidate.lastFault !== "" ? (
+                <p className="text-xs break-words text-status-warning-text">
+                  {candidate.lastFault}
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <span className="text-sm text-muted-foreground">
+              {t("ingressPage.nodes.vip.notCandidate")}
+            </span>
+          )}
+        </TableCell>
+      ) : null}
       <TableCell className="align-top">
         {revoked ? null : (
           <NeedsTooltip reason={revokeNeeds.reason}>
