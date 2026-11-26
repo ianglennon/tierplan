@@ -11,6 +11,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit/audittest"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // vipTestKeyHex is the hex of a VRRP key no audit row may hold.
@@ -56,4 +57,39 @@ func TestAuditProofVIPMoved(t *testing.T) {
 		t.Fatalf("details = %v, want from node-a, to node-b, reason %s", r.Details, ingressdeploy.VIPMoveProbeFailing)
 	}
 	audittest.AssertNoSecrets(t, rows, vipTestKeyHex)
+}
+
+// TestVIPMovedAuditedOnce: a restart replays the same log and the moves already stored write no second row.
+func TestVIPMovedAuditedOnce(t *testing.T) {
+	v := newVIPRig(t)
+	v.failOver(t)
+
+	fresh := ingressdeploy.New(v.deps)
+	fresh.ReadVIPOnce(testsupport.Context(t), v.envID)
+	v.settle(fresh)
+	v.settle(fresh)
+
+	if n := len(v.moves()); n != 1 {
+		t.Fatalf("%d moves after a replay, want 1", n)
+	}
+	if n := len(audittest.Rows(t, v.st, audit.ActionIngressVIPMoved)); n != 1 {
+		t.Fatalf("%d ingress.vip_moved rows after a replay, want 1", n)
+	}
+}
+
+// TestVIPMoveStoredWithoutAudit: with no audit writer the move is stored and nothing is written to the log.
+func TestVIPMoveStoredWithoutAudit(t *testing.T) {
+	v := newVIPRig(t)
+	deps := v.deps
+	deps.Audit = nil
+	v.svc = ingressdeploy.New(deps)
+	v.failOver(t)
+
+	got := v.moves()
+	if len(got) != 1 || got[0].Reason != ingressdeploy.VIPMoveProbeFailing {
+		t.Fatalf("moves = %+v, want the one move stored", got)
+	}
+	if n := len(audittest.Rows(t, v.st, audit.ActionIngressVIPMoved)); n != 0 {
+		t.Fatalf("%d ingress.vip_moved rows with no audit writer, want 0", n)
+	}
 }
