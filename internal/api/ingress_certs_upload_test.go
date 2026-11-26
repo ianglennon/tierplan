@@ -220,7 +220,7 @@ func (f *ingressFix) upload(t *testing.T, u credentialUser, ca *uploadCA, env, h
 }
 
 // D-23: each way an upload can be wrong is a 422 with its own stable code and a fixed sentence that holds no input byte; a
-// hostname another environment holds is 409 ingress_host_taken; and no refusal writes a row or an audit entry.
+// hostname another environment holds is 409 ingress_host_taken; and no refusal writes a row (each is audited as a failure, A-01).
 func TestIngressCertUploadRefusals(t *testing.T) {
 	t.Parallel()
 	f := newIngressFix(t)
@@ -290,8 +290,15 @@ func TestIngressCertUploadRefusals(t *testing.T) {
 	if n := f.certRows(t, f.envA); n != 0 {
 		t.Errorf("%d certificate rows of A, want none written by refusals", n)
 	}
-	if rows := f.ingressAudit(t, audit.ActionIngressCertUploaded); len(rows) != 0 {
-		t.Errorf("audit rows = %+v, want none", rows)
+	// Every refusal above is one failure row (9 cases, the taken name and the unregistered domain), and none is a success.
+	rows := f.ingressAudit(t, audit.ActionIngressCertUploaded)
+	if len(rows) != len(cases)+2 {
+		t.Errorf("audit rows = %d, want %d failure rows", len(rows), len(cases)+2)
+	}
+	for _, r := range rows {
+		if r.Result != "failure" {
+			t.Errorf("audit row = %+v, want a failure", r)
+		}
 	}
 	requireNoKey(t, "the audit log", f.everyAuditText(t), keyPEM)
 	requireNoKey(t, "the server log", f.logs.String(), keyPEM)

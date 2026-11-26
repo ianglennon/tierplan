@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -70,6 +71,25 @@ func uploadProblem(e *ingresscert.UploadError) error {
 	return httpx.Problem(http.StatusUnprocessableEntity, e.Code, e.Error())
 }
 
+// auditUploadRefused writes the failure row of an upload the server refused (A-01 class F): the uploader, the hostname and the
+// refusal code, and nothing of the body. It is written on a context that outlives the request, since the refusal has been
+// decided. A nil Audit writes nothing, and a lost row is the server's fault: it is logged and the refusal is still answered.
+func auditUploadRefused(ctx context.Context, d IngressCertDeps, p *rbac.Principal, envID, hostname, code, userAgent string) {
+	if d.Audit == nil {
+		return
+	}
+	hostname = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(hostname)), ".")
+	wctx, cancel := doneActionAuditContext(ctx)
+	defer cancel()
+	if err := d.Audit.Record(wctx, audit.Entry{
+		Actor: p.AuditActor(), Action: audit.ActionIngressCertUploaded, TargetType: ingressCertTarget, TargetID: hostname, EnvID: envID,
+		Result: audit.ResultFailure, Reason: code, IP: httpx.ClientIP(ctx), UserAgent: userAgent,
+		Details: map[string]string{"hostname": hostname, "code": code},
+	}); err != nil {
+		d.Log.Error("could not audit a refused certificate upload", "hostname", hostname, "code", code, "error", err)
+	}
+}
+
 // registerIngressCertUpload registers the upload and the switch back to ACME. Both need ingress.manage on the environment.
 func registerIngressCertUpload(r *httpx.Router, d IngressCertDeps) {
 	// RegisterIngressCerts has filled in Log and Now.
@@ -107,6 +127,7 @@ func registerIngressCertUpload(r *httpx.Router, d IngressCertDeps) {
 		}
 		// Each field is bounded before anything is parsed or read from the store.
 		if len(in.Body.CertificatePEM) > ingresscert.MaxUploadBytes || len(in.Body.PrivateKeyPEM) > ingresscert.MaxUploadBytes {
+			auditUploadRefused(ctx, d, p, in.EnvID, in.Body.Hostname, ingresscert.UploadTooLarge, in.UserAgent)
 			return nil, uploadProblem(&ingresscert.UploadError{Code: ingresscert.UploadTooLarge})
 		}
 		var canView func(string) bool
@@ -142,8 +163,10 @@ func registerIngressCertUpload(r *httpx.Router, d IngressCertDeps) {
 		switch {
 		case err == nil:
 		case errors.As(err, &refusedUpload):
+			auditUploadRefused(ctx, d, p, in.EnvID, in.Body.Hostname, refusedUpload.Code, in.UserAgent)
 			return nil, uploadProblem(refusedUpload)
 		case errors.As(err, &refusedRequest):
+			auditUploadRefused(ctx, d, p, in.EnvID, in.Body.Hostname, refusedRequest.Problem.Code, in.UserAgent)
 			return nil, ingressCertRefusal(refusedRequest)
 		default:
 			// The error carries no input byte: store errors name the hostname and the operation only.
