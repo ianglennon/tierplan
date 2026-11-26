@@ -453,6 +453,23 @@
         "turnOff": "Turn off ingress",
         "error": "Couldn't read the ingress status.",
         "retry": "Retry reading the ingress status"
+      },
+      "vip": {
+        "title": "Virtual IP",
+        "on": "On",
+        "off": "Off",
+        "offBody": "A virtual IP is one address that always points at a working proxy. It moves to another node if the one holding it fails.",
+        "turnOn": "Turn on virtual IP",
+        "needsIngress": "Turn ingress on first. The virtual IP points at the proxies.",
+        "seeNodes": "See who holds it on the Nodes tab.",
+        "error": "Couldn't read the virtual IP.",
+        "retry": "Retry reading the virtual IP",
+        "form": {
+          "address": "Address",
+          "addressHelper": "The address with its prefix length. It must be unused and inside the network of every node.",
+          "routerId": "Router ID",
+          "routerIdHelper": "Leave empty and TierPlan chooses one. Change it if another router on the network uses the same ID."
+        }
       }
     },
     "review": {
@@ -494,6 +511,20 @@
         "progress": "Turning ingress off…",
         "done": "Ingress is off.",
         "failedHint": "Nothing is lost. Turn it off again to remove what is left, or on to carry on."
+      },
+      "check": "Check address",
+      "vip": {
+        "warningTitle": "Read this before you turn it on",
+        "warningText": "The virtual IP needs `TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` on every manager's agent. That setting lets TierPlan run privileged, host-network services on every node of this swarm, so a compromised TierPlan could take over every node. VRRP authentication only keeps honest neighbours apart; anything on this network segment can still contend for the address."
+      },
+      "vipEnable": {
+        "title": "Turn on virtual IP?",
+        "body": "Give the address the nodes will answer on. TierPlan checks it before anything is made.",
+        "confirm": "Turn on virtual IP",
+        "dismiss": "Keep virtual IP off",
+        "progress": "Turning virtual IP on…",
+        "done": "Virtual IP is on.",
+        "failedHint": "Nothing is lost. Turn it on again to carry on, or off to remove what was made."
       }
     }
   }

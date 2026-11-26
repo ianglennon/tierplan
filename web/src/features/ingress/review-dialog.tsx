@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { type UseMutationResult, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { HealthState } from "@/api/environments";
 import { IngressActionError, ingressKey } from "@/api/ingress";
@@ -25,6 +25,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { POLICY } from "@/features/ingress/vip-status-card";
 import { useT } from "@/i18n/use-t";
 
 type StackJobItemBody = components["schemas"]["StackJobItemBody"];
@@ -36,7 +45,18 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 export const REDEPLOY_SHOWN = 10;
 
 // The switches the dialog is built for. Each has its own words under ingressPage.review.<kind>.
-export type ReviewKind = "enable" | "disable";
+export type ReviewKind = "enable" | "disable" | "vipEnable";
+
+// ReviewForm is the optional first state of the dialog (the virtual IP's address and router ID): fields the card owns,
+// drawn above the buttons, and the button that runs the preview with what was typed. The preview is not run when the
+// dialog opens, since there is nothing to check yet. A refusal of the preview comes back to this state, above the
+// fields, so the person can correct the form and check again.
+export interface ReviewForm {
+  fields: ReactNode;
+  // Whether what was typed is enough to ask the server about.
+  canCheck: boolean;
+  check: () => void;
+}
 
 export interface ReviewDialogProps {
   envId: string;
@@ -49,6 +69,10 @@ export interface ReviewDialogProps {
   preview: UseMutationResult<ReviewPreview, Error, void>;
   // The switch itself: it answers with the job to follow.
   start: UseMutationResult<IngressStarted, Error, void>;
+  // A form to fill before the preview, for a switch that needs input.
+  form?: ReviewForm;
+  // Values for the placeholders of the dialog's body.
+  bodyValues?: Record<string, unknown>;
 }
 
 // ReviewDialog is the house pattern for every ingress switch (D-07, UI-SPEC S6): one dialog with three states in place,
@@ -64,6 +88,8 @@ export function ReviewDialog({
   onRunning,
   preview,
   start,
+  form,
+  bodyValues,
 }: ReviewDialogProps) {
   const queryClient = useQueryClient();
   // A job that is running holds the dialog open: it has one button and that button waits for the end.
@@ -88,6 +114,8 @@ export function ReviewDialog({
             kind={kind}
             preview={preview}
             start={start}
+            form={form}
+            bodyValues={bodyValues}
             onRunning={(value) => {
               running.current = value;
               onRunning?.(value);
@@ -119,11 +147,22 @@ interface ReviewBodyProps {
   kind: ReviewKind;
   preview: UseMutationResult<ReviewPreview, Error, void>;
   start: UseMutationResult<IngressStarted, Error, void>;
+  form?: ReviewForm;
+  bodyValues?: Record<string, unknown>;
   onRunning: (running: boolean) => void;
   onClose: () => void;
 }
 
-function ReviewBody({ envId, kind, preview, start, onRunning, onClose }: ReviewBodyProps) {
+function ReviewBody({
+  envId,
+  kind,
+  preview,
+  start,
+  form,
+  bodyValues,
+  onRunning,
+  onClose,
+}: ReviewBodyProps) {
   const t = useT();
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
@@ -133,11 +172,13 @@ function ReviewBody({ envId, kind, preview, start, onRunning, onClose }: ReviewB
   const sending = useRef(false);
   const run = preview.mutate;
 
+  const hasForm = form !== undefined;
   useEffect(() => {
-    if (asked.current) return;
+    // With a form there is nothing to ask until it has been filled in: its own button runs the preview.
+    if (asked.current || hasForm) return;
     asked.current = true;
     run();
-  }, [run]);
+  }, [run, hasForm]);
 
   const job = useQuery({ ...ingressJobQuery(envId, jobId ?? ""), enabled: jobId !== null });
   const ended = jobId !== null && (jobEnded(job.data) || (job.isError && !job.isFetching));
@@ -181,15 +222,58 @@ function ReviewBody({ envId, kind, preview, start, onRunning, onClose }: ReviewB
   const warnings = findings.filter((f) => f.severity === "warning");
   const redeploy = data?.redeploy ?? [];
   const unreachable = data?.unreachable ?? [];
-  const checking = !preview.isError && !data;
+  const checking = hasForm ? preview.isPending : !preview.isError && !data;
   const confirmOff = checking || preview.isError || blocking.length > 0 || start.isPending;
+
+  // Until a preview with nothing that refuses has come back, a switch with a form shows the form, and what the server
+  // refused with is drawn above it, as the server's sentence and never as a toast (U-17).
+  if (form && (!data || blocking.length > 0)) {
+    return (
+      <div className="flex flex-col gap-4">
+        <DialogHeader>
+          <DialogTitle className="break-words">{t(`ingressPage.review.${kind}.title`)}</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm">{t(`ingressPage.review.${kind}.body`, bodyValues)}</p>
+        {preview.isError ? <Refusal error={preview.error} /> : null}
+        {blocking.length > 0 ? (
+          <Alert variant="destructive">
+            <AlertTitle>{t("ingressPage.review.blocked")}</AlertTitle>
+            <AlertDescription>
+              <Findings findings={blocking} />
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {form.fields}
+        {checking ? (
+          <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner aria-hidden="true" />
+            {t("ingressPage.review.checking")}
+          </p>
+        ) : null}
+        <DialogFooter>
+          <Button type="button" variant="outline" className={TOUCH_HEIGHT} onClick={onClose}>
+            {t(`ingressPage.review.${kind}.dismiss`)}
+          </Button>
+          <Button
+            type="button"
+            className={TOUCH_HEIGHT}
+            disabled={!form.canCheck || preview.isPending}
+            onClick={form.check}
+          >
+            {preview.isPending ? <Spinner aria-hidden="true" /> : null}
+            {t("ingressPage.review.check")}
+          </Button>
+        </DialogFooter>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
       <DialogHeader>
         <DialogTitle className="break-words">{t(`ingressPage.review.${kind}.title`)}</DialogTitle>
       </DialogHeader>
-      <p className="text-sm">{t(`ingressPage.review.${kind}.body`)}</p>
+      <p className="text-sm">{t(`ingressPage.review.${kind}.body`, bodyValues)}</p>
       {checking ? (
         <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
           <Spinner aria-hidden="true" />
@@ -205,11 +289,29 @@ function ReviewBody({ envId, kind, preview, start, onRunning, onClose }: ReviewB
           </AlertDescription>
         </Alert>
       ) : null}
+      {data?.warning !== undefined ? (
+        // The virtual IP is never switched on without this in front of the person, so a preview that came without the
+        // sentence still shows the one the page knows.
+        <Alert variant="warning">
+          <AlertTitle>{t("ingressPage.review.vip.warningTitle")}</AlertTitle>
+          <AlertDescription className="break-words">
+            {data.warning !== "" ? data.warning : t("ingressPage.review.vip.warningText")}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {(data?.managers ?? []).length > 0 ? (
+        <PreviewManagers managers={data?.managers ?? []} />
+      ) : null}
       {warnings.length > 0 ? (
         <Alert variant="warning">
           <AlertDescription>
             <Findings findings={warnings} />
           </AlertDescription>
+        </Alert>
+      ) : null}
+      {data?.notice ? (
+        <Alert>
+          <AlertDescription className="break-words">{data.notice}</AlertDescription>
         </Alert>
       ) : null}
       {unreachable.length > 0 ? (
@@ -259,6 +361,42 @@ function ReviewBody({ envId, kind, preview, start, onRunning, onClose }: ReviewB
           {t(`ingressPage.review.${kind}.confirm`)}
         </Button>
       </DialogFooter>
+    </div>
+  );
+}
+
+// PreviewManagers is the managers table of the virtual IP's preview: each manager and whether its agent lets services
+// run privileged, the thing the address needs on every one of them.
+function PreviewManagers({ managers }: { managers: NonNullable<ReviewPreview["managers"]> }) {
+  const t = useT();
+  return (
+    <div className="overflow-x-auto">
+      <Table aria-label={t("ingressPage.nodes.vip.managers.label")}>
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col">{t("ingressPage.nodes.vip.managers.manager")}</TableHead>
+            <TableHead scope="col">{t("ingressPage.nodes.vip.managers.privileged")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {managers.map((m) => {
+            const policy = POLICY[m.state];
+            return (
+              <TableRow key={m.nodeId}>
+                <TableCell className="align-top text-sm break-all whitespace-normal">
+                  {m.hostname !== "" ? m.hostname : m.nodeId}
+                  {m.note ? (
+                    <span className="block text-xs text-muted-foreground">{m.note}</span>
+                  ) : null}
+                </TableCell>
+                <TableCell className="align-top whitespace-normal">
+                  <StatusDot state={policy.state} label={t(policy.key)} />
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
     </div>
   );
 }

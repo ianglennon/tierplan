@@ -124,7 +124,7 @@ export function VIPStatusCard({ vip }: { vip: IngressVIP }) {
 
 // The privileged-services opt-in is shown as a dot and a word: allowed is online, refused is offline because
 // keepalived cannot run on that manager, and one whose agent did not answer is unknown.
-const POLICY: Record<IngressVIPManager["state"], { state: HealthState; key: string }> = {
+export const POLICY: Record<IngressVIPManager["state"], { state: HealthState; key: string }> = {
   allows: { state: "online", key: "ingressPage.nodes.vip.managers.allows" },
   refuses: { state: "offline", key: "ingressPage.nodes.vip.managers.refuses" },
   unknown: { state: "unknown", key: "ingressPage.nodes.vip.managers.unknown" },

@@ -11,6 +11,7 @@ import type { components } from "@/api/schema";
 export type IngressJob = components["schemas"]["IngressJobBody"];
 export type IngressFinding = components["schemas"]["IngressFindingBody"];
 export type IngressRedeploy = components["schemas"]["IngressRedeployBody"];
+export type IngressVIPPreviewManager = components["schemas"]["IngressVIPPreviewManagerBody"];
 
 // How often a running job is read (UI-SPEC S6, D-24): no stream, a read every 2 seconds.
 export const INGRESS_JOB_REFETCH_MS = 2_000;
@@ -18,10 +19,30 @@ export const INGRESS_JOB_REFETCH_MS = 2_000;
 // ReviewPreview is what every switch's preview answers, in the one shape the review dialog draws: the findings (an
 // error refuses the switch, a warning lets it go on), the stacks that must be redeployed to join the ingress network,
 // and the nodes whose agent is not connected now.
+//
+// The virtual IP's preview adds three things the others do not have: the fixed privileged-services warning (always
+// sent, drawn first), each manager's opt-in, and for a change what it does to the address. All three are drawn as sent.
 export interface ReviewPreview {
   findings: IngressFinding[];
   redeploy: IngressRedeploy[];
   unreachable: string[];
+  warning?: string;
+  managers?: IngressVIPPreviewManager[];
+  notice?: string;
+}
+
+// VIPInput is what the virtual IP form asks for: the address with its prefix length, and a router ID or none to let
+// TierPlan derive one from the swarm's cluster ID.
+export interface VIPInput {
+  address: string;
+  routerId?: number;
+}
+
+function vipBody(input: VIPInput): { address: string; routerId?: number } {
+  return {
+    address: input.address.trim(),
+    ...(input.routerId !== undefined ? { routerId: input.routerId } : {}),
+  };
 }
 
 // IngressStarted is a switch accepted: the job to follow.
@@ -97,6 +118,47 @@ export function useDisableIngress(envId: string) {
     mutationFn: async (): Promise<IngressStarted> => {
       const { data, error, response } = await api.POST("/api/env/{envId}/ingress/disable", {
         params: { path: { envId } },
+      });
+      if (!data) throw refused(error, response);
+      return { jobId: data.jobId };
+    },
+  });
+}
+
+// useVIPPreview reads what switching the virtual IP on, or changing it, would do (D-05, D-07). The server decides which
+// from whether the environment has one, and says so in the answer. The input is read when the check runs, so the form
+// that owns it passes what it holds now. A refusal that is a finding (vip_outside_node_subnet and the like) comes back
+// as a 200 with a finding of severity error; an address that is not an address is a 422 thrown as IngressActionError.
+export function useVIPPreview(envId: string, input: VIPInput) {
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<ReviewPreview> => {
+      const { data, error, response } = await api.POST("/api/env/{envId}/ingress/vip/preview", {
+        params: { path: { envId } },
+        body: vipBody(input),
+      });
+      if (!data) throw refused(error, response);
+      return {
+        findings: data.findings ?? [],
+        redeploy: [],
+        unreachable: [],
+        warning: data.warning,
+        managers: data.managers ?? [],
+        notice: data.notice,
+      };
+    },
+  });
+}
+
+// useEnableVIP switches the virtual IP on. The server checks everything again and answers 202 with the job's ID, or
+// refuses with the finding's code as the type and its sentence as the detail.
+export function useEnableVIP(envId: string, input: VIPInput) {
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<IngressStarted> => {
+      const { data, error, response } = await api.POST("/api/env/{envId}/ingress/vip", {
+        params: { path: { envId } },
+        body: vipBody(input),
       });
       if (!data) throw refused(error, response);
       return { jobId: data.jobId };

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { IngressCard } from "@/features/ingress/ingress-card";
+import { VIPCard } from "@/features/ingress/vip-card";
 
 // SettingsTab is the Settings tab of the Ingress page (UI-SPEC S6): the switches of the environment, one card each,
 // stacked. It works while ingress is off, since the switch that turns ingress on lives here (D-03, D-05).
@@ -9,6 +10,7 @@ export function SettingsTab({ envId }: { envId: string }) {
   return (
     <div className="flex flex-col gap-6">
       <IngressCard envId={envId} />
+      <VIPCard envId={envId} />
     </div>
   );
 }
