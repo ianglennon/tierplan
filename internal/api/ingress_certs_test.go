@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -468,5 +469,57 @@ func TestIngressCertificatesReadableByViewers(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("GET %s anonymous: %d %s, want 401", path, rec.Code, rec.Body)
 		}
+	}
+}
+
+// A-04, T-27-11: lastError.detail and requestedBy are filled only for a caller who holds ingress.manage on the
+// environment; a Viewer gets the same row with those two fields empty and nothing else different.
+func TestIngressCertificateDetailOnlyForManagers(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	c := f.requestCert(t, f.adminA, f.envA, "web.apps.example.com")
+	const detail = "ca said: rate limited for example.com"
+	f.setCert(t, c.ID, `consecutive_failures = 1, last_error_class = 'rate_limited', last_error_detail = ?, last_error_at = ?`,
+		detail, f.clk.now().Add(-time.Minute).UnixNano())
+	viewer := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+
+	row := func(u credentialUser) map[string]any {
+		t.Helper()
+		rec := f.credCall(t, u, http.MethodGet, certsPath(f.envA), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list: %d %s, want 200", rec.Code, rec.Body)
+		}
+		var l struct {
+			Items []map[string]any `json:"items"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &l); err != nil || len(l.Items) != 1 {
+			t.Fatalf("decode %s: %v", rec.Body, err)
+		}
+		return l.Items[0]
+	}
+	admin, view := row(f.adminA), row(viewer)
+
+	ae, _ := admin["lastError"].(map[string]any)
+	if ae["detail"] != detail || admin["requestedBy"] != "id-ing-admin-a" {
+		t.Fatalf("the Admin's row = %v, want the detail and requestedBy filled", admin)
+	}
+	ve, _ := view["lastError"].(map[string]any)
+	if ve == nil || ve["class"] != "rate_limited" || ve["hint"] == "" || ve["at"] == nil {
+		t.Fatalf("the Viewer's lastError = %v, want class, hint and at", view["lastError"])
+	}
+	if d, ok := ve["detail"]; ok && d != "" {
+		t.Errorf("the Viewer read the detail %q", d)
+	}
+	if rb, ok := view["requestedBy"]; ok && rb != "" {
+		t.Errorf("the Viewer read requestedBy %q", rb)
+	}
+	// Blank the two fields on the Admin's row: what is left is the Viewer's row.
+	delete(ae, "detail")
+	delete(admin, "requestedBy")
+	delete(ve, "detail")
+	delete(view, "requestedBy")
+	if !reflect.DeepEqual(admin, view) {
+		t.Errorf("the rows differ beyond the two fields:\nadmin  %v\nviewer %v", admin, view)
 	}
 }
