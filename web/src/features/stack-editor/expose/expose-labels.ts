@@ -530,3 +530,99 @@ export function setRouteField(
   if (!writeEntry(doc, at.block, entries, key, v)) return text;
   return render(doc, text);
 }
+
+// ---- adding and removing routes ----
+
+// validateRouteName judges the name of a new named route: lower-case letters, digits and inner
+// hyphens, 32 at most, never "default" (the short form's own name), and not one the service has.
+export function validateRouteName(
+  name: string,
+  existing: readonly string[],
+): "ok" | "invalid" | "duplicate" {
+  if (name === DEFAULT_ROUTE || !NAME_RE.test(name)) return "invalid";
+  return existing.includes(name) ? "duplicate" : "ok";
+}
+
+// validatePort says whether value is a whole number from 1 to 65535, digits only.
+export function validatePort(value: string): boolean {
+  if (!/^[0-9]+$/.test(value)) return false;
+  const n = Number(value);
+  return n >= 1 && n <= 65535;
+}
+
+// addRoute adds a route of a host and a port to a service. A null name is the short form, which a
+// service has once; a name is a named route. It returns the text unchanged when the route would
+// not be valid to add: a second short form, a name that is invalid or taken, an empty host or a
+// port that is not 1 to 65535, or a service or block that cannot be edited.
+export function addRoute(
+  text: string,
+  service: string,
+  target: ExposeTarget,
+  name: string | null,
+  host: string,
+  port: string,
+): string {
+  const h = host.trim();
+  const p = port.trim();
+  if (h === "" || !validatePort(p)) return text;
+  const doc = load(text);
+  const svc = doc ? serviceOf(doc, service) : null;
+  if (!doc || !svc) return text;
+  const where = whereOf(target);
+  const at = locate(svc, where);
+  if (at.state === "locked") return text;
+
+  const route = name ?? DEFAULT_ROUTE;
+  const taken = at.state === "found" ? routesOf(entriesOf(doc, at.block)).map((r) => r.name) : [];
+  if (name === null ? taken.includes(DEFAULT_ROUTE) : validateRouteName(name, taken) !== "ok")
+    return text;
+
+  const block = at.state === "found" ? at.block : ensureBlock(doc, svc, where, "map");
+  if (!block) return text;
+  appendEntry(doc, block, routeKey(route, "host"), h);
+  appendEntry(doc, block, routeKey(route, "port"), p);
+  return render(doc, text);
+}
+
+// removeEntries deletes the given direct entries from a block.
+function removeEntries(block: Block, entries: Entry[]): void {
+  for (const e of entries) {
+    const at = (block.items as unknown[]).indexOf(e.ref);
+    if (at >= 0) block.items.splice(at, 1);
+  }
+}
+
+// removeRoute deletes every key of one route from the block the target reads, in either form. When
+// that was the service's last route, the ingress keys that mean nothing are deleted too, then the
+// labels block if it is empty, then the deploy block if that is empty. A route written through an
+// anchor is left alone: the key it was declared with may be used again elsewhere.
+export function removeRoute(
+  text: string,
+  service: string,
+  target: ExposeTarget,
+  route: string,
+): string {
+  if (!validRoute(route)) return text;
+  const doc = load(text);
+  const svc = doc ? serviceOf(doc, service) : null;
+  if (!doc || !svc) return text;
+  const where = whereOf(target);
+  const at = locate(svc, where);
+  if (at.state !== "found") return text;
+
+  const ofRoute = entriesOf(doc, at.block).filter(
+    (e) => e.direct && isIngress(e) && splitKey(e.key)?.name === route,
+  );
+  if (ofRoute.length === 0 || ofRoute.some((e) => e.anchored)) return text;
+  removeEntries(at.block, ofRoute);
+
+  const left = entriesOf(doc, at.block);
+  if (routesOf(left).length === 0) {
+    removeEntries(
+      at.block,
+      left.filter((e) => e.direct && isIngress(e) && !e.anchored),
+    );
+  }
+  pruneEmpty(svc, where);
+  return render(doc, text);
+}
