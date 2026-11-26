@@ -9,7 +9,8 @@
       "routes": "Routes",
       "certificates": "Certificates",
       "nodes": "Nodes",
-      "domains": "Domains"
+      "domains": "Domains",
+      "settings": "Settings"
     },
     "routes": {
       "label": "Routes",
@@ -427,6 +428,60 @@
         "submit": "Delete domain",
         "keep": "Keep domain",
         "done": "Deleted {{suffix}}."
+      }
+    },
+    "settings": {
+      "ingress": {
+        "title": "Ingress",
+        "on": "On",
+        "off": "Off",
+        "ready": "{{ready}} of {{expected}} proxy nodes are ready.",
+        "offBody": "Ingress serves your stacks' hostnames over HTTPS on this environment, with a certificate for each name.",
+        "turnOn": "Turn on ingress",
+        "turnOff": "Turn off ingress",
+        "error": "Couldn't read the ingress status.",
+        "retry": "Retry reading the ingress status"
+      }
+    },
+    "review": {
+      "checking": "Checking…",
+      "blocked": "This can't go ahead",
+      "redeploy": {
+        "title": "Stacks to redeploy",
+        "more": "and {{n}} more",
+        "note": "Redeploy them after this finishes so they join the ingress network."
+      },
+      "unreachable": "These nodes aren't connected now. Their certificate cache volume is wiped when they connect: {{nodes}}.",
+      "closeDetails": "Close details",
+      "close": "Close",
+      "stepState": {
+        "waiting": "Waiting",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "skipped": "Not run",
+        "cancelled": "Cancelled"
+      },
+      "log": "What it did",
+      "jobFailed": "It didn't finish.",
+      "jobUnreadable": "TierPlan can't read this job any more. Check the page again for where ingress stands.",
+      "enable": {
+        "title": "Turn on ingress?",
+        "body": "TierPlan makes a join token, the ingress network and a proxy on each node. Stacks and their labels are not changed.",
+        "confirm": "Turn on ingress",
+        "dismiss": "Keep ingress off",
+        "progress": "Turning ingress on…",
+        "done": "Ingress is on.",
+        "failedHint": "Nothing is lost. Turn it on again to carry on, or off to remove what was made."
+      },
+      "disable": {
+        "title": "Turn off ingress?",
+        "body": "Routes stop being served on this environment. Stacks and their labels are not changed.",
+        "confirm": "Turn off ingress",
+        "dismiss": "Keep ingress on",
+        "progress": "Turning ingress off…",
+        "done": "Ingress is off.",
+        "failedHint": "Nothing is lost. Turn it off again to remove what is left, or on to carry on."
       }
     }
   }

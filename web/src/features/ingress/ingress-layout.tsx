@@ -15,15 +15,15 @@ export interface IngressTab {
     | "/env/$envId/ingress"
     | "/env/$envId/ingress/certificates"
     | "/env/$envId/ingress/nodes"
-    | "/env/$envId/ingress/domains";
+    | "/env/$envId/ingress/domains"
+    | "/env/$envId/ingress/settings";
   // The i18n key of the tab's label.
   labelKey: string;
   // True when only the tab's own path is the tab, as for Routes, whose path starts every other tab's.
   exact: boolean;
 }
 
-// The tabs of the Ingress page in the UI-SPEC D-02 order. Later plans append Settings here, each a
-// child route of the page.
+// The tabs of the Ingress page in the UI-SPEC D-02 order, each a child route of the page.
 export const INGRESS_TABS = [
   {
     id: "routes",
@@ -47,6 +47,12 @@ export const INGRESS_TABS = [
     id: "domains",
     to: "/env/$envId/ingress/domains",
     labelKey: "ingressPage.tabs.domains",
+    exact: false,
+  },
+  {
+    id: "settings",
+    to: "/env/$envId/ingress/settings",
+    labelKey: "ingressPage.tabs.settings",
     exact: false,
   },
 ] as const satisfies readonly IngressTab[];

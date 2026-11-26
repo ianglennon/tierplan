@@ -55,6 +55,7 @@ export function TestRouter({ children, path = "/" }: { children: ReactNode; path
       createRoute({ getParentRoute: () => root, path: "/env/$envId/update-jobs/$jobId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/ingress/certificates" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/ingress/domains" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/ingress/settings" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/janitor" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/janitor/runs/$runId" }),
       createRoute({ getParentRoute: () => root, path: "/settings/environments/$envId" }),

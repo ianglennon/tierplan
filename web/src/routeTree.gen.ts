@@ -60,6 +60,7 @@ import { Route as AppEnvEnvIdIngressIndexRouteImport } from './routes/_app/env/$
 import { Route as AppEnvEnvIdIngressCertificatesRouteImport } from './routes/_app/env/$envId/ingress.certificates'
 import { Route as AppEnvEnvIdIngressDomainsRouteImport } from './routes/_app/env/$envId/ingress.domains'
 import { Route as AppEnvEnvIdIngressNodesRouteImport } from './routes/_app/env/$envId/ingress.nodes'
+import { Route as AppEnvEnvIdIngressSettingsRouteImport } from './routes/_app/env/$envId/ingress.settings'
 import { Route as AppEnvEnvIdNetworksNetworkIdRouteImport } from './routes/_app/env/$envId/networks_.$networkId'
 import { Route as AppEnvEnvIdNodesNodeIdRouteImport } from './routes/_app/env/$envId/nodes_.$nodeId'
 import { Route as AppEnvEnvIdSecretsSecretIdRouteImport } from './routes/_app/env/$envId/secrets_.$secretId'
@@ -388,6 +389,12 @@ const AppEnvEnvIdIngressNodesRoute = AppEnvEnvIdIngressNodesRouteImport.update({
   path: '/nodes',
   getParentRoute: () => AppEnvEnvIdIngressRoute,
 } as any)
+const AppEnvEnvIdIngressSettingsRoute =
+  AppEnvEnvIdIngressSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppEnvEnvIdIngressRoute,
+  } as any)
 const AppEnvEnvIdNetworksNetworkIdRoute =
   AppEnvEnvIdNetworksNetworkIdRouteImport.update({
     id: '/networks_/$networkId',
@@ -833,6 +840,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
   '/env/$envId/ingress/domains': typeof AppEnvEnvIdIngressDomainsRoute
   '/env/$envId/ingress/nodes': typeof AppEnvEnvIdIngressNodesRoute
+  '/env/$envId/ingress/settings': typeof AppEnvEnvIdIngressSettingsRoute
   '/env/$envId/networks/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   '/env/$envId/nodes/$nodeId': typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
   '/env/$envId/secrets/$secretId': typeof AppEnvEnvIdSecretsSecretIdRouteWithChildren
@@ -943,6 +951,7 @@ export interface FileRoutesByTo {
   '/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
   '/env/$envId/ingress/domains': typeof AppEnvEnvIdIngressDomainsRoute
   '/env/$envId/ingress/nodes': typeof AppEnvEnvIdIngressNodesRoute
+  '/env/$envId/ingress/settings': typeof AppEnvEnvIdIngressSettingsRoute
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
   '/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
@@ -1056,6 +1065,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
   '/_app/env/$envId/ingress/domains': typeof AppEnvEnvIdIngressDomainsRoute
   '/_app/env/$envId/ingress/nodes': typeof AppEnvEnvIdIngressNodesRoute
+  '/_app/env/$envId/ingress/settings': typeof AppEnvEnvIdIngressSettingsRoute
   '/_app/env/$envId/networks_/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   '/_app/env/$envId/nodes_/$nodeId': typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
   '/_app/env/$envId/secrets_/$secretId': typeof AppEnvEnvIdSecretsSecretIdRouteWithChildren
@@ -1176,6 +1186,7 @@ export interface FileRouteTypes {
     | '/env/$envId/ingress/certificates'
     | '/env/$envId/ingress/domains'
     | '/env/$envId/ingress/nodes'
+    | '/env/$envId/ingress/settings'
     | '/env/$envId/networks/$networkId'
     | '/env/$envId/nodes/$nodeId'
     | '/env/$envId/secrets/$secretId'
@@ -1286,6 +1297,7 @@ export interface FileRouteTypes {
     | '/env/$envId/ingress/certificates'
     | '/env/$envId/ingress/domains'
     | '/env/$envId/ingress/nodes'
+    | '/env/$envId/ingress/settings'
     | '/env/$envId/services/new'
     | '/env/$envId/update-jobs/$jobId'
     | '/settings/access/teams/$teamId'
@@ -1398,6 +1410,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/ingress/certificates'
     | '/_app/env/$envId/ingress/domains'
     | '/_app/env/$envId/ingress/nodes'
+    | '/_app/env/$envId/ingress/settings'
     | '/_app/env/$envId/networks_/$networkId'
     | '/_app/env/$envId/nodes_/$nodeId'
     | '/_app/env/$envId/secrets_/$secretId'
@@ -1836,6 +1849,13 @@ declare module '@tanstack/react-router' {
       path: '/nodes'
       fullPath: '/env/$envId/ingress/nodes'
       preLoaderRoute: typeof AppEnvEnvIdIngressNodesRouteImport
+      parentRoute: typeof AppEnvEnvIdIngressRoute
+    }
+    '/_app/env/$envId/ingress/settings': {
+      id: '/_app/env/$envId/ingress/settings'
+      path: '/settings'
+      fullPath: '/env/$envId/ingress/settings'
+      preLoaderRoute: typeof AppEnvEnvIdIngressSettingsRouteImport
       parentRoute: typeof AppEnvEnvIdIngressRoute
     }
     '/_app/env/$envId/networks_/$networkId': {
@@ -2374,6 +2394,7 @@ interface AppEnvEnvIdIngressRouteChildren {
   AppEnvEnvIdIngressCertificatesRoute: typeof AppEnvEnvIdIngressCertificatesRoute
   AppEnvEnvIdIngressDomainsRoute: typeof AppEnvEnvIdIngressDomainsRoute
   AppEnvEnvIdIngressNodesRoute: typeof AppEnvEnvIdIngressNodesRoute
+  AppEnvEnvIdIngressSettingsRoute: typeof AppEnvEnvIdIngressSettingsRoute
   AppEnvEnvIdIngressIndexRoute: typeof AppEnvEnvIdIngressIndexRoute
 }
 
@@ -2381,6 +2402,7 @@ const AppEnvEnvIdIngressRouteChildren: AppEnvEnvIdIngressRouteChildren = {
   AppEnvEnvIdIngressCertificatesRoute: AppEnvEnvIdIngressCertificatesRoute,
   AppEnvEnvIdIngressDomainsRoute: AppEnvEnvIdIngressDomainsRoute,
   AppEnvEnvIdIngressNodesRoute: AppEnvEnvIdIngressNodesRoute,
+  AppEnvEnvIdIngressSettingsRoute: AppEnvEnvIdIngressSettingsRoute,
   AppEnvEnvIdIngressIndexRoute: AppEnvEnvIdIngressIndexRoute,
 }
 
