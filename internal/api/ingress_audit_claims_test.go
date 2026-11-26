@@ -214,3 +214,24 @@ func TestAuditProofClaimReplacedFailure(t *testing.T) {
 	}
 	audittest.AssertNoSecrets(t, rows)
 }
+
+// A stack that claims many hostnames at once stays readable on the audit page: the detail lists ten names and "and N more".
+func TestAuditClaimedListsTenHostnamesAndTheRest(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	seedIngressWorld(t, f, e)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "proof-many")
+	var hosts []string
+	for _, c := range "abcdefghijkl" {
+		hosts = append(hosts, string(c)+".apps.example.com")
+	}
+
+	f.deployGood(t, admin, st.ID, ingressCompose(hosts...))
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressClaimed)
+	row := onlyClaimRow(t, rows, audit.ActionIngressClaimed)
+	want := strings.Join(hosts[:10], ", ") + " and 2 more"
+	wantDetails(t, row, map[string]string{"stack": st.Name, "hostnames": want, "count": "12"})
+	audittest.AssertNoSecrets(t, rows)
+}
