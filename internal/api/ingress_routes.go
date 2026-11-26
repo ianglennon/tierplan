@@ -188,17 +188,31 @@ func listIngressRoutes(ctx context.Context, d StacksDeps, _ *ListIngressRoutesIn
 			}
 		}
 	}
+	// A standalone host is read once for every stack that needs it, in one call to its one node.
+	var hostStacks []string
 	for _, id := range order {
-		g, in := groups[id], inputs[id]
-		if !in.Enabled || in.Stopped || g.stack.Target == stacks.TargetSwarm {
-			continue
+		if in := inputs[id]; in.Enabled && !in.Stopped && groups[id].stack.Target != stacks.TargetSwarm {
+			hostStacks = append(hostStacks, id)
 		}
-		if err := readRunningStandalone(ctx, d, env.ID, g.stack, &in); err != nil {
+	}
+	if len(hostStacks) > 0 {
+		names := make([]string, len(hostStacks))
+		for i, id := range hostStacks {
+			names[i] = groups[id].stack.Name
+		}
+		facts, err := hostServiceFacts(ctx, d, env.ID, names)
+		if err != nil {
 			warnEngineUnreadable(ctx, d.Log, env.ID, err)
-			unreadable[id] = true
-			continue
 		}
-		inputs[id] = in
+		for _, id := range hostStacks {
+			if err != nil {
+				unreadable[id] = true
+				continue
+			}
+			in := inputs[id]
+			in.Running, in.Attached = facts[groups[id].stack.Name].running, facts[groups[id].stack.Name].attached
+			inputs[id] = in
+		}
 	}
 
 	rows := make([]IngressRouteBody, 0, len(snap.Routes))

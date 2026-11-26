@@ -192,33 +192,60 @@ func serviceFactsOf(cluster dockerx.ClusterRead, nets []dockerx.NetworkRow, stac
 // and whether any of them is on the ingress network. The containers are the host's own, found by the Compose project
 // label the stack's name is; it answers counts and one flag per service and nothing else of a container (T-25-10).
 func readRunningStandalone(ctx context.Context, d StacksDeps, envID string, st stackops.Stack, in *stackops.RouteStateInput) error {
-	if d.Aggregator == nil {
-		return errors.New("api: no aggregator to read the host with")
-	}
-	node, err := d.ops().StandaloneNode(ctx, envID)
+	facts, err := hostServiceFacts(ctx, d, envID, []string{st.Name})
 	if err != nil {
 		return err
 	}
-	in.Running, in.Attached = map[string]int{}, map[string]bool{}
-	return d.Aggregator.OnNode(ctx, envID, node, func(c *dockerx.Client) error {
-		rows, err := c.ContainersWithLabel(ctx, stacks.LabelComposeProject, st.Name)
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			service := row.Labels[stacks.LabelComposeService]
-			if service == "" || row.State != "running" {
-				continue
+	in.Running, in.Attached = facts[st.Name].running, facts[st.Name].attached
+	return nil
+}
+
+// serviceFacts is what one host says of one stack's services: how many containers of each run and whether any is on the
+// ingress network, by compose service name.
+type serviceFacts struct {
+	running  map[string]int
+	attached map[string]bool
+}
+
+// hostServiceFacts reads the environment's one host once, in one call to its node, for every stack named: the
+// containers of each Compose project, running or not, as counts and one flag per service (T-25-10). A stack with no
+// container still has an entry, with nothing running.
+func hostServiceFacts(ctx context.Context, d StacksDeps, envID string, stackNames []string) (map[string]serviceFacts, error) {
+	if d.Aggregator == nil {
+		return nil, errors.New("api: no aggregator to read the host with")
+	}
+	node, err := d.ops().StandaloneNode(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]serviceFacts, len(stackNames))
+	err = d.Aggregator.OnNode(ctx, envID, node, func(c *dockerx.Client) error {
+		for _, name := range stackNames {
+			f := serviceFacts{running: map[string]int{}, attached: map[string]bool{}}
+			rows, err := c.ContainersWithLabel(ctx, stacks.LabelComposeProject, name)
+			if err != nil {
+				return err
 			}
-			in.Running[service]++
-			for _, n := range row.Networks {
-				if n.Name == ingress.NetworkName {
-					in.Attached[service] = true
+			for _, row := range rows {
+				service := row.Labels[stacks.LabelComposeService]
+				if service == "" || row.State != "running" {
+					continue
+				}
+				f.running[service]++
+				for _, n := range row.Networks {
+					if n.Name == ingress.NetworkName {
+						f.attached[service] = true
+					}
 				}
 			}
+			out[name] = f
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // readBundleState fills in what the reconciler and the nodes say: the routes the current bundle left out and why, the
