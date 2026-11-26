@@ -7,7 +7,8 @@
     "tabs": {
       "label": "Ingress sections",
       "routes": "Routes",
-      "certificates": "Certificates"
+      "certificates": "Certificates",
+      "nodes": "Nodes"
     },
     "routes": {
       "label": "Routes",
@@ -201,6 +202,65 @@
         "retired": "Retired",
         "retiredReason": "Retired because",
         "lastError": "Last error"
+      }
+    },
+    "nodes": {
+      "label": "Ingress nodes",
+      "loading": "Loading nodes",
+      "error": "Couldn't read the nodes.",
+      "retry": "Retry reading nodes",
+      "empty": {
+        "title": "No nodes enrolled yet",
+        "body": "A node appears here when its ingress proxy connects. If none does, check the proxy service on the Swarm page."
+      },
+      "columns": {
+        "node": "Node",
+        "enrolment": "Enrolment",
+        "supervisor": "Supervisor",
+        "health": "Proxy health",
+        "bundle": "Bundle",
+        "lastSeen": "Last seen",
+        "actions": "Actions"
+      },
+      "enrolled": "Enrolled <time/>",
+      "never": "Never",
+      "enrolment": {
+        "connected": "Connected",
+        "notConnected": "Not connected",
+        "revoked": "Revoked"
+      },
+      "revokedAt": "Revoked <time/>",
+      "tokenMounted": "The join token it held may still be mounted.",
+      "incompatible": "Can't apply this server's settings",
+      "health": {
+        "ok": "Healthy",
+        "unhealthy": "Unhealthy",
+        "none": "Not reported"
+      },
+      "sync": {
+        "current": "Current",
+        "pending": "Updating",
+        "incompatible": "Can't apply",
+        "unknown": "Unknown"
+      },
+      "applied": "Applied {{id}}",
+      "appliedNone": "Applied none",
+      "currentBundle": "Current {{id}}",
+      "refused": "Refused {{id}}: {{reason}}",
+      "revoke": {
+        "button": "Revoke",
+        "title": "Revoke {{name}}?",
+        "body": "This node stops serving routes now and its key is refused. It can't enrol again with the join token it holds, unless you allow that below.",
+        "reason": "Reason",
+        "reasonHelper": "Shown in the node table and the audit log.",
+        "allowReenrol": "Let this host enrol again with the join token it still holds",
+        "keep": "Keep node",
+        "confirm": "Revoke node",
+        "pending": "Revoking…",
+        "doneTitle": "Revoked {{name}}",
+        "doneBody": "Rotate the join token. It is still mounted in that node's container.",
+        "held": "This node may still hold the keys for: <names/>. Request new certificates for them.",
+        "close": "Close details"
       }
     }
   }
