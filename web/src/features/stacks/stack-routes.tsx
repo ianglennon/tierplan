@@ -5,7 +5,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 
-import type { HealthState } from "@/api/environments";
 import { type StackRoute, type StackRouteState, stackRoutesQuery } from "@/api/stack-routes";
 import { type StackDetail, StacksLoadError } from "@/api/stacks";
 import { StatusDot } from "@/components/status-dot";
@@ -20,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SettingsCard } from "@/features/environments/settings-card";
+import { routeHeadline } from "@/features/stacks/route-state";
 import { useNeeds } from "@/hooks/use-needs";
 import { keyExists, useT } from "@/i18n/use-t";
 
@@ -29,25 +29,6 @@ const SHOWN = 10;
 interface StackRoutesProps {
   envId: string;
   stack: Pick<StackDetail, "id" | "stopped" | "target">;
-}
-
-// dotOf maps a route's state to the health colour its dot draws. Status colours are for health only, and every
-// dot carries its label, so no state is colour alone. A stopped stack's routes are grey (it is stopped on purpose);
-// a started stack with no running task is a fault, so red.
-function dotOf(route: StackRoute): HealthState {
-  switch (route.state) {
-    case "serving":
-      return "online";
-    case "pending":
-      return "reconnecting";
-    case "waiting_certificate":
-    case "not_attached":
-      return "degraded";
-    case "backend_not_running":
-      return route.stopped ? "unknown" : "offline";
-    case "ingress_off":
-      return "pending";
-  }
 }
 
 // routeText is the hostname and the path joined, as a person types it; a route for the whole host is the hostname alone.
@@ -147,6 +128,7 @@ export function StackRoutes({ envId, stack }: StackRoutesProps) {
         <TableBody>
           {shown.map((r) => {
             const detail = detailOf(r);
+            const headline = routeHeadline(r.state, r.stopped);
             return (
               <TableRow key={`${r.hostname}${r.path}:${r.service}`}>
                 <TableCell className="align-top font-mono text-xs break-all whitespace-normal">
@@ -156,10 +138,7 @@ export function StackRoutes({ envId, stack }: StackRoutesProps) {
                   {r.service}
                 </TableCell>
                 <TableCell className="align-top whitespace-normal">
-                  <StatusDot
-                    state={dotOf(r)}
-                    label={t(`stackIngress.routes.state.${r.state}.label`)}
-                  />
+                  <StatusDot state={headline.dot} label={t(headline.labelKey)} />
                   {detail ? (
                     <p className="text-xs break-words text-muted-foreground">{detail}</p>
                   ) : null}
