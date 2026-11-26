@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -45,6 +46,8 @@ type routeSourcesFake struct {
 	bundle  ingressbundle.Bundle
 	have    bool
 	nodes   []ingresshub.Node
+	// nodesErr is the error the node read answers, when set.
+	nodesErr error
 }
 
 func (s *routeSourcesFake) Skipped(string) []ingressrender.Skipped { return s.skipped }
@@ -52,7 +55,7 @@ func (s *routeSourcesFake) Current(string) (ingressbundle.Bundle, bool) {
 	return s.bundle, s.have
 }
 func (s *routeSourcesFake) ListNodes(context.Context, string) ([]ingresshub.Node, error) {
-	return s.nodes, nil
+	return s.nodes, s.nodesErr
 }
 
 // routeStates reads the routes of the stack as the caller and returns hostname+path to state.
@@ -184,26 +187,36 @@ func TestStackRoutesRoute(t *testing.T) {
 		set   func()
 		state string
 		why   string
+		// certificate and applied are the "state/reason" the route's two bundle conditions must read, when set.
+		certificate, applied string
 	}{
-		{"no bundle yet is pending", func() { *src = routeSourcesFake{} }, "pending", ""},
+		{"no bundle yet is pending", func() { *src = routeSourcesFake{} }, "pending", "", "", ""},
 		{"a bundle no node applied is pending", func() {
 			*src = routeSourcesFake{bundle: bundle("b1", "c.apps.example.com"), have: true, nodes: []ingresshub.Node{node("")}}
-		}, "pending", ""},
+		}, "pending", "", "", ""},
 		{"every active node on the bundle is serving", func() {
 			*src = routeSourcesFake{bundle: bundle("b1", "c.apps.example.com"), have: true, nodes: []ingresshub.Node{node("b1"), {Status: "revoked", AppliedBundleID: "old"}}}
-		}, "serving", ""},
+		}, "serving", "", "", ""},
 		{"one active node behind is pending", func() {
 			*src = routeSourcesFake{bundle: bundle("b2", "c.apps.example.com"), have: true, nodes: []ingresshub.Node{node("b2"), node("b1")}}
-		}, "pending", ""},
+		}, "pending", "", "", ""},
 		{"no active node is pending", func() {
 			*src = routeSourcesFake{bundle: bundle("b1", "c.apps.example.com"), have: true}
-		}, "pending", ""},
+		}, "pending", "", "", ""},
 		{"a route left out for a certificate is waiting, with the reason", func() {
 			*src = routeSourcesFake{
 				bundle: bundle("b1"), have: true, nodes: []ingresshub.Node{node("b1")},
 				skipped: []ingressrender.Skipped{{Hostname: "c.apps.example.com", PathPrefix: "/", Reason: ingressrender.SkipCertificateNotReady}},
 			}
-		}, "waiting_certificate", "certificate_not_ready"},
+		}, "waiting_certificate", "certificate_not_ready", "", ""},
+		{"nodes that cannot be read leave the applied condition unknown, not no_nodes", func() {
+			*src = routeSourcesFake{bundle: bundle("b1", "c.apps.example.com"), have: true, nodesErr: errors.New("the hub is down")}
+		}, "pending", "", "ready/", "unknown/engine_unreadable"},
+		{"a skipped list with no bundle does not make the route wait, so the state and the conditions agree", func() {
+			*src = routeSourcesFake{
+				skipped: []ingressrender.Skipped{{Hostname: "c.apps.example.com", PathPrefix: "/", Reason: ingressrender.SkipNoCertificate}},
+			}
+		}, "pending", "", "unknown/no_bundle", "unknown/no_bundle"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -214,6 +227,16 @@ func TestStackRoutesRoute(t *testing.T) {
 			}
 			if got.Routes[0].State != tc.state || got.Routes[0].Reason != tc.why {
 				t.Errorf("route = %+v, want %s %q", got.Routes[0], tc.state, tc.why)
+			}
+			for code, want := range map[string]string{"certificate_ready": tc.certificate, "applied": tc.applied} {
+				if want == "" {
+					continue
+				}
+				for _, c := range got.Routes[0].Conditions {
+					if c.Code == code && c.State+"/"+c.Reason != want {
+						t.Errorf("condition %s = %s/%s, want %s", code, c.State, c.Reason, want)
+					}
+				}
 			}
 		})
 	}

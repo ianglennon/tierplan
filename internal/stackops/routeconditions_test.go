@@ -127,6 +127,10 @@ func TestRouteConditionsTable(t *testing.T) {
 			in.ActiveNodes, in.AppliedNodes, in.NodesApplied = 3, 1, false
 		}, stackops.RoutePending, false,
 			[5]cond{ok, ok, ok, ok, {stackops.CondNotReady, stackops.ReasonNodesBehind}}, [2]int{1, 3}, ""},
+		{"nodes unreadable is unknown, never no_nodes", func(in *stackops.RouteStateInput) {
+			in.NodesUnreadable, in.ActiveNodes, in.AppliedNodes, in.NodesApplied = true, 0, 0, false
+		}, stackops.RoutePending, false,
+			[5]cond{ok, ok, ok, ok, {stackops.CondUnknown, stackops.ReasonEngineUnreadable}}, [2]int{0, 0}, ""},
 		{"engine unreadable", func(in *stackops.RouteStateInput) {
 			in.EngineUnreadable, in.Running, in.Attached = true, nil, nil
 		}, stackops.RouteBackendNotRunning, false,

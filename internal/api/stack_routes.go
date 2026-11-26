@@ -250,13 +250,20 @@ func hostServiceFacts(ctx context.Context, d StacksDeps, envID string, stackName
 
 // readBundleState fills in what the reconciler and the nodes say: the routes the current bundle left out and why, the
 // ones it holds, how many active nodes there are and how many applied it, and whether the environment has a bundle at
-// all. Only the certificate reasons count as a wait. With no sources the routes are pending: nothing says a node has
-// them.
+// all, and whether the nodes could be read. Only the certificate reasons count as a wait. With no sources the routes are
+// pending: nothing says a node has them.
 func (d StacksDeps) readBundleState(ctx context.Context, envID string, in *stackops.RouteStateInput) {
 	src := d.IngressRoutes
 	if src == nil {
 		return
 	}
+	bundle, have := src.Current(envID)
+	if !have || bundle.ID == "" {
+		return
+	}
+	in.BundleKnown = true
+	// The skipped list is the routes the current bundle leaves out, so it is read only once there is a bundle: without one the
+	// certificate condition is unknown, and a waiting_certificate state beside it would be a contradiction.
 	in.Skipped = map[stackops.RouteKey]string{}
 	for _, s := range src.Skipped(envID) {
 		switch s.Reason {
@@ -264,11 +271,6 @@ func (d StacksDeps) readBundleState(ctx context.Context, envID string, in *stack
 			in.Skipped[stackops.RouteKey{Hostname: s.Hostname, Path: pathOrRoot(s.PathPrefix)}] = string(s.Reason)
 		}
 	}
-	bundle, have := src.Current(envID)
-	if !have || bundle.ID == "" {
-		return
-	}
-	in.BundleKnown = true
 	in.InBundle = map[stackops.RouteKey]bool{}
 	for _, r := range bundle.Manifest.Routes {
 		in.InBundle[stackops.RouteKey{Hostname: r.Hostname, Path: pathOrRoot(r.PathPrefix)}] = true
@@ -276,6 +278,7 @@ func (d StacksDeps) readBundleState(ctx context.Context, envID string, in *stack
 	nodes, err := src.ListNodes(ctx, envID)
 	if err != nil {
 		d.Log.WarnContext(ctx, "the ingress nodes could not be read for a stack's route states", "environment", envID, "error", err)
+		in.NodesUnreadable = true
 		return
 	}
 	in.NodesApplied = true

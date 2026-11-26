@@ -55,6 +55,9 @@ type RouteStateInput struct {
 	// ActiveNodes is how many nodes of the environment are active, and AppliedNodes how many of those applied the current
 	// bundle. They feed the applied condition's N of M; NodesApplied stays the legacy single answer.
 	ActiveNodes, AppliedNodes int
+	// NodesUnreadable is true when the environment's nodes could not be read, so how many are active and how many applied the
+	// bundle is not known: the applied condition is unknown, never "no node is active".
+	NodesUnreadable bool
 	// BundleKnown is true when the reconciler has published a bundle for the environment. Without one the certificate and
 	// applied conditions are unknown.
 	BundleKnown bool

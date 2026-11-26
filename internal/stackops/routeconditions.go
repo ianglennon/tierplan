@@ -140,6 +140,8 @@ func appliedCondition(in RouteStateInput, key RouteKey) Condition {
 		return unknown(CondApplied, ReasonNoBundle)
 	case !in.InBundle[key]:
 		return notReady(CondApplied, ReasonNotInBundle)
+	case in.NodesUnreadable:
+		return unknown(CondApplied, ReasonEngineUnreadable)
 	case in.ActiveNodes <= 0:
 		return notReady(CondApplied, ReasonNoNodes)
 	case in.AppliedNodes < in.ActiveNodes:
