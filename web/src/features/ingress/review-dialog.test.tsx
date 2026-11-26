@@ -31,6 +31,8 @@ let requests: string[];
 let previewAnswer: () => Promise<Response> | Response;
 let startAnswer: () => Response;
 let job: Json;
+// jobAnswer, when set, answers a read of the job instead of `job`; n counts the reads so far.
+let jobAnswer: ((n: number) => Response) | undefined;
 let me: ReturnType<typeof makeMe>;
 let client: QueryClient;
 
@@ -89,6 +91,7 @@ beforeEach(() => {
   previewAnswer = () => Response.json(enablePreview());
   startAnswer = () => Response.json({ jobId: "j1" }, { status: 202 });
   job = jobBody();
+  jobAnswer = undefined;
   client = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
@@ -107,7 +110,7 @@ beforeEach(() => {
       }
       if (path === `${BASE}/jobs/j1`) {
         jobReads += 1;
-        return Response.json(job);
+        return jobAnswer ? jobAnswer(jobReads) : Response.json(job);
       }
       return Response.json({}, { status: 404 });
     }),
@@ -273,6 +276,60 @@ describe("turning ingress on", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     await advance(50);
     expect(screen.getByRole("dialog", { name: "Turning ingress on…" })).toBeTruthy();
+  });
+
+  it("keeps the dialog held when one read of the job fails, and ends it only when the job has", async () => {
+    jobAnswer = (n) =>
+      n === 1
+        ? Response.json({ type: "about:blank", title: "x", status: 502 }, { status: 502 })
+        : Response.json(
+            jobBody({
+              state: n < 4 ? "running" : "done",
+              finishedAt: n < 4 ? "" : "2026-11-26T10:00:05Z",
+            }),
+          );
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    await waitUnderFakeClock(() =>
+      expect(confirmOf(dialog, "Turn on ingress").disabled).toBe(false),
+    );
+    fireEvent.click(confirmOf(dialog, "Turn on ingress"));
+    await waitUnderFakeClock(() => expect(jobReads).toBe(1));
+    await advance(100);
+
+    // The read missed: the job is still running, so nothing says it ended and the dialog cannot be closed.
+    const progress = screen.getByRole("dialog", { name: "Turning ingress on…" });
+    expect(
+      (within(progress).getByRole("button", { name: /close/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(within(progress).queryByText(/can't read this job any more/)).toBeNull();
+    fireEvent.keyDown(progress, { key: "Escape" });
+    await advance(50);
+    expect(screen.getByRole("dialog", { name: "Turning ingress on…" })).toBeTruthy();
+
+    await advance(2000);
+    await waitUnderFakeClock(() => expect(jobReads).toBeGreaterThanOrEqual(2));
+    await advance(6000);
+    await waitUnderFakeClock(() =>
+      expect((screen.getByRole("button", { name: /close/i }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+  });
+
+  it("ends the wait for a job the server will not show any more", async () => {
+    jobAnswer = () =>
+      Response.json({ type: "about:blank", title: "x", status: 404 }, { status: 404 });
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    await waitUnderFakeClock(() =>
+      expect(confirmOf(dialog, "Turn on ingress").disabled).toBe(false),
+    );
+    fireEvent.click(confirmOf(dialog, "Turn on ingress"));
+    await waitUnderFakeClock(() =>
+      expect(screen.getByText(/can't read this job any more/)).toBeTruthy(),
+    );
+    expect((screen.getByRole("button", { name: /close/i }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it("draws an error finding as 'This can't go ahead' and keeps the confirm off", async () => {

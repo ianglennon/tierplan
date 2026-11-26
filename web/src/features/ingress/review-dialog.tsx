@@ -5,7 +5,7 @@ import { type UseMutationResult, useQuery, useQueryClient } from "@tanstack/reac
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { HealthState } from "@/api/environments";
-import { IngressActionError, ingressKey } from "@/api/ingress";
+import { IngressActionError, IngressLoadError, ingressKey } from "@/api/ingress";
 import {
   type IngressJob,
   type IngressStarted,
@@ -181,7 +181,11 @@ function ReviewBody({
   }, [run, hasForm]);
 
   const job = useQuery({ ...ingressJobQuery(envId, jobId ?? ""), enabled: jobId !== null });
-  const ended = jobId !== null && (jobEnded(job.data) || (job.isError && !job.isFetching));
+  // Only a job the server will not show any more ends the wait for it (403, 404, which stop the polling too). Any other failed
+  // read is one that missed: the job runs on and the next poll tries again, so the dialog stays held and is not closable.
+  const unreadable =
+    job.error instanceof IngressLoadError && (job.error.status === 403 || job.error.status === 404);
+  const ended = jobId !== null && (jobEnded(job.data) || unreadable);
   const holding = jobId !== null && !ended;
   useEffect(() => {
     onRunning(holding || start.isPending);
@@ -209,7 +213,7 @@ function ReviewBody({
       <Progress
         kind={kind}
         job={job.data}
-        unreadable={job.isError}
+        unreadable={unreadable}
         ended={ended}
         onClose={onClose}
       />
