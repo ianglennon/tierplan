@@ -56,6 +56,9 @@ type IngressNodesDeps struct {
 	// CurrentBundle is the ID of the bundle an environment's nodes should hold now, and false when none has been
 	// built. Nil means none is known: the sync of every node is unknown.
 	CurrentBundle func(envID string) (string, bool)
+	// Checker decides whether the caller of a read also holds ingress.manage on the environment, which fills the Admin-only
+	// fields (A-04). Nil counts as not holding it.
+	Checker *rbac.Checker
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -78,7 +81,7 @@ type IngressJoinTokenStatusBody struct {
 	Exists     bool   `json:"exists" doc:"False while the environment has never had an ingress join token; the other fields are then empty"`
 	Generation int    `json:"generation" doc:"Which token this is for the environment, from 1"`
 	CreatedAt  string `json:"createdAt,omitempty" format:"date-time" doc:"When the token was made"`
-	CreatedBy  string `json:"createdBy" doc:"Who made it, as recorded in the audit log"`
+	CreatedBy  string `json:"createdBy" doc:"Who made it, as recorded in the audit log. Filled only for a caller who holds ingress.manage on the environment; empty otherwise"`
 	Disabled   bool   `json:"disabled" doc:"True while the token enrols nobody, until the next rotation"`
 }
 
@@ -104,10 +107,10 @@ type IngressNodeBody struct {
 	LastSeenAt       string   `json:"lastSeenAt,omitempty" format:"date-time" doc:"When the node was last heard from, to the minute. Absent if it never has been"`
 	CreatedAt        string   `json:"createdAt,omitempty" format:"date-time" doc:"When the node enrolled"`
 	RevokedAt        string   `json:"revokedAt,omitempty" format:"date-time" doc:"When the node was revoked"`
-	RevokedBy        string   `json:"revokedBy" doc:"Who revoked it, as recorded in the audit log"`
-	RevokeReason     string   `json:"revokeReason" doc:"The reason given when it was revoked"`
+	RevokedBy        string   `json:"revokedBy" doc:"Who revoked it, as recorded in the audit log. Filled only for a caller who holds ingress.manage on the environment; empty otherwise"`
+	RevokeReason     string   `json:"revokeReason" doc:"The reason given when it was revoked. Filled only for a caller who holds ingress.manage on the environment; empty otherwise"`
 	ReenrolBlocked   bool     `json:"reenrolBlocked" doc:"True when the revoke also blocked the host from enrolling again with the join token still mounted in its container"`
-	HeldHostnames    []string `json:"heldHostnames" doc:"Every hostname whose private key this node was ever sent, sorted"`
+	HeldHostnames    []string `json:"heldHostnames" doc:"Every hostname whose private key this node was ever sent, sorted. Filled only for a caller who holds ingress.manage on the environment; empty otherwise"`
 	Incompatible     bool     `json:"incompatible" doc:"True when the node's supervisor shares no bundle schema with this server, so it keeps the last bundle it had"`
 	Connected        bool     `json:"connected" doc:"Whether the node has a live connection now"`
 	Sync             string   `json:"sync" enum:"current,pending,incompatible,unknown" doc:"current: the node applied the bundle it should hold. pending: it holds an older one, or none, and a newer is waiting (not a failure). incompatible: it cannot apply this server's bundles. unknown: the node is revoked or no bundle has been built"`
@@ -170,6 +173,15 @@ func ingressNodeSync(n ingresshub.Node, currentID string, haveCurrent bool) stri
 		return ingressSyncCurrent
 	}
 	return ingressSyncPending
+}
+
+// canManage reports whether the caller holds ingress.manage on the environment (A-04). A nil Checker or a failed check is no.
+func (d IngressNodesDeps) canManage(ctx context.Context, p *rbac.Principal, envID string) bool {
+	if d.Checker == nil || p == nil {
+		return false
+	}
+	dec := d.Checker.Check(ctx, p, rbac.Requirement{Perm: rbac.PermIngressManage, Scope: rbac.ScopeEnvironment}, envID)
+	return dec.Err == nil && dec.Allowed
 }
 
 // RegisterIngressNodes registers the ingress join token routes, the node list and the revoke of one node. Making, disabling
@@ -266,7 +278,8 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			"Answered with Cache-Control no-store. 404 environment_not_found. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *EnvironmentPathInput) (*IngressJoinTokenStatusOutput, error) {
-		if httpx.PrincipalFrom(ctx) == nil {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
 		if d.Service == nil {
@@ -276,8 +289,12 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		if err != nil {
 			return nil, fail(ctx, "ingress join token status", err)
 		}
+		createdBy := ""
+		if d.canManage(ctx, p, in.EnvID) {
+			createdBy = st.CreatedBy
+		}
 		return &IngressJoinTokenStatusOutput{CacheControl: "no-store", Body: IngressJoinTokenStatusBody{
-			Exists: st.Exists, Generation: st.Generation, CreatedAt: rfc3339(st.CreatedAt), CreatedBy: st.CreatedBy, Disabled: st.Disabled,
+			Exists: st.Exists, Generation: st.Generation, CreatedAt: rfc3339(st.CreatedAt), CreatedBy: createdBy, Disabled: st.Disabled,
 		}}, nil
 	})
 
@@ -319,7 +336,8 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			"Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *EnvironmentPathInput) (*IngressNodeListOutput, error) {
-		if httpx.PrincipalFrom(ctx) == nil {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
 		if d.Service == nil {
@@ -344,6 +362,7 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 		if haveBndl {
 			currentBundle = currentID
 		}
+		manager := d.canManage(ctx, p, in.EnvID)
 		items := make([]IngressNodeBody, 0, len(nodes))
 		for _, n := range nodes {
 			b := IngressNodeBody{
@@ -357,6 +376,9 @@ func RegisterIngressNodes(r *httpx.Router, d IngressNodesDeps) {
 			}
 			if b.Schemas == nil {
 				b.Schemas = []int{}
+			}
+			if !manager {
+				b.HeldHostnames, b.RevokeReason, b.RevokedBy = nil, "", ""
 			}
 			if b.HeldHostnames == nil {
 				b.HeldHostnames = []string{}

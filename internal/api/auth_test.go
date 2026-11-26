@@ -730,7 +730,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Manager: f.ingressCerts, Store: f.ingressCertStore, Domains: f.ingressStore, Audit: f.aud, Checker: checker, Log: log, Now: certNow,
 	})
 	f.ingressNodes = ingresshub.NewService(f.st, f.aud, f.clk.now)
-	nodesDeps := api.IngressNodesDeps{Service: f.ingressNodes, Live: f.ingressLive, CurrentBundle: f.ingressCurrentBundle, Log: log}
+	nodesDeps := api.IngressNodesDeps{Service: f.ingressNodes, Live: f.ingressLive, CurrentBundle: f.ingressCurrentBundle, Checker: checker, Log: log}
 	if f.ingressDeploy != nil {
 		nodesDeps.Issuer = f.ingressDeploy
 	}
