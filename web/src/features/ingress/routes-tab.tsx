@@ -9,6 +9,7 @@ import { Fragment, useState } from "react";
 import type { HealthState } from "@/api/environments";
 
 import { type IngressRoute, ingressRoutesQuery, type RouteCondition } from "@/api/ingress";
+import { ingressCertificatesQuery } from "@/api/ingress-certs";
 import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -167,6 +168,10 @@ type View = "all" | "attention";
 export function RoutesTab({ envId }: { envId: string }) {
   const t = useT();
   const query = useQuery(ingressRoutesQuery(envId));
+  // The hostnames that have a certificate row, to know which routes can link to theirs (D-11). A read that failed or
+  // has not come back is no certificate known, so the cell says nothing rather than link to an empty filter.
+  const certs = useQuery(ingressCertificatesQuery(envId));
+  const certified = new Set((certs.data?.items ?? []).map((c) => c.hostname.toLowerCase()));
   // The routes whose conditions are open, by hostname, path and service. It is local to the tab, so it survives a
   // refetch, and nothing opens by itself.
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
@@ -304,12 +309,13 @@ export function RoutesTab({ envId }: { envId: string }) {
                 <TableHead scope="col">{t("ingressPage.routes.columns.stack")}</TableHead>
                 <TableHead scope="col">{t("ingressPage.routes.columns.status")}</TableHead>
                 <TableHead scope="col">{t("ingressPage.routes.columns.conditions")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.routes.columns.certificate")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={4} className="whitespace-normal">
+                  <TableCell colSpan={5} className="whitespace-normal">
                     {filter.trim() === "" ? (
                       <p className="text-sm text-muted-foreground">
                         {t("ingressPage.routes.noAttention")}
@@ -410,11 +416,26 @@ export function RoutesTab({ envId }: { envId: string }) {
                       <TableCell className="align-top text-sm whitespace-normal">
                         {t("ingressPage.routes.ready", { ready: readyCount(r) })}
                       </TableCell>
+                      <TableCell className="align-top text-sm whitespace-normal">
+                        {certified.has(r.hostname.toLowerCase()) ? (
+                          <Link
+                            to="/env/$envId/ingress/certificates"
+                            params={{ envId }}
+                            search={{ host: r.hostname }}
+                            aria-label={`${t("ingressPage.routes.viewCertificate")}: ${host}`}
+                            className="rounded-sm text-accent-ink hover:underline max-md:inline-block max-md:py-3"
+                          >
+                            {t("ingressPage.routes.viewCertificate")}
+                          </Link>
+                        ) : (
+                          t("ingressPage.routes.none")
+                        )}
+                      </TableCell>
                     </TableRow>
                     {expanded ? (
                       <TableRow className="hover:bg-transparent">
                         <TableCell
-                          colSpan={4}
+                          colSpan={5}
                           id={panel}
                           className="bg-muted/50 p-4 whitespace-normal"
                         >
@@ -509,6 +530,9 @@ function HeldRow({ row, envId }: { row: IngressRoute; envId: string }) {
         <p className="text-xs break-words text-muted-foreground">
           {t(`ingressPage.routes.${word}.detail`)}
         </p>
+      </TableCell>
+      <TableCell className="align-top text-sm whitespace-normal">
+        {t("ingressPage.routes.none")}
       </TableCell>
       <TableCell className="align-top text-sm whitespace-normal">
         {t("ingressPage.routes.none")}

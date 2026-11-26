@@ -18,7 +18,8 @@
         "route": "Route",
         "stack": "Stack",
         "status": "Status",
-        "conditions": "Conditions"
+        "conditions": "Conditions",
+        "certificate": "Certificate"
       },
       "target": "{{scheme}} to port {{port}}",
       "targetStrip": "{{scheme}} to port {{port}}, path prefix removed",
@@ -54,7 +55,8 @@
       "noMatch": "No route matches “{{filter}}”.",
       "clearFilter": "Clear filter",
       "noAttention": "No route needs attention.",
-      "proxyLogs": "View proxy logs"
+      "proxyLogs": "View proxy logs",
+      "viewCertificate": "View certificate"
     },
     "conditions": {
       "state": {

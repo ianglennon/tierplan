@@ -665,7 +665,7 @@ describe("the Ingress page's Routes tab", () => {
       mount();
       const t = await table();
       const link = await within(rowOf(t, "app.example.com")).findByRole("link", {
-        name: "View certificate for app.example.com",
+        name: "View certificate: app.example.com",
       });
       expect(link.textContent).toBe("View certificate");
       expect(link.getAttribute("href")).toBe(
@@ -682,7 +682,7 @@ describe("the Ingress page's Routes tab", () => {
       mount();
       const t = await table();
       expect(
-        await within(t).findByRole("link", { name: "View certificate for App.Example.com/api" }),
+        await within(t).findByRole("link", { name: "View certificate: App.Example.com/api" }),
       ).toBeTruthy();
     });
 
