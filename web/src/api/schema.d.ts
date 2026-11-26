@@ -1601,7 +1601,7 @@ export interface paths {
         };
         /**
          * List the domains of an environment
-         * @description The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS token is saved and when it last changed. The token is never returned. Needs ingress.read on the environment (Viewer).
+         * @description The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS token is saved and when it last changed. The token is never returned. Needs ingress.read on the environment (Viewer); the ID of the user who registered a domain is filled only for ingress.manage holders.
          */
         get: operations["listIngressDomains"];
         put?: never;
@@ -10748,7 +10748,7 @@ export interface components {
              * @description When the domain was registered
              */
             createdAt: string;
-            /** @description The ID of the user who registered the domain */
+            /** @description The ID of the user who registered the domain. Blank unless the caller holds ingress.manage on the environment */
             createdBy: string;
             /** @description The DNS provider that validates the domain, such as cloudflare */
             dnsProvider: string;

@@ -10557,7 +10557,7 @@
             "type": "string"
           },
           "createdBy": {
-            "description": "The ID of the user who registered the domain",
+            "description": "The ID of the user who registered the domain. Blank unless the caller holds ingress.manage on the environment",
             "type": "string"
           },
           "dnsProvider": {
@@ -35110,7 +35110,7 @@
     },
     "/api/env/{envId}/ingress/domains": {
       "get": {
-        "description": "The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS token is saved and when it last changed. The token is never returned. Needs ingress.read on the environment (Viewer).",
+        "description": "The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS token is saved and when it last changed. The token is never returned. Needs ingress.read on the environment (Viewer); the ID of the user who registered a domain is filled only for ingress.manage holders.",
         "operationId": "listIngressDomains",
         "parameters": [
           {

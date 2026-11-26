@@ -369,6 +369,26 @@ func TestIngressDomainListShowsReservedNamesAndTokenSetNeverTheToken(t *testing.
 	}
 }
 
+// TestIngressDomainsAdminSeesCreatedBy: the Admin who manages ingress still reads who registered each domain (A-04).
+func TestIngressDomainsAdminSeesCreatedBy(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	rec := f.credCall(t, f.adminA, http.MethodGet, ingressPath(f.envA), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	var list struct {
+		Items []ingressDomainResp `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Items[0].CreatedBy != "id-ing-admin-a" {
+		t.Errorf("the Admin sees %+v, want createdBy id-ing-admin-a", list.Items)
+	}
+}
+
 // TestIngressDomainsReadableByViewers pins D-14: the list is an ingress.read route, so a Viewer and an Operator of the environment
 // read the domains and reserved names (the Expose panel suggests them to the people who edit stacks), and the token is never in the body.
 func TestIngressDomainsReadableByViewers(t *testing.T) {
@@ -397,6 +417,10 @@ func TestIngressDomainsReadableByViewers(t *testing.T) {
 		}
 		if strings.Contains(rec.Body.String(), ingressToken) {
 			t.Errorf("%s: the list holds the DNS token: %s", name, rec.Body)
+		}
+		// A-04: who registered the domain is for the people who manage ingress, so a reader's rows carry it blank.
+		if list.Items[0].CreatedBy != "" || strings.Contains(rec.Body.String(), "id-ing-admin-a") {
+			t.Errorf("%s sees createdBy %q, want it blank: %s", name, list.Items[0].CreatedBy, rec.Body)
 		}
 
 		for _, c := range []struct{ method, path, body string }{
