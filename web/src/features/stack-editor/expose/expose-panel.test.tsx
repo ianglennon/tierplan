@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExposePanel } from "@/features/stack-editor/expose/expose-panel";
 import { makeMe } from "@/test-me";
@@ -474,5 +474,151 @@ describe("a compose file that is not YAML", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a route" })).toBeNull();
     expect(alert.className).not.toContain("text-destructive");
+  });
+});
+
+// Adding, naming and removing routes; the empty states and the footer (plan 27-26, UIX-01 edge).
+const NO_ROUTE = "services:\n  web:\n    image: nginx\n";
+const TWO_ROUTES =
+  'services:\n  web:\n    image: nginx\n    deploy:\n      labels:\n        tierplan.ingress.host: shop.apps.example.com\n        tierplan.ingress.port: "8080"\n        tierplan.ingress.admin.host: admin.apps.example.com\n        tierplan.ingress.admin.port: "9000"\n';
+
+const nameBox = () => screen.getByRole("textbox", { name: "Route name" }) as HTMLInputElement;
+
+describe("a service with no route", () => {
+  it("says it is not exposed and offers Add a route", () => {
+    mount({ text: NO_ROUTE });
+    expect(screen.getByText("web isn't exposed.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a route" })).toBeTruthy();
+    expect(screen.queryByRole("group", { name: /^Route / })).toBeNull();
+  });
+
+  it("adds the short form, and writes only once it has a hostname and a port", () => {
+    const onEdit = mount({ text: NO_ROUTE });
+    fireEvent.click(screen.getByRole("button", { name: "Add a route" }));
+    expect(screen.queryByRole("textbox", { name: "Route name" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Route default" })).toBeTruthy();
+    fireEvent.change(host(), { target: { value: "shop.apps.example.com" } });
+    fireEvent.blur(host());
+    expect(onEdit).not.toHaveBeenCalled();
+    fireEvent.change(port(), { target: { value: "8080" } });
+    fireEvent.blur(port());
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    const next = onEdit.mock.calls[0]?.[0] ?? "";
+    expect(next).toContain("deploy:\n      labels:");
+    expect(next).toContain("tierplan.ingress.host: shop.apps.example.com");
+    expect(next).toContain('tierplan.ingress.port: "8080"');
+  });
+
+  it("never writes an empty or invalid port from a new route", () => {
+    const onEdit = mount({ text: NO_ROUTE });
+    fireEvent.click(screen.getByRole("button", { name: "Add a route" }));
+    fireEvent.change(host(), { target: { value: "shop.apps.example.com" } });
+    fireEvent.blur(host());
+    fireEvent.change(port(), { target: { value: "70000" } });
+    fireEvent.blur(port());
+    expect(screen.getByText("Use a port from 1 to 65535.")).toBeTruthy();
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it("can be cancelled without writing", () => {
+    const onEdit = mount({ text: NO_ROUTE });
+    fireEvent.click(screen.getByRole("button", { name: "Add a route" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByText("web isn't exposed.")).toBeTruthy();
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+});
+
+describe("a further route asks for a name", () => {
+  it("refuses default, a capital and a taken name with its sentence, and writes nothing", () => {
+    const onEdit = mount({ text: FILE });
+    fireEvent.click(screen.getByRole("button", { name: "Add a route" }));
+    expect(screen.getByText("A short name such as api or admin.")).toBeTruthy();
+    const invalid = "Use lowercase letters, digits and hyphens, up to 32, and not “default”.";
+    for (const bad of ["default", "API", "", "-x", "a".repeat(33)]) {
+      fireEvent.change(nameBox(), { target: { value: bad } });
+      fireEvent.click(screen.getByRole("button", { name: "Add route" }));
+      expect(screen.getByText(invalid)).toBeTruthy();
+    }
+    fireEvent.change(nameBox(), { target: { value: "default" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add route" }));
+    expect(screen.getByText(invalid)).toBeTruthy();
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a name the service already has", () => {
+    const onEdit = mount({ text: TWO_ROUTES });
+    fireEvent.click(screen.getByRole("button", { name: "Add a route" }));
+    fireEvent.change(nameBox(), { target: { value: "admin" } });
+    fireEvent.keyDown(nameBox(), { key: "Enter" });
+    expect(screen.getByText("This service already has a route called admin.")).toBeTruthy();
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it("adds a named route as a block of its own once it has a hostname and a port", () => {
+    const onEdit = mount({ text: FILE });
+    fireEvent.click(screen.getByRole("button", { name: "Add a route" }));
+    fireEvent.change(nameBox(), { target: { value: "admin" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add route" }));
+    expect(screen.queryByRole("textbox", { name: "Route name" })).toBeNull();
+    const block = screen.getByRole("group", { name: "Route admin" });
+    const hostBox = within(block).getByRole("textbox", { name: "Hostname" });
+    fireEvent.change(hostBox, { target: { value: "admin.apps.example.com" } });
+    fireEvent.blur(hostBox);
+    const portBox = within(block).getByRole("spinbutton", { name: "Port" });
+    fireEvent.change(portBox, { target: { value: "9000" } });
+    fireEvent.blur(portBox);
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    const next = onEdit.mock.calls[0]?.[0] ?? "";
+    expect(next).toContain("tierplan.ingress.admin.host: admin.apps.example.com");
+    expect(next).toContain('tierplan.ingress.admin.port: "9000"');
+    expect(next).toContain("tierplan.ingress.host: api.apps.example.com");
+  });
+});
+
+describe("removing a route", () => {
+  it("shows one block per route, each with its own Remove route", () => {
+    mount({ text: TWO_ROUTES });
+    expect(screen.getByRole("group", { name: "Route default" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Route admin" })).toBeTruthy();
+    const remove = screen.getByRole("button", { name: "Remove route admin" });
+    expect(remove.textContent).toBe("Remove route");
+  });
+
+  it("removes the keys of one route and keeps the others", () => {
+    const onEdit = mount({ text: TWO_ROUTES });
+    fireEvent.click(screen.getByRole("button", { name: "Remove route admin" }));
+    const next = onEdit.mock.calls[0]?.[0] ?? "";
+    expect(next).not.toContain("admin");
+    expect(next).toContain("tierplan.ingress.host: shop.apps.example.com");
+  });
+
+  it("leaves no ingress key and no empty labels block when the last route goes", () => {
+    const onEdit = mount({ text: FILE });
+    fireEvent.click(screen.getByRole("button", { name: "Remove route default" }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    const next = onEdit.mock.calls[0]?.[0] ?? "";
+    expect(next).not.toContain("tierplan.ingress");
+    expect(next).not.toContain("labels");
+    expect(next).not.toContain("deploy");
+    expect(next).toContain("image: nginx:1.27-alpine");
+  });
+});
+
+describe("a file with no services and the footer", () => {
+  it("says the file has no services and offers no service or route control", () => {
+    mount({ text: "name: demo\n" });
+    expect(screen.getByText("This file has no services.")).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add a route" })).toBeNull();
+  });
+
+  it("ends with the footer sentence", () => {
+    mount();
+    expect(
+      screen.getByText(
+        "Changes stay in the editor until you save. Hostnames and ports are checked as you type; problems show below the editor. Labels set in other compose files of this stack aren't shown here.",
+      ),
+    ).toBeTruthy();
   });
 });
