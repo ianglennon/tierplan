@@ -61,7 +61,7 @@ var ingressPermRows = []ingressPermRow{
 	{op: "enableIngress", method: http.MethodPost, path: "/api/env/{env}/ingress/enable", perm: permIngressManage, body: `{}`},
 	{op: "previewIngressEnable", method: http.MethodPost, path: "/api/env/{env}/ingress/enable/preview", perm: permIngressManage, body: `{}`},
 	{op: "getIngressJob", method: http.MethodGet, path: "/api/env/{env}/ingress/jobs/job-x", perm: permIngressManage},
-	{op: ingressStreamRowOp, method: http.MethodGet, path: "/api/env/{env}/ingress/jobs/job-x/stream", perm: permIngressManage},
+	{op: "ingressJobStream", method: http.MethodGet, path: "/api/env/{env}/ingress/jobs/job-x/stream", perm: permIngressManage},
 	{op: "disableIngressJoinToken", method: http.MethodDelete, path: "/api/env/{env}/ingress/join-token", perm: permIngressManage},
 	{op: "getIngressJoinToken", method: http.MethodGet, path: "/api/env/{env}/ingress/join-token", perm: permIngressRead},
 	{op: "issueIngressJoinToken", method: http.MethodPost, path: "/api/env/{env}/ingress/join-token", perm: permIngressManage, body: `{}`},
