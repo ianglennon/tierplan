@@ -1,0 +1,15 @@
+[
+  {
+    "name": "swarm-map-set-host",
+    "target": "swarm",
+    "input": "# the shop\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        traefik.x: \"1\"\n",
+    "ops": [
+      { "kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com" },
+      { "kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080" }
+    ],
+    "output": "# the shop\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        traefik.x: \"1\"\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      { "service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false }
+    ]
+  }
+]
