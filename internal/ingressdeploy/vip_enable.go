@@ -154,6 +154,8 @@ func (s *Service) runVIPEnable(ctx context.Context, r *jobs.Reporter, release fu
 	}
 	for i, st := range steps {
 		if ctx.Err() != nil {
+			// The row is written before the items that end the job, so a reader that sees the job over finds it (A-01).
+			s.auditJobFailed(ctx, actor, audit.ActionIngressVIPEnabled, envID, st.item, jobs.CodeCancelled)
 			run.stopVIP(st.item, jobs.ItemCancelled, jobs.CodeCancelled)
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 			return
@@ -167,6 +169,7 @@ func (s *Service) runVIPEnable(ctx context.Context, r *jobs.Reporter, release fu
 			}
 			s.log().Warn("a virtual IP enable step failed", "environment", envID, "step", st.item, "code", code, "error", err)
 			r.Output("The virtual IP is still off. Switch it on again to start over from what was made.")
+			s.auditJobFailed(ctx, actor, audit.ActionIngressVIPEnabled, envID, st.item, code)
 			run.stopVIP(st.item, jobs.ItemFailed, code, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
 			return

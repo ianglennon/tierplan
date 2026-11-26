@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
@@ -82,7 +83,7 @@ func TestEnableVIPOnSwarm(t *testing.T) {
 	if _, err := v.istore.GetVIP(ctx, v.envID); !errors.Is(err, ingressstore.ErrVIPNotFound) {
 		t.Errorf("GetVIP after the preview = %v, want ErrVIPNotFound", err)
 	}
-	if v.auditCount("ingress.vip_enabled") != 0 {
+	if v.auditCountResult("ingress.vip_enabled", audit.ResultSuccess) != 0 {
 		t.Error("the preview wrote an audit row")
 	}
 
@@ -138,7 +139,7 @@ func TestEnableVIPOnSwarm(t *testing.T) {
 	if raw, err := vl.Open(vault.ContextIngressVIPKey+v.envID, row.KeySealed); err != nil || len(raw) != 32 {
 		t.Errorf("the sealed key opens to %d bytes, %v; want 32 under ContextIngressVIPKey", len(raw), err)
 	}
-	if got := v.auditCount("ingress.vip_enabled"); got != 1 {
+	if got := v.auditCountResult("ingress.vip_enabled", audit.ResultSuccess); got != 1 {
 		t.Fatalf("ingress.vip_enabled audit rows = %d, want 1", got)
 	}
 	var details string
@@ -345,8 +346,8 @@ func TestEnableVIPFailedStep(t *testing.T) {
 	if n := len(v.fake.ServiceCreates()); n != 0 {
 		t.Errorf("a failed secret step went on to create %d services", n)
 	}
-	if v.auditCount("ingress.vip_enabled") != 0 {
-		t.Error("a failed enable wrote an audit row")
+	if v.auditCountResult("ingress.vip_enabled", audit.ResultSuccess) != 0 {
+		t.Error("a failed enable wrote a success audit row")
 	}
 	if _, held := v.locks.Held(v.envID); held {
 		t.Error("the lock is held after the failed job")

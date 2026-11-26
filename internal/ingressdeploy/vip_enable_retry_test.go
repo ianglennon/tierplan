@@ -10,6 +10,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
@@ -77,7 +78,7 @@ func TestEnableVIPStartsOverAfterAFailedSwitch(t *testing.T) {
 	if _, err := v.istore.GetVIP(testsupport.Context(t), v.envID); err != nil {
 		t.Errorf("GetVIP after the second enable: %v", err)
 	}
-	if n := v.auditCount("ingress.vip_enabled"); n != 1 {
+	if n := v.auditCountResult("ingress.vip_enabled", audit.ResultSuccess); n != 1 {
 		t.Errorf("%d enable audit rows, want 1", n)
 	}
 }
