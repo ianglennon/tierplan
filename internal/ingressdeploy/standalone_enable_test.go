@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -192,8 +193,8 @@ func TestStandaloneEnableFailureLeavesIngressOff(t *testing.T) {
 	if err != nil || state.Enabled || state.EnsureError != ingressdeploy.EnsureEnableFailed {
 		t.Errorf("DeployState = %+v, %v; want off with a failed-enable record", state, err)
 	}
-	if got := r.auditCount("ingress.enabled"); got != 0 {
-		t.Errorf("ingress.enabled audit rows = %d, want 0", got)
+	if got := r.auditCountResult("ingress.enabled", audit.ResultSuccess); got != 0 {
+		t.Errorf("ingress.enabled success rows = %d, want 0", got)
 	}
 	if _, held := r.locks.Held(r.envID); held {
 		t.Error("the lock is held after the job")

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
@@ -445,7 +446,11 @@ func TestStandaloneDisableReportsANetworkLeftBehind(t *testing.T) {
 	if c, n, v := r.hostHolds(); c || n || v {
 		t.Errorf("after the rerun the host holds container %v, network %v, volume %v; want none", c, n, v)
 	}
-	for action, want := range map[string]int{"ingress.disabled": 1, "ingress.join_token_disabled": 1, "ingress.node_removed": 1} {
+	// The first job's switch-off row is the one success row; its failure at the network is the other row (A-01 class F).
+	if got := r.auditCountResult("ingress.disabled", audit.ResultSuccess); got != 1 {
+		t.Errorf("ingress.disabled success rows = %d after the rerun, want 1", got)
+	}
+	for action, want := range map[string]int{"ingress.disabled": 2, "ingress.join_token_disabled": 1, "ingress.node_removed": 1} {
 		if got := r.auditCount(action); got != want {
 			t.Errorf("%s audit rows = %d after the rerun, want %d", action, got, want)
 		}

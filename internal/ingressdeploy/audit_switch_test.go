@@ -16,12 +16,22 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
-	"github.com/ianglennon/tierplan/proto/testsupport"
 	"github.com/ianglennon/tierplan/proto/ingresswire"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // switchCanary is a join token the fake engine puts in its refusals, so a row that copied the engine's words would hold it.
 var switchCanary = ingresswire.TokenPrefix + "canary-0123456789abcdef"
+
+// auditCountResult is the number of audit rows of an action with a result.
+func (r *rig) auditCountResult(action string, result audit.Result) int {
+	r.t.Helper()
+	var n int
+	if err := r.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = ? AND result = ?`, action, string(result)).Scan(&n); err != nil {
+		r.t.Fatalf("count audit rows: %v", err)
+	}
+	return n
+}
 
 // wantFailureRow fails the test unless rows holds exactly one row of the given result for action, by the test's actor on the
 // environment, whose reason is code and whose details are exactly the step and the code.
@@ -166,4 +176,45 @@ func TestCancelledSwitchIsAudited(t *testing.T) {
 	if len(rows) != 1 {
 		t.Errorf("%d ingress.enabled rows, want only the cancelled one: %+v", len(rows), rows)
 	}
+}
+
+// wantOneSuccessRow fails the test unless rows is exactly one success row of action by the test's actor on the environment.
+func wantOneSuccessRow(t *testing.T, rows []audit.Row, envID, action string) audit.Row {
+	t.Helper()
+	if len(rows) != 1 {
+		t.Fatalf("%d %s rows, want 1 success row: %+v", len(rows), action, rows)
+	}
+	r := rows[0]
+	if r.Result != string(audit.ResultSuccess) || r.ActorName != testActor.Name || r.TargetType != "environment" || r.TargetID != envID || r.EnvID != envID {
+		t.Fatalf("row = %+v, want a success of %s by %s on environment %s", r, action, testActor.Name, envID)
+	}
+	return r
+}
+
+// TestAuditProofEnabled: a successful swarm switch-on writes its one success row, with the subnet and the image, in the
+// switch's transaction and no failure row, and no row holds a join token.
+func TestAuditProofEnabled(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+
+	rows := audittest.Rows(t, r.st, audit.ActionIngressEnabled)
+	row := wantOneSuccessRow(t, rows, r.envID, audit.ActionIngressEnabled)
+	if row.Details["subnet"] != "10.0.4.0/22" || row.Details["image"] != ingressdeploy.IngressImage(testServerVersion) || len(row.Details) != 2 {
+		t.Errorf("details = %v, want exactly the subnet and the image", row.Details)
+	}
+	audittest.AssertNoSecrets(t, rows, switchCanary, ingresswire.TokenPrefix)
+}
+
+// TestAuditProofDisabled: a successful swarm switch-off writes its one success row and no failure row, and no row holds a
+// join token.
+func TestAuditProofDisabled(t *testing.T) {
+	f := newDisableFix(t, disableOpts{})
+	job := f.disable(seesAll)
+	if job.State != jobs.JobDone {
+		t.Fatalf("the switch-off ended %q, want done; items = %+v", job.State, job.Items)
+	}
+
+	rows := audittest.Rows(t, f.st, audit.ActionIngressDisabled)
+	wantOneSuccessRow(t, rows, f.envID, audit.ActionIngressDisabled)
+	audittest.AssertNoSecrets(t, rows, switchCanary, ingresswire.TokenPrefix)
 }
