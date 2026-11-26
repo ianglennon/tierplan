@@ -257,6 +257,8 @@ func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release fu
 	for i, st := range steps {
 		taken := run.serviceID != "" // an earlier step ended well, so the swarm took the new configuration
 		if ctx.Err() != nil && !taken {
+			// The row is written before the items that end the job, so a reader that sees the job over finds it (A-01).
+			s.auditJobFailed(ctx, actor, audit.ActionIngressVIPChanged, envID, st.item, jobs.CodeCancelled)
 			run.stop(st.item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 			return
@@ -264,6 +266,7 @@ func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release fu
 		r.Update(st.item, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 		if err := st.do(ctx); err != nil {
 			if ctx.Err() != nil && !taken {
+				s.auditJobFailed(ctx, actor, audit.ActionIngressVIPChanged, envID, st.item, jobs.CodeCancelled)
 				run.stop(st.item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 				run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 				return
@@ -277,6 +280,7 @@ func (s *Service) runVIPChange(ctx context.Context, r *jobs.Reporter, release fu
 			if !errors.Is(err, errVIPChangeUndone) {
 				r.Output(vipChangeLeftText)
 			}
+			s.auditJobFailed(ctx, actor, audit.ActionIngressVIPChanged, envID, st.item, CodeVIPChangeFailed)
 			run.stop(st.item, jobs.ItemFailed, CodeVIPChangeFailed, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
 			return
@@ -532,8 +536,8 @@ func vipChangeUndone(c stackops.Convergence) (detail string, undone bool) {
 // wait waits until every node the swarm wants keepalived on runs the new configuration, so the job is not done, and the new
 // address not saved, while nodes still serve the old one (UAT-26 issue 3). It writes nothing to the swarm. It fails only when
 // the swarm stopped the update, rolled it back or is rolling it back, which is asked once more when the wait ended for another
-// reason; any other end leaves a swarm that carries on by itself, so it is reported on its own item and the save follows, also
-// when the job was cancelled.
+// reason; any other end leaves a swarm that carries on by itself, so it is reported on its own item, without an audit failure
+// row, and the save follows, also when the job was cancelled.
 func (e *vipChangeRun) wait(ctx context.Context) error {
 	if e.serviceID == "" {
 		e.done(ItemVIPChangeWait, nil)
@@ -565,6 +569,8 @@ func (e *vipChangeRun) wait(ctx context.Context) error {
 	}
 	s.log().Warn("a virtual IP change saves its address before every node has restarted", "environment", e.envID, "error", err)
 	e.r.Output(vipChangeSlowText)
+	// A wait that ends slow or cancelled is reported on its item only. The job goes on to save the address the swarm took, and its
+	// one audit row is that save's success row; a failure row here would say a change failed that was in fact applied (A-01).
 	if ctx.Err() != nil {
 		e.r.Finish(ItemVIPChangeWait, jobs.ItemCancelled, jobs.CodeCancelled, "", nodes)
 		return nil

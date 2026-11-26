@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
@@ -68,7 +69,7 @@ func wantRefused(t *testing.T, v *vipEnableRig, req ingressdeploy.VIPRequest, co
 	if rowAfter, errAfter := v.istore.GetVIP(ctx, v.envID); rowAfter != rowBefore || !errors.Is(errAfter, errBefore) {
 		t.Errorf("a refused enable changed the row: %+v (%v), was %+v (%v)", rowAfter, errAfter, rowBefore, errBefore)
 	}
-	if v.auditCount("ingress.vip_enabled") != 0 {
+	if v.auditCountResult("ingress.vip_enabled", audit.ResultSuccess) != 0 {
 		t.Error("a refused enable wrote an audit row")
 	}
 	if _, held := v.locks.Held(v.envID); held {

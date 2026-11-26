@@ -1,0 +1,726 @@
+[
+  {
+    "name": "swarm-map-set-host",
+    "target": "swarm",
+    "input": "# the shop\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "# the shop\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        traefik.x: \"1\"\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "swarm-list-set-host",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        - traefik.x=1\n        - tierplan.ingress.host=old.example.com\n        - tierplan.ingress.port=8080\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "new.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "path", "value": "/api"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        - traefik.x=1\n        - tierplan.ingress.host=new.example.com\n        - tierplan.ingress.port=8080\n        - tierplan.ingress.path=/api\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "new.example.com", "port": 8080, "path": "/api", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "standalone-map-set",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      com.example.team: core\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "host", "value": "shop.example.com"},
+      {"kind": "set", "service": "web", "route": "default", "field": "port", "value": "80"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      com.example.team: core\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "standalone-list-set",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=a.example.com\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "port", "value": "9000"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=a.example.com\n      - tierplan.ingress.port=9000\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "a.example.com", "port": 9000, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "no-block-creates-map",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "no-block-creates-map-standalone",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "host", "value": "shop.example.com"},
+      {"kind": "set", "service": "web", "route": "default", "field": "port", "value": "80"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "deploy-without-labels-keeps-replicas",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      replicas: 2\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      replicas: 2\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "named-route-add",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "add", "service": "api", "name": "api", "host": "api.example.com", "port": "9000"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.api.host: api.example.com\n        tierplan.ingress.api.port: \"9000\"\n",
+    "declarations": [
+      {"service": "api", "name": "api", "host": "api.example.com", "port": 9000, "path": "/", "scheme": "http", "strip": false},
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "named-route-add-list",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n",
+    "ops": [
+      {"kind": "add", "service": "web", "name": "admin-2", "host": "admin.example.com", "port": "8081"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n      - tierplan.ingress.admin-2.host=admin.example.com\n      - tierplan.ingress.admin-2.port=8081\n",
+    "declarations": [
+      {"service": "web", "name": "admin-2", "host": "admin.example.com", "port": 8081, "path": "/", "scheme": "http", "strip": false},
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "first-add-is-short-form",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n",
+    "ops": [
+      {"kind": "add", "service": "web", "host": "shop.example.com", "port": "8080"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "add-refusals-change-nothing",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.api.host: api.example.com\n        tierplan.ingress.api.port: \"9000\"\n",
+    "ops": [
+      {"kind": "add", "service": "api", "host": "x.example.com", "port": "1"},
+      {"kind": "add", "service": "api", "name": "api", "host": "x.example.com", "port": "1"},
+      {"kind": "add", "service": "api", "name": "default", "host": "x.example.com", "port": "1"},
+      {"kind": "add", "service": "api", "name": "API", "host": "x.example.com", "port": "1"},
+      {"kind": "add", "service": "api", "name": "other", "host": "x.example.com", "port": "0"},
+      {"kind": "add", "service": "api", "name": "other", "host": "", "port": "80"},
+      {"kind": "add", "service": "nope", "host": "x.example.com", "port": "80"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.api.host: api.example.com\n        tierplan.ingress.api.port: \"9000\"\n",
+    "declarations": [
+      {"service": "api", "name": "api", "host": "api.example.com", "port": 9000, "path": "/", "scheme": "http", "strip": false},
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "set-path-slash-omits-key",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.path: /api\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "path", "value": "/"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "set-path-slash-when-absent-writes-nothing",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "path", "value": "/"},
+      {"kind": "set", "service": "api", "route": "default", "field": "path", "value": ""}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "set-scheme-http-omits-key",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.scheme: https\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "scheme", "value": "http"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "set-scheme-https-writes-key",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "scheme", "value": "https"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.scheme: https\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "https", "strip": false}
+    ]
+  },
+  {
+    "name": "set-strip-false-omits-key",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.path: /api\n        tierplan.ingress.strip: \"true\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "strip", "value": "false"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.path: /api\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/api", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "set-strip-true-writes-quoted",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.path: /api\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "strip", "value": "true"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.path: /api\n        tierplan.ingress.strip: \"true\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/api", "scheme": "http", "strip": true}
+    ]
+  },
+  {
+    "name": "set-empty-required-field-writes-nothing",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": ""},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "  "}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "set-same-value-keeps-the-text",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com # the name\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com # the name\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "remove-named-route",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.api.host: api.example.com\n        tierplan.ingress.api.port: \"9000\"\n        tierplan.ingress.api.path: /v1\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "remove", "service": "api", "route": "api"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        traefik.x: \"1\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "remove-short-form-keeps-named",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.api.host: api.example.com\n        tierplan.ingress.api.port: \"9000\"\n        tierplan.ingress.api.path: /v1\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "remove", "service": "api", "route": "default"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.api.host: api.example.com\n        tierplan.ingress.api.port: \"9000\"\n        tierplan.ingress.api.path: /v1\n        traefik.x: \"1\"\n",
+    "declarations": [
+      {"service": "api", "name": "api", "host": "api.example.com", "port": 9000, "path": "/v1", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "remove-named-route-list",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n      - tierplan.ingress.admin.host=admin.example.com\n      - tierplan.ingress.admin.port=8081\n      - com.example.team=core\n",
+    "ops": [
+      {"kind": "remove", "service": "web", "route": "admin"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n      - com.example.team=core\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "remove-last-route-deletes-empty-labels-and-deploy",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n  db:\n    image: postgres:17\n",
+    "ops": [
+      {"kind": "remove", "service": "api", "route": "default"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n  db:\n    image: postgres:17\n",
+    "declarations": []
+  },
+  {
+    "name": "remove-last-route-keeps-deploy-with-other-keys",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      replicas: 2\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.path: /api\n",
+    "ops": [
+      {"kind": "remove", "service": "api", "route": "default"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      replicas: 2\n",
+    "declarations": []
+  },
+  {
+    "name": "remove-last-route-keeps-other-labels",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      com.example.team: core\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "remove", "service": "web", "route": "default"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      com.example.team: core\n",
+    "declarations": []
+  },
+  {
+    "name": "remove-last-route-list-deletes-empty-labels",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n",
+    "ops": [
+      {"kind": "remove", "service": "web", "route": "default"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n",
+    "declarations": []
+  },
+  {
+    "name": "remove-last-route-takes-stray-ingress-keys-too",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n      tierplan.ingress.bogus: \"1\"\n",
+    "ops": [
+      {"kind": "remove", "service": "web", "route": "default"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n",
+    "declarations": []
+  },
+  {
+    "name": "comments-and-order-kept",
+    "target": "swarm",
+    "input": "# stack for the shop\nservices:\n  # the api\n  api:\n    image: nginx:1.27 # pinned\n    deploy:\n      # routing\n      labels:\n        traefik.x: \"1\" # keep me\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\" # the port\n\n  db:\n    image: postgres:17\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "9090"},
+      {"kind": "set", "service": "api", "route": "default", "field": "path", "value": "/v2"}
+    ],
+    "output": "# stack for the shop\nservices:\n  # the api\n  api:\n    image: nginx:1.27 # pinned\n    deploy:\n      # routing\n      labels:\n        traefik.x: \"1\" # keep me\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"9090\" # the port\n        tierplan.ingress.path: /v2\n\n  db:\n    image: postgres:17\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 9090, "path": "/v2", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "four-space-indent-kept",
+    "target": "standalone",
+    "input": "services:\n    web:\n        image: nginx:1.27\n        labels:\n            tierplan.ingress.host: shop.example.com\n            tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n    web:\n        image: nginx:1.27\n        labels:\n            tierplan.ingress.host: shop.example.com\n            tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "unindented-list-kept",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n    - tierplan.ingress.host=shop.example.com\n    - tierplan.ingress.port=80\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n    - tierplan.ingress.host=shop.example.com\n    - tierplan.ingress.port=8080\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "long-value-not-wrapped",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    command: sh -c \"echo this is a very long command line that goes well past eighty columns and keeps going on to one hundred and twenty characters or more\"\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "path", "value": "/segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-end"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    command: sh -c \"echo this is a very long command line that goes well past eighty columns and keeps going on to one hundred and twenty characters or more\"\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n      tierplan.ingress.path: /segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-end\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-segment-end", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "swarm-wrong-place-move",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=app.example.com\n      - tierplan.ingress.port=8080\n",
+    "ops": [
+      {"kind": "move", "service": "api"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        - tierplan.ingress.host=app.example.com\n        - tierplan.ingress.port=8080\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "swarm-wrong-place-move-keeps-other-labels",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    labels:\n      com.example.team: core\n      tierplan.ingress.host: app.example.com\n      tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "move", "service": "api"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    labels:\n      com.example.team: core\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "standalone-wrong-place-move",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    deploy:\n      labels:\n        - tierplan.ingress.host=shop.example.com\n        - tierplan.ingress.port=80\n",
+    "ops": [
+      {"kind": "move", "service": "web"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "move-into-a-block-of-the-other-form-converts",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=app.example.com\n      - tierplan.ingress.port=8080\n    deploy:\n      labels:\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "move", "service": "api"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        traefik.x: \"1\"\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "both-places-remove-ignored",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: old.example.com\n      tierplan.ingress.port: \"80\"\n      com.example.team: core\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "removeIgnored", "service": "api"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    labels:\n      com.example.team: core\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "both-places-remove-ignored-standalone",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n    deploy:\n      labels:\n        tierplan.ingress.host: old.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "removeIgnored", "service": "web"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "move-and-remove-ignored-change-nothing-when-they-do-not-apply",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "move", "service": "api"},
+      {"kind": "removeIgnored", "service": "api"},
+      {"kind": "move", "service": "nope"},
+      {"kind": "removeIgnored", "service": "nope"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "remove-ignored-never-deletes-the-only-copy",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: app.example.com\n      tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "removeIgnored", "service": "api"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: app.example.com\n      tierplan.ingress.port: \"8080\"\n",
+    "problems": ["ingress_labels_wrong_place"]
+  },
+  {
+    "name": "encoding-path-percent",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "path", "value": "/a%20b"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n      tierplan.ingress.path: /a%20b\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/a%20b", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "encoding-path-space",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "path", "value": "/a b"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n      tierplan.ingress.path: /a b\n",
+    "declarations": [],
+    "problems": ["ingress_path_invalid"]
+  },
+  {
+    "name": "encoding-path-nonascii",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "path", "value": "/ü"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n      tierplan.ingress.path: /ü\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/ü", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "encoding-path-colon",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "path", "value": "/a:b"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n      tierplan.ingress.path: /a:b\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/a:b", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "encoding-path-quotes",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "path", "value": "/x\"y'z"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n      tierplan.ingress.path: /x\"y'z\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/x\"y'z", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "encoding-path-hash",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "path", "value": "/a#b"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n      tierplan.ingress.path: /a#b\n",
+    "declarations": [],
+    "problems": ["ingress_path_invalid"]
+  },
+  {
+    "name": "encoding-host-quotes-in-input-stay",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: \"shop.example.com\"\n      tierplan.ingress.port: '80'\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "host", "value": "new.example.com"},
+      {"kind": "set", "service": "web", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      tierplan.ingress.host: \"new.example.com\"\n      tierplan.ingress.port: '8080'\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "new.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "encoding-sibling-values-left-byte-identical",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      com.example.note: \"a: b # c\"\n      com.example.quote: 'it''s \"x\"'\n      com.example.hash: a#b\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"80\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      com.example.note: \"a: b # c\"\n      com.example.quote: 'it''s \"x\"'\n      com.example.hash: a#b\n      tierplan.ingress.host: shop.example.com\n      tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "encoding-list-value-with-equals-and-colon",
+    "target": "standalone",
+    "input": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n      - \"com.example.q=a=b: c\"\n",
+    "ops": [
+      {"kind": "set", "service": "web", "route": "default", "field": "path", "value": "/a=b"}
+    ],
+    "output": "services:\n  web:\n    image: nginx:1.27\n    labels:\n      - tierplan.ingress.host=shop.example.com\n      - tierplan.ingress.port=80\n      - \"com.example.q=a=b: c\"\n      - tierplan.ingress.path=/a=b\n",
+    "declarations": [
+      {"service": "web", "name": "default", "host": "shop.example.com", "port": 80, "path": "/a=b", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "locked-variable-host",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: ${APP_HOST}\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.strip: ${STRIP:-false}\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "other.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "strip", "value": "false"},
+      {"kind": "set", "service": "api", "route": "default", "field": "strip", "value": "true"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: ${APP_HOST}\n        tierplan.ingress.port: \"8080\"\n        tierplan.ingress.strip: ${STRIP:-false}\n"
+  },
+  {
+    "name": "locked-alias-value",
+    "target": "swarm",
+    "input": "x-host: &h app.example.com\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: *h\n        tierplan.ingress.port: \"8080\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "other.example.com"}
+    ],
+    "output": "x-host: &h app.example.com\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: *h\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "locked-merge-key",
+    "target": "swarm",
+    "input": "x-labels: &base\n  tierplan.ingress.host: app.example.com\n  tierplan.ingress.port: \"8080\"\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        <<: *base\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "other.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "9090"},
+      {"kind": "set", "service": "api", "route": "default", "field": "strip", "value": "false"},
+      {"kind": "remove", "service": "api", "route": "default"}
+    ],
+    "output": "x-labels: &base\n  tierplan.ingress.host: app.example.com\n  tierplan.ingress.port: \"8080\"\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        <<: *base\n        traefik.x: \"1\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "locked-whole-block-alias",
+    "target": "swarm",
+    "input": "x-labels: &common\n  tierplan.ingress.host: app.example.com\n  tierplan.ingress.port: \"8080\"\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels: *common\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "other.example.com"},
+      {"kind": "add", "service": "api", "name": "second", "host": "b.example.com", "port": "80"},
+      {"kind": "remove", "service": "api", "route": "default"},
+      {"kind": "move", "service": "api"},
+      {"kind": "removeIgnored", "service": "api"}
+    ],
+    "output": "x-labels: &common\n  tierplan.ingress.host: app.example.com\n  tierplan.ingress.port: \"8080\"\nservices:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels: *common\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "locked-service-merge-with-no-block",
+    "target": "swarm",
+    "input": "x-svc: &svc\n  deploy:\n    labels:\n      tierplan.ingress.host: app.example.com\n      tierplan.ingress.port: \"8080\"\nservices:\n  api:\n    <<: *svc\n    image: nginx:1.27\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "other.example.com"},
+      {"kind": "add", "service": "api", "host": "b.example.com", "port": "80"}
+    ],
+    "output": "x-svc: &svc\n  deploy:\n    labels:\n      tierplan.ingress.host: app.example.com\n      tierplan.ingress.port: \"8080\"\nservices:\n  api:\n    <<: *svc\n    image: nginx:1.27\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "remove-keeps-an-anchored-value-alone",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: &h app.example.com\n        tierplan.ingress.port: \"8080\"\n  worker:\n    image: nginx:1.27\n    labels:\n      com.example.host: *h\n",
+    "ops": [
+      {"kind": "remove", "service": "api", "route": "default"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    deploy:\n      labels:\n        tierplan.ingress.host: &h app.example.com\n        tierplan.ingress.port: \"8080\"\n  worker:\n    image: nginx:1.27\n    labels:\n      com.example.host: *h\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "yaml-error-changes-nothing",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: [nginx\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "x.example.com"},
+      {"kind": "add", "service": "api", "host": "x.example.com", "port": "80"},
+      {"kind": "remove", "service": "api", "route": "default"},
+      {"kind": "move", "service": "api"},
+      {"kind": "removeIgnored", "service": "api"}
+    ],
+    "output": "services:\n  api:\n    image: [nginx\n    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n"
+  },
+  {
+    "name": "yaml-duplicate-key-changes-nothing",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    image: nginx:1.28\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "x.example.com"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    image: nginx:1.28\n"
+  },
+  {
+    "name": "leading-zero-scalars-kept",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    environment:\n      UMASK: 007\n      MODE: 0440\n      CODE: 08\n      QUOTED: \"0440\"\n      SINGLE: '007'\n    deploy:\n      labels:\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    environment:\n      UMASK: 007\n      MODE: 0440\n      CODE: 08\n      QUOTED: \"0440\"\n      SINGLE: '007'\n    deploy:\n      labels:\n        traefik.x: \"1\"\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "crlf-line-endings-kept",
+    "target": "swarm",
+    "input": "services:\r\n  api:\r\n    image: nginx:1.27\r\n    environment:\r\n      UMASK: 007\r\n      MODE: 0440\r\n      CODE: 08\r\n      QUOTED: \"0440\"\r\n      SINGLE: '007'\r\n    deploy:\r\n      labels:\r\n        traefik.x: \"1\"\r\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\r\n  api:\r\n    image: nginx:1.27\r\n    environment:\r\n      UMASK: 007\r\n      MODE: 0440\r\n      CODE: 08\r\n      QUOTED: \"0440\"\r\n      SINGLE: '007'\r\n    deploy:\r\n      labels:\r\n        traefik.x: \"1\"\r\n        tierplan.ingress.host: app.example.com\r\n        tierplan.ingress.port: \"8080\"\r\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "untouched-scalars-and-flow-kept",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    environment:\n      LIMIT: 1e3\n      MASK: 0x1F\n    command: [ \"a\",   \"b\" ]\n    healthcheck:\n      test: >-\n        curl -f\n        http://localhost\n    deploy:\n      labels:\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    environment:\n      LIMIT: 1e3\n      MASK: 0x1F\n    command: [ \"a\",   \"b\" ]\n    healthcheck:\n      test: >-\n        curl -f\n        http://localhost\n    deploy:\n      labels:\n        traefik.x: \"1\"\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  }
+]

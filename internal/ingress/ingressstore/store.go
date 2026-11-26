@@ -53,9 +53,16 @@ func (e *RefusedError) Error() string {
 // without it.
 type DomainHook func(ctx context.Context, tx *sql.Tx, d ingress.Domain) error
 
-// ClaimHook runs inside the transaction that replaces a stack's claims, after they are written, with
-// the plan that was stored. An error rolls the replacement back.
-type ClaimHook func(ctx context.Context, tx *sql.Tx, p ingress.Plan) error
+// ClaimDelta is what a replacement of a stack's claims changed, in sorted hostnames. Added are the hostnames the
+// stack did not hold before, Kept the ones it held and still holds, Changed the subset of Kept whose domain or
+// routes differ from what was stored, and Removed the ones it held and no longer holds.
+type ClaimDelta struct {
+	Added, Kept, Changed, Removed []string
+}
+
+// ClaimHook runs inside the transaction that replaces a stack's claims, after they are written, with the plan that
+// was stored and the delta from what the stack held. An error rolls the replacement back.
+type ClaimHook func(ctx context.Context, tx *sql.Tx, p ingress.Plan, d ClaimDelta) error
 
 // Deps are what a Store needs.
 type Deps struct {
@@ -717,7 +724,9 @@ type ReplaceInput struct {
 // no claim. A hostname the stack keeps keeps its claimed_by and claimed_at. It returns the plan that
 // was stored.
 //
-// Only tests call it in this phase: no deploy, rollback, git or update path stores claims yet.
+// The deploy, roll back and restore of a revision and the git auto-deploy call it through the stack pipeline's claim
+// write; an update images keeps the last good revision's routes and so writes only when that revision declares a
+// hostname the stack does not hold.
 func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingress.Plan, error) {
 	now := s.now().UTC()
 	var plan ingress.Plan
@@ -755,6 +764,7 @@ func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingres
 		for _, h := range held {
 			kept[h.Hostname] = h
 		}
+		delta := claimDeltaOf(p, held, routes)
 		// The routes go with their claims (ON DELETE CASCADE).
 		if _, err := q.DeleteIngressHostnamesByStack(ctx, stack); err != nil {
 			return false, fmt.Errorf("ingressstore: release the claims of stack %q: %w", in.StackID, err)
@@ -778,7 +788,7 @@ func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingres
 			}
 		}
 		if in.Hook != nil {
-			if err := in.Hook(ctx, tx, p); err != nil {
+			if err := in.Hook(ctx, tx, p, delta); err != nil {
 				return false, err
 			}
 		}
@@ -796,11 +806,63 @@ func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingres
 // the same transaction, and the environment's version is raised and its notifier told once. A stack
 // that holds nothing is a no-op.
 //
-// Only tests call it in this phase. The stack delete path does not call it: the claims go with the
-// stack row and the database trigger counts that change.
+// The stack removal job calls it, through stackops.Ingress, once the engine has nothing of the stack and before the
+// definition is deleted, so the release is audited as ingress.claim_released in the claims' own transaction. The
+// database trigger that counts a change when a stack row goes only backs that up.
 func (s *Store) ReleaseStack(ctx context.Context, envID, stackID, actor string, hook ClaimHook) error {
 	_, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: envID, StackID: stackID, Actor: actor, Hook: hook})
 	return err
+}
+
+// claimDeltaOf is the difference between what a stack holds (its claims and routes) and what the plan would store.
+func claimDeltaOf(p ingress.Plan, held []sqlc.IngressHostname, routes []sqlc.IngressRoute) ClaimDelta {
+	haveDomain := make(map[string]string, len(held))
+	for _, h := range held {
+		haveDomain[h.Hostname] = h.DomainID
+	}
+	haveRoutes := map[string][]string{}
+	for _, r := range routes {
+		haveRoutes[r.Hostname] = append(haveRoutes[r.Hostname], routeSig(r.Hostname, r.Name, r.PathPrefix, r.Service, r.Port, r.Scheme, r.Strip != 0))
+	}
+	var d ClaimDelta
+	want := make(map[string]bool, len(p.Claims))
+	for _, c := range p.Claims {
+		want[c.Hostname] = true
+		domain, ok := haveDomain[c.Hostname]
+		if !ok {
+			d.Added = append(d.Added, c.Hostname)
+			continue
+		}
+		d.Kept = append(d.Kept, c.Hostname)
+		var wantRoutes []string
+		for _, r := range c.Routes {
+			path := r.PathPrefix
+			if path == "" {
+				path = "/"
+			}
+			scheme := r.Scheme
+			if scheme == "" {
+				scheme = ingress.SchemeHTTP
+			}
+			wantRoutes = append(wantRoutes, routeSig(c.Hostname, r.Name, path, r.Service, int64(r.Port), string(scheme), r.Strip))
+		}
+		have := haveRoutes[c.Hostname]
+		slices.Sort(wantRoutes)
+		slices.Sort(have)
+		if domain != c.DomainID || !slices.Equal(wantRoutes, have) {
+			d.Changed = append(d.Changed, c.Hostname)
+		}
+	}
+	for _, h := range held {
+		if !want[h.Hostname] {
+			d.Removed = append(d.Removed, h.Hostname)
+		}
+	}
+	slices.Sort(d.Added)
+	slices.Sort(d.Kept)
+	slices.Sort(d.Changed)
+	slices.Sort(d.Removed)
+	return d
 }
 
 // samePlan reports whether what a stack holds is exactly what the plan would store: the same

@@ -153,9 +153,9 @@ func RegisterIngressVIP(r *httpx.Router, d IngressDeployDeps) {
 		Description: "Says which address the swarm's ingress answers on and which node holds it (none, one or many), when it last lost its holder, how each node that can hold it stands " +
 			"(its VRRP state, whether its proxy is ready, its keepalived task, its last fault and when TierPlan last heard from it), whether each manager allows privileged services, " +
 			"whether another router uses the router ID, which nodes have clock trouble, the authentication window in seconds and the last pass that kept the service as wanted. " +
-			"A swarm with no virtual IP answers 404 vip_not_enabled. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"A swarm with no virtual IP answers 404 vip_not_enabled. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressVIPOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *EnvironmentPathInput) (*IngressVIPOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
@@ -179,9 +179,9 @@ func RegisterIngressVIP(r *httpx.Router, d IngressDeployDeps) {
 		Summary:     "List the moves of a swarm's virtual IP",
 		Description: "Pages the history of the address moving from one node to another, newest first by time and, for moves at the same instant, newest recorded first. " +
 			"limit is 1 to 100 (50 by default); before is the next of the previous page, an opaque cursor, and a value that is not one is 422 vip_bad_cursor. " +
-			"next is absent on the last page. A swarm with no moves answers an empty list. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"next is absent on the last page. A swarm with no moves answers an empty list. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressVIPMovesInput) (*IngressVIPMovesOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *IngressVIPMovesInput) (*IngressVIPMovesOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}

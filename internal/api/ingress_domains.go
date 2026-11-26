@@ -82,7 +82,7 @@ type IngressDomainBody struct {
 	DNSProvider    string     `json:"dnsProvider" doc:"The DNS provider that validates the domain, such as cloudflare"`
 	TokenSet       bool       `json:"tokenSet" doc:"True when a DNS token is saved. The token is never returned"`
 	TokenUpdatedAt *time.Time `json:"tokenUpdatedAt,omitempty" doc:"When the DNS token was last saved or replaced; left out when none is saved"`
-	CreatedBy      string     `json:"createdBy" doc:"The ID of the user who registered the domain"`
+	CreatedBy      string     `json:"createdBy" doc:"The ID of the user who registered the domain. Blank unless the caller holds ingress.manage on the environment"`
 	CreatedAt      time.Time  `json:"createdAt" doc:"When the domain was registered"`
 	UpdatedAt      time.Time  `json:"updatedAt" doc:"When the domain last changed"`
 	Reserved       []string   `json:"reserved" doc:"The hostnames held back under the domain, sorted. No stack can claim one"`
@@ -412,9 +412,10 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		Path:        "/api/env/{envId}/ingress/domains",
 		Summary:     "List the domains of an environment",
 		Description: "The domains an environment's stacks may serve hostnames under, by suffix, each with the hostnames reserved under it and whether a DNS " +
-			"token is saved and when it last changed. The token is never returned. Needs ingress.manage on the environment (its Admin).",
+			"token is saved and when it last changed. The token is never returned. Needs ingress.read on the environment (Viewer); the ID of " +
+			"the user who registered a domain is filled only for ingress.manage holders.",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *ListIngressDomainsInput) (*IngressDomainsOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *ListIngressDomainsInput) (*IngressDomainsOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
@@ -425,10 +426,21 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		if err != nil {
 			return nil, failed("list the domains", err)
 		}
+		// Who registered a domain stays with the people who manage the environment's ingress (A-04); a Viewer gets the same
+		// rows without it.
+		manager := false
+		if d.Checker != nil {
+			dec := d.Checker.Check(ctx, httpx.PrincipalFrom(ctx), rbac.Requirement{Perm: rbac.PermIngressManage, Scope: rbac.ScopeEnvironment}, in.EnvID)
+			manager = dec.Err == nil && dec.Allowed
+		}
 		out := &IngressDomainsOutput{CacheControl: "no-store"}
 		out.Body.Items = make([]IngressDomainBody, 0, len(views))
 		for _, v := range views {
-			out.Body.Items = append(out.Body.Items, ingressDomainBody(v.Domain, v.Reserved, v.Certificates))
+			b := ingressDomainBody(v.Domain, v.Reserved, v.Certificates)
+			if !manager {
+				b.CreatedBy = ""
+			}
+			out.Body.Items = append(out.Body.Items, b)
 		}
 		return out, nil
 	})

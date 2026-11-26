@@ -167,7 +167,11 @@ func (s *Service) DisableVIP(ctx context.Context, actor audit.Actor, owner, envI
 	}
 	return s.startEnable(ctx, JobKindVIPDisable, owner, info, EnableRequest{}, pre, specs,
 		func(jctx context.Context, r *jobs.Reporter, release func()) {
-			if err := s.removeVIP(jctx, actor, envID, r, release); err != nil {
+			// A step that fails or is cancelled is audited as it ends its item (A-01); the ensure loop's removal is not.
+			onFail := func(item, code string) {
+				s.auditJobFailed(jctx, actor, audit.ActionIngressVIPDisabled, envID, item, code)
+			}
+			if err := s.removeVIPAudited(jctx, actor, envID, r, release, onFail); err != nil {
 				s.log().Warn("a virtual IP switch-off did not finish", "environment", envID, "error", err)
 				if r != nil && jctx.Err() == nil {
 					r.Output(vipLeftText)
@@ -265,11 +269,25 @@ func (s *Service) waitKeepalivedGone(ctx context.Context, envID string, deadline
 type vipRemoval struct {
 	r       *jobs.Reporter
 	release func()
+	// onFail, when set, is told the item and the code of a step that failed or was cancelled, before the item ends.
+	onFail func(item, code string)
+	// unmark, when set, clears the reader's disabling mark; freeLock calls it, so it is clear before the job can read as ended.
+	unmark func()
 }
 
-// freeLock frees the environment's operation lock before the item that ends the job is finished, so a reader that sees the
-// job done finds the lock free.
+// record tells onFail of a step that failed or was cancelled.
+func (v *vipRemoval) record(item, code string) {
+	if v.onFail != nil {
+		v.onFail(item, code)
+	}
+}
+
+// freeLock frees the environment's operation lock and clears the reader's disabling mark before the item that ends the job
+// is finished, so a reader that sees the job done finds the lock free and the mark gone.
 func (v *vipRemoval) freeLock() {
+	if v.unmark != nil {
+		v.unmark()
+	}
 	if v.release != nil {
 		v.release()
 	}
@@ -289,6 +307,14 @@ func (v *vipRemoval) done(item string, result map[string]string) {
 
 // failed ends the item with vip_remove_failed and the sentence of the item, and the engine's own words when detail is set.
 func (v *vipRemoval) failed(item, detail string) {
+	v.record(item, CodeVIPRemoveFailed)
+	v.finishFailed(item, detail)
+}
+
+// finishFailed ends the item as failed without telling onFail: a failure that does not end the run, such as a wait that ran
+// out, is not audited when it happens. The job writes one audit row at most, for the item that ends it (A-01), so the run
+// records the wait's failure itself if it is the one that ends the job.
+func (v *vipRemoval) finishFailed(item, detail string) {
 	if v.r == nil {
 		return
 	}
@@ -319,10 +345,17 @@ func (v *vipRemoval) skip(from int, state, code string) {
 //
 // r reports each step as the items of the VIP switch-off; it may be nil. release frees the operation lock the caller holds
 // before the job's last item ends; it may be nil. A step that fails ends its item with vip_remove_failed and leaves the row with
-// enabled 0, which a later call finishes. A wait that ran out is not the end: the secret is still tried, and the row is kept.
+// enabled 0, which a later call finishes. A wait that ran out is not the end: the secret is still tried, and the row is kept; the job's one audit row is then the secret's
+// failure if that fails, or else the wait's.
 // An environment with no virtual IP is ErrVIPNotEnabled. The caller holds the environment's operation lock.
 func (s *Service) removeVIP(ctx context.Context, actor audit.Actor, envID string, r *jobs.Reporter, release func()) error {
-	v := &vipRemoval{r: r, release: release}
+	return s.removeVIPAudited(ctx, actor, envID, r, release, nil)
+}
+
+// removeVIPAudited is removeVIP that also tells onFail, when set, of each step that fails or is cancelled, just before the
+// step's item ends, so the switch-off's own job can write the audit row of a failed run.
+func (s *Service) removeVIPAudited(ctx context.Context, actor audit.Actor, envID string, r *jobs.Reporter, release func(), onFail func(item, code string)) error {
+	v := &vipRemoval{r: r, release: release, onFail: onFail}
 	cfg, err := s.d.Store.GetVIP(ctx, envID)
 	if errors.Is(err, ingressstore.ErrVIPNotFound) {
 		return ErrVIPNotEnabled
@@ -342,11 +375,13 @@ func (s *Service) removeVIP(ctx context.Context, actor audit.Actor, envID string
 	// From here a holder that stops is the switch-off's doing, and the reader keeps reading until the row is gone.
 	s.markVIPDisabling(envID, true)
 	defer s.markVIPDisabling(envID, false)
+	v.unmark = func() { s.markVIPDisabling(envID, false) }
 
 	// stop ends the run at the item that failed or was cancelled.
 	stop := func(i int, err error, detail string) error {
 		v.freeLock()
 		if ctx.Err() != nil {
+			v.record(vipDisableItems[i], jobs.CodeCancelled)
 			if r != nil {
 				r.Finish(vipDisableItems[i], jobs.ItemCancelled, jobs.CodeCancelled, "", nil)
 			}
@@ -393,10 +428,10 @@ func (s *Service) removeVIP(ctx context.Context, actor audit.Actor, envID string
 		return stop(1, err, "")
 	case err != nil:
 		waitErr = err
-		v.failed(ItemVIPWaitTasks, "The swarm's tasks could not be read, so it is not known that every node released the address.")
+		v.finishFailed(ItemVIPWaitTasks, "The swarm's tasks could not be read, so it is not known that every node released the address.")
 	case left > 0:
 		waitErr = errors.New("keepalived tasks remain")
-		v.failed(ItemVIPWaitTasks, strconv.Itoa(left)+" keepalived task(s) were still running after "+VIPDisableTaskDeadline.String()+".")
+		v.finishFailed(ItemVIPWaitTasks, strconv.Itoa(left)+" keepalived task(s) were still running after "+VIPDisableTaskDeadline.String()+".")
 	default:
 		v.done(ItemVIPWaitTasks, nil)
 	}
@@ -428,7 +463,9 @@ func (s *Service) removeVIP(ctx context.Context, actor audit.Actor, envID string
 	}
 	v.done(ItemVIPRemoveSecret, map[string]string{"removed": strconv.Itoa(gone)})
 	if waitErr != nil {
-		// A holder may still hold the address: the row stays, switched off, for the next try.
+		// A holder may still hold the address: the row stays, switched off, for the next try. The wait is the item that ends the
+		// job, so its failure is the job's one audit row.
+		v.record(ItemVIPWaitTasks, CodeVIPRemoveFailed)
 		v.freeLock()
 		v.skip(3, jobs.ItemSkipped, CodeNotRun)
 		return waitErr

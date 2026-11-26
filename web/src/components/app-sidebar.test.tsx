@@ -82,6 +82,7 @@ function mount(width: number, path = "/") {
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/address-space" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/ingress" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/janitor" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/services" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/placement" }),
@@ -328,6 +329,7 @@ describe("the Address space item", () => {
       "Volumes",
       "Networks",
       "Address space",
+      "Ingress",
       "Janitor",
       "Events",
     ]);
@@ -354,12 +356,12 @@ describe("the Address space item", () => {
 });
 
 describe("the Janitor item", () => {
-  it("sits directly below Address space and above Events, on a swarm", async () => {
+  it("sits directly below Ingress and above Events, on a swarm", async () => {
     mount(1280, "/env/e1");
     const link = await screen.findByRole("link", { name: "Janitor" });
     expect(link.getAttribute("href")).toBe("/env/e1/janitor");
     const names = screen.getAllByRole("link").map((l) => l.textContent);
-    expect(names.indexOf("Janitor")).toBe(names.indexOf("Address space") + 1);
+    expect(names.indexOf("Janitor")).toBe(names.indexOf("Ingress") + 1);
     expect(names.indexOf("Events")).toBe(names.indexOf("Janitor") + 1);
   });
 
@@ -378,6 +380,47 @@ describe("the Janitor item", () => {
     expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
     await settled(client);
     expect(screen.queryByRole("link", { name: "Janitor" })).toBeNull();
+  });
+});
+
+describe("the Ingress item", () => {
+  it("sits directly after Address space, for a user who can read ingress, and opens the page", async () => {
+    const router = mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Ingress" });
+    expect(link.getAttribute("href")).toBe("/env/e1/ingress");
+    const names = screen.getAllByRole("link").map((l) => l.textContent);
+    expect(names.indexOf("Ingress")).toBe(names.indexOf("Address space") + 1);
+    fireEvent.click(link);
+    await waitFor(() => expect(router.state.location.pathname).toBe("/env/e1/ingress"));
+  });
+
+  it("is there on a standalone environment too", async () => {
+    envType = "standalone";
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Ingress" })).toBeTruthy();
+    await settled(client);
+    expect(screen.getByRole("link", { name: "Ingress" })).toBeTruthy();
+  });
+
+  it("is left out for a user with no role on the environment", async () => {
+    me = makeMe({ envs: {} });
+    mount(1280, "/env/e1");
+    // The user is known and holds nothing here, so no item of the environment is drawn.
+    await waitFor(() => expect(client.getQueryState(["me"])?.status).toBe("success"));
+    await settled(client);
+    expect(screen.queryByRole("link", { name: "Ingress" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Address space" })).toBeNull();
+  });
+
+  it("is left out for a user without ingress.read, who can read the rest", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read", "networks.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Address space" })).toBeTruthy();
+    await settled(client);
+    expect(screen.queryByRole("link", { name: "Ingress" })).toBeNull();
   });
 });
 

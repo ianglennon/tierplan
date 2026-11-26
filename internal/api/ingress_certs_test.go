@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -390,8 +391,9 @@ func TestIngressCertRequestAheadRefusals(t *testing.T) {
 	}
 }
 
-// T-20-34, D-33: every route needs ingress.manage on the environment, so an Operator gets 403 on all four, the Admin of
-// another environment gets 403 on this one's, and every answer is no-store.
+// T-20-34, D-33, D-14: the request and the retry need ingress.manage on the environment, so an Operator gets 403 on them;
+// the list and the budget need ingress.read, so an Operator reads them; the Admin of another environment cannot see this
+// one at all, and every answer is no-store.
 func TestIngressCertRoutesNeedTheAdminOfTheEnvironment(t *testing.T) {
 	t.Parallel()
 	f := newIngressFix(t)
@@ -400,17 +402,24 @@ func TestIngressCertRoutesNeedTheAdminOfTheEnvironment(t *testing.T) {
 	routes := []struct {
 		name, method, path, body string
 		ok                       int
+		read                     bool
 	}{
-		{"list", http.MethodGet, certsPath(f.envA), "", http.StatusOK},
-		{"request", http.MethodPost, certsPath(f.envA), certRequestBody("api.apps.example.com"), http.StatusCreated},
-		{"retry", http.MethodPost, certsPath(f.envA, "/", c.ID, "/retry"), "", http.StatusAccepted},
-		{"budget", http.MethodGet, certsPath(f.envA, "/budget"), "", http.StatusOK},
+		{"list", http.MethodGet, certsPath(f.envA), "", http.StatusOK, true},
+		{"request", http.MethodPost, certsPath(f.envA), certRequestBody("api.apps.example.com"), http.StatusCreated, false},
+		{"retry", http.MethodPost, certsPath(f.envA, "/", c.ID, "/retry"), "", http.StatusAccepted, false},
+		{"budget", http.MethodGet, certsPath(f.envA, "/budget"), "", http.StatusOK, true},
 	}
 	for _, r := range routes {
 		for who, u := range map[string]credentialUser{"an Operator of A": f.operatorA, "the Admin of B": f.adminB} {
 			rec := f.credCall(t, u, r.method, r.path, r.body)
-			// The Operator sees the environment and is refused (403); the Admin of B cannot see it at all (404).
-			if rec.Code != http.StatusForbidden && (who == "an Operator of A" || rec.Code != http.StatusNotFound) {
+			// The Operator sees the environment: the two reads (ingress.read) answer, the writes are refused (403); the
+			// Admin of B cannot see it at all (404).
+			switch {
+			case who == "an Operator of A" && r.read:
+				if rec.Code != http.StatusOK {
+					t.Errorf("%s as %s: %d %s, want 200 (a read on ingress.read)", r.name, who, rec.Code, rec.Body)
+				}
+			case rec.Code != http.StatusForbidden && (who == "an Operator of A" || rec.Code != http.StatusNotFound):
 				t.Errorf("%s as %s: %d %s, want 403 (404 for an environment the caller cannot see)", r.name, who, rec.Code, rec.Body)
 			}
 		}
@@ -424,5 +433,136 @@ func TestIngressCertRoutesNeedTheAdminOfTheEnvironment(t *testing.T) {
 	}
 	if rows := f.ingressAudit(t, audit.ActionIngressCertRequested); len(rows) != 2 {
 		t.Errorf("request audit rows = %d, want 2: refused callers write none", len(rows))
+	}
+}
+
+// D-14 tracer: the certificate list and the weekly budget are readable from Viewer up; the Admin of another environment
+// still cannot see this one, and an anonymous caller is 401.
+func TestIngressCertificatesReadableByViewers(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	f.requestCert(t, f.adminA, f.envA, "web.apps.example.com")
+	viewer := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+
+	for _, path := range []string{certsPath(f.envA), certsPath(f.envA, "/budget")} {
+		for who, u := range map[string]credentialUser{"a Viewer of A": viewer, "an Operator of A": f.operatorA} {
+			rec := f.credCall(t, u, http.MethodGet, path, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s as %s: %d %s, want 200", path, who, rec.Code, rec.Body)
+			}
+			if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+				t.Errorf("GET %s as %s: Cache-Control = %q, want no-store", path, who, cc)
+			}
+			var l struct {
+				Items []json.RawMessage `json:"items"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &l); err != nil || len(l.Items) != 1 {
+				t.Errorf("GET %s as %s: items = %d (%v), want 1: %s", path, who, len(l.Items), err, rec.Body)
+			}
+		}
+		if rec := f.credCall(t, f.adminB, http.MethodGet, path, ""); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s as the Admin of B: %d %s, want 404 (an environment the caller cannot see)", path, rec.Code, rec.Body)
+		}
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s anonymous: %d %s, want 401", path, rec.Code, rec.Body)
+		}
+	}
+}
+
+// A-04, T-27-11: lastError.detail and requestedBy are filled only for a caller who holds ingress.manage on the
+// environment; a Viewer gets the same row with those two fields empty and nothing else different.
+func TestIngressCertificateDetailOnlyForManagers(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	c := f.requestCert(t, f.adminA, f.envA, "web.apps.example.com")
+	const detail = "ca said: rate limited for example.com"
+	f.setCert(t, c.ID, `consecutive_failures = 1, last_error_class = 'rate_limited', last_error_detail = ?, last_error_at = ?`,
+		detail, f.clk.now().Add(-time.Minute).UnixNano())
+	viewer := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+
+	row := func(u credentialUser) map[string]any {
+		t.Helper()
+		rec := f.credCall(t, u, http.MethodGet, certsPath(f.envA), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list: %d %s, want 200", rec.Code, rec.Body)
+		}
+		var l struct {
+			Items []map[string]any `json:"items"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &l); err != nil || len(l.Items) != 1 {
+			t.Fatalf("decode %s: %v", rec.Body, err)
+		}
+		return l.Items[0]
+	}
+	admin, view := row(f.adminA), row(viewer)
+
+	ae, _ := admin["lastError"].(map[string]any)
+	if ae["detail"] != detail || admin["requestedBy"] != "id-ing-admin-a" {
+		t.Fatalf("the Admin's row = %v, want the detail and requestedBy filled", admin)
+	}
+	ve, _ := view["lastError"].(map[string]any)
+	if ve == nil || ve["class"] != "rate_limited" || ve["hint"] == "" || ve["at"] == nil {
+		t.Fatalf("the Viewer's lastError = %v, want class, hint and at", view["lastError"])
+	}
+	if d, ok := ve["detail"]; ok && d != "" {
+		t.Errorf("the Viewer read the detail %q", d)
+	}
+	if rb, ok := view["requestedBy"]; ok && rb != "" {
+		t.Errorf("the Viewer read requestedBy %q", rb)
+	}
+	// Blank the two fields on the Admin's row: what is left is the Viewer's row.
+	delete(ae, "detail")
+	delete(admin, "requestedBy")
+	delete(ve, "detail")
+	delete(view, "requestedBy")
+	if !reflect.DeepEqual(admin, view) {
+		t.Errorf("the rows differ beyond the two fields:\nadmin  %v\nviewer %v", admin, view)
+	}
+}
+
+// UIX-03 edges: at the injected instant T a certificate that expired one second ago is expired, one due to renew
+// exactly at T keeps that renewAt and is not expired, and the list is by hostname whatever the order of creation.
+func TestIngressCertificatesClockEdgesAndOrder(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "example.com")
+	zz := f.requestCert(t, f.adminA, f.envA, "zz.example.com")
+	aa := f.requestCert(t, f.adminA, f.envA, "aa.example.com")
+	mm := f.requestCert(t, f.adminA, f.envA, "mm.example.com")
+	now := f.clk.now().UTC()
+	f.setCert(t, aa.ID, `chain_pem = 'chain', not_after = ?`, now.Add(-time.Second).UnixNano())
+	f.setCert(t, mm.ID, `chain_pem = 'chain', not_after = ?, renew_at = ?`, now.Add(30*24*time.Hour).UnixNano(), now.UnixNano())
+	_ = zz
+
+	rec := f.credCall(t, f.adminA, http.MethodGet, certsPath(f.envA), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d %s, want 200", rec.Code, rec.Body)
+	}
+	var l struct {
+		Items []struct {
+			Hostname string `json:"hostname"`
+			State    string `json:"state"`
+			RenewAt  string `json:"renewAt"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &l); err != nil || len(l.Items) != 3 {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	var order []string
+	for _, it := range l.Items {
+		order = append(order, it.Hostname)
+	}
+	if want := []string{"aa.example.com", "mm.example.com", "zz.example.com"}; !reflect.DeepEqual(order, want) {
+		t.Errorf("order = %v, want %v", order, want)
+	}
+	if l.Items[0].State != "expired" {
+		t.Errorf("a certificate that expired one second ago is %q, want expired", l.Items[0].State)
+	}
+	if l.Items[1].State == "expired" || l.Items[1].RenewAt != now.Format(time.RFC3339Nano) {
+		t.Errorf("a certificate renewing exactly now: state %q renewAt %q, want not expired and renewAt %s", l.Items[1].State, l.Items[1].RenewAt, now.Format(time.RFC3339Nano))
 	}
 }

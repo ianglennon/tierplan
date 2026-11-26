@@ -343,6 +343,8 @@ func (s *Service) runEnable(ctx context.Context, r *jobs.Reporter, release func(
 	}
 	for i, st := range steps {
 		if ctx.Err() != nil {
+			// The row is written before the items that end the job, so a reader that sees the job over finds it.
+			s.auditJobFailed(ctx, actor, audit.ActionIngressEnabled, envID, steps[i].item, jobs.CodeCancelled)
 			run.stop(steps[i].item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 			return
@@ -357,6 +359,7 @@ func (s *Service) runEnable(ctx context.Context, r *jobs.Reporter, release func(
 			s.log().Warn("an ingress enable step failed", "environment", envID, "step", st.item, "code", code, "error", err)
 			s.noteEnableFailed(ctx, envID)
 			r.Output("Ingress is still off. Switch it on again to carry on from what was made, or switch it off to remove it.")
+			s.auditJobFailed(ctx, actor, audit.ActionIngressEnabled, envID, st.item, code)
 			run.stop(st.item, jobs.ItemFailed, code, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
 			return

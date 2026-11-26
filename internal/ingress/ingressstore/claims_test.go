@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -184,7 +185,7 @@ func TestReplaceStackRoutesIdenticalPlanWritesNothing(t *testing.T) {
 	later := fixedNow.Add(time.Hour)
 	s.now = func() time.Time { return later }
 	plan, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "bob", Decls: decls,
-		Hook: func(context.Context, *sql.Tx, ingress.Plan) error { hooked++; return nil }})
+		Hook: func(context.Context, *sql.Tx, ingress.Plan, ClaimDelta) error { hooked++; return nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +229,7 @@ func TestReplaceStackRoutesChangedPlanKeepsTheClaimOfAKeptHostname(t *testing.T)
 	hooked := 0
 	_, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "bob",
 		Decls: []ingress.Declaration{declFor(hostIn("keep"), 9090), declFor(hostIn("new"), 8080)},
-		Hook:  func(context.Context, *sql.Tx, ingress.Plan) error { hooked++; return nil }})
+		Hook:  func(context.Context, *sql.Tx, ingress.Plan, ClaimDelta) error { hooked++; return nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +357,7 @@ func TestReleaseStackReleasesEverythingAndNotifiesOnce(t *testing.T) {
 	defer sub.Close()
 
 	hooked := 0
-	hook := func(_ context.Context, _ *sql.Tx, p ingress.Plan) error {
+	hook := func(_ context.Context, _ *sql.Tx, p ingress.Plan, _ ClaimDelta) error {
 		hooked++
 		if len(p.Claims) != 0 {
 			t.Errorf("release hook plan = %+v, want empty", p)
@@ -473,5 +474,55 @@ func TestReplaceStackRoutesTwoWritersOneWinner(t *testing.T) {
 		count(t, st, `SELECT COUNT(*) FROM ingress_hostnames WHERE hostname = ? AND env_id = 'env-b'`, contested)
 	if loserClaims != 1 {
 		t.Errorf("the contested hostname is held %d times", loserClaims)
+	}
+}
+
+func TestReplaceStackRoutesHookGetsTheDelta(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "env-a", "Alpha")
+	seedStack(t, st, "stack-a", "env-a", "web-a")
+	registerDomain(t, s, "env-a", "apps.example.com")
+
+	var got []ClaimDelta
+	hook := func(_ context.Context, _ *sql.Tx, _ ingress.Plan, d ClaimDelta) error {
+		got = append(got, d)
+		return nil
+	}
+	write := func(decls ...ingress.Declaration) {
+		t.Helper()
+		if _, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: "env-a", StackID: "stack-a", Actor: "alice", Decls: decls, Hook: hook}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, b := hostIn("a"), hostIn("b")
+
+	steps := []struct {
+		name  string
+		decls []ingress.Declaration
+		want  *ClaimDelta // nil: no hook call
+	}{
+		{"a first write adds", []ingress.Declaration{declFor(a, 8080)}, &ClaimDelta{Added: []string{a}}},
+		{"an identical plan calls no hook", []ingress.Declaration{declFor(a, 8080)}, nil},
+		{"an added hostname keeps the other", []ingress.Declaration{declFor(b, 8080), declFor(a, 8080)}, &ClaimDelta{Added: []string{b}, Kept: []string{a}}},
+		{"a changed port changes the hostname", []ingress.Declaration{declFor(a, 9090), declFor(b, 8080)}, &ClaimDelta{Kept: []string{a, b}, Changed: []string{a}}},
+		{"a dropped hostname is removed", []ingress.Declaration{declFor(b, 8080)}, &ClaimDelta{Kept: []string{b}, Removed: []string{a}}},
+		{"no declaration removes the rest", nil, &ClaimDelta{Removed: []string{b}}},
+	}
+	for _, step := range steps {
+		got = nil
+		write(step.decls...)
+		if step.want == nil {
+			if len(got) != 0 {
+				t.Errorf("%s: hook ran %d times, want none", step.name, len(got))
+			}
+			continue
+		}
+		if len(got) != 1 {
+			t.Fatalf("%s: hook ran %d times, want once", step.name, len(got))
+		}
+		if !reflect.DeepEqual(got[0], *step.want) {
+			t.Errorf("%s: delta = %+v, want %+v", step.name, got[0], *step.want)
+		}
 	}
 }

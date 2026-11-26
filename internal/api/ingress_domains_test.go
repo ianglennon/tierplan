@@ -369,6 +369,73 @@ func TestIngressDomainListShowsReservedNamesAndTokenSetNeverTheToken(t *testing.
 	}
 }
 
+// TestIngressDomainsAdminSeesCreatedBy: the Admin who manages ingress still reads who registered each domain (A-04).
+func TestIngressDomainsAdminSeesCreatedBy(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	rec := f.credCall(t, f.adminA, http.MethodGet, ingressPath(f.envA), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	var list struct {
+		Items []ingressDomainResp `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 || list.Items[0].CreatedBy != "id-ing-admin-a" {
+		t.Errorf("the Admin sees %+v, want createdBy id-ing-admin-a", list.Items)
+	}
+}
+
+// TestIngressDomainsReadableByViewers pins D-14: the list is an ingress.read route, so a Viewer and an Operator of the environment
+// read the domains and reserved names (the Expose panel suggests them to the people who edit stacks), and the token is never in the body.
+func TestIngressDomainsReadableByViewers(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	viewerA := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+	d := f.register(t, f.adminA, f.envA, "apps.example.com")
+	if _, _, err := f.ingressStore.Reserve(context.Background(), ingressstore.ReserveInput{EnvID: f.envA, DomainID: d.ID, Hostname: "admin.apps.example.com", Actor: "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, u := range map[string]credentialUser{"a viewer": viewerA, "an operator": f.operatorA} {
+		rec := f.credCall(t, u, http.MethodGet, ingressPath(f.envA), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s lists: %d %s, want 200", name, rec.Code, rec.Body)
+		}
+		var list struct {
+			Items []ingressDomainResp `json:"items"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+			t.Fatal(err)
+		}
+		if len(list.Items) != 1 || list.Items[0].Suffix != "apps.example.com" || !list.Items[0].TokenSet ||
+			len(list.Items[0].Reserved) != 1 || list.Items[0].Reserved[0] != "admin.apps.example.com" {
+			t.Errorf("%s sees %+v, want the domain with its reserved name", name, list.Items)
+		}
+		if strings.Contains(rec.Body.String(), ingressToken) {
+			t.Errorf("%s: the list holds the DNS token: %s", name, rec.Body)
+		}
+		// A-04: who registered the domain is for the people who manage ingress, so a reader's rows carry it blank.
+		if list.Items[0].CreatedBy != "" || strings.Contains(rec.Body.String(), "id-ing-admin-a") {
+			t.Errorf("%s sees createdBy %q, want it blank: %s", name, list.Items[0].CreatedBy, rec.Body)
+		}
+
+		for _, c := range []struct{ method, path, body string }{
+			{http.MethodPost, ingressPath(f.envA), ingressCreateBody("new.example.com", "", ingressToken)},
+			{http.MethodPut, ingressPath(f.envA, "/", d.ID, "/token"), `{"token":"` + ingressNextToken + `"}`},
+			{http.MethodDelete, ingressPath(f.envA, "/", d.ID), ""},
+			{http.MethodPost, ingressPath(f.envA, "/", d.ID, "/reserved"), `{"hostname":"new.apps.example.com"}`},
+		} {
+			if w := f.credCall(t, u, c.method, c.path, c.body); w.Code != http.StatusForbidden {
+				t.Errorf("%s: %s %s = %d %s, want 403", name, c.method, c.path, w.Code, w.Body)
+			}
+		}
+	}
+}
+
 func TestIngressDomainTokenReplaceKeepsTheDomainAndItsClaims(t *testing.T) {
 	t.Parallel()
 	f := newIngressFix(t)
@@ -469,7 +536,6 @@ func TestIngressDomainCreateNeedsTheAdminOfTheEnvironment(t *testing.T) {
 
 	for name, u := range map[string]credentialUser{"an operator": f.operatorA, "an admin of another environment": f.adminB} {
 		for _, c := range []struct{ method, path, body string }{
-			{http.MethodGet, ingressPath(f.envA), ""},
 			{http.MethodPost, ingressPath(f.envA), ingressCreateBody("new.example.com", "", ingressToken)},
 			{http.MethodPut, ingressPath(f.envA, "/", d.ID, "/token"), `{"token":"` + ingressNextToken + `"}`},
 		} {
@@ -482,8 +548,11 @@ func TestIngressDomainCreateNeedsTheAdminOfTheEnvironment(t *testing.T) {
 	if views, err := f.ingressStore.Domains(context.Background(), f.envA); err != nil || len(views) != 1 {
 		t.Errorf("domains = %+v, %v, want the one registered by the admin", views, err)
 	}
-	if rec := f.credCall(t, f.operatorA, http.MethodGet, ingressPath(f.envA), ""); rec.Code != http.StatusForbidden {
-		t.Errorf("operator list: %d, want 403", rec.Code)
+	if rec := f.credCall(t, f.adminB, http.MethodGet, ingressPath(f.envA), ""); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+		t.Errorf("list as an admin of another environment: %d, want 403 or 404", rec.Code)
+	}
+	if rec := f.credCall(t, f.operatorA, http.MethodGet, ingressPath(f.envA), ""); rec.Code != http.StatusOK {
+		t.Errorf("operator list: %d, want 200 (the list is ingress.read since Phase 27)", rec.Code)
 	}
 }
 

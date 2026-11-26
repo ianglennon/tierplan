@@ -402,6 +402,8 @@ func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func
 	for i, do := range steps {
 		item := run.items[i]
 		if ctx.Err() != nil {
+			// The row is written before the items that end the job, so a reader that sees the job over finds it.
+			s.auditJobFailed(ctx, actor, audit.ActionIngressDisabled, info.ID, item, jobs.CodeCancelled)
 			run.stop(item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 			return
@@ -409,6 +411,7 @@ func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func
 		r.Update(item, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 		if err := do(ctx); err != nil {
 			if ctx.Err() != nil {
+				s.auditJobFailed(ctx, actor, audit.ActionIngressDisabled, info.ID, item, jobs.CodeCancelled)
 				run.stop(item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 				run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
 				return
@@ -419,6 +422,7 @@ func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func
 				code, detail = se.code, se.detail
 			}
 			s.log().Warn("an ingress disable step failed", "environment", info.ID, "step", item, "code", code, "error", err)
+			s.auditJobFailed(ctx, actor, audit.ActionIngressDisabled, info.ID, item, code)
 			run.stop(item, jobs.ItemFailed, code, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
 			return

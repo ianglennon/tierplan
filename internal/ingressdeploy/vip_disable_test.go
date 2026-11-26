@@ -14,6 +14,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/envs"
@@ -111,11 +112,11 @@ func (f *vipDisableFix) keepalivedSecrets() []string {
 // auditDetails are the details of the only audit row of an action.
 func (f *vipDisableFix) auditDetails(action string) map[string]string {
 	f.t.Helper()
-	if got := f.auditCount(action); got != 1 {
-		f.t.Fatalf("%s audit rows = %d, want 1", action, got)
+	if got := f.auditCountResult(action, audit.ResultSuccess); got != 1 {
+		f.t.Fatalf("%s audit success rows = %d, want 1", action, got)
 	}
 	var raw string
-	if err := f.st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = ?`, action).Scan(&raw); err != nil {
+	if err := f.st.Read.QueryRow(`SELECT details FROM audit_log WHERE action = ? AND result = ?`, action, string(audit.ResultSuccess)).Scan(&raw); err != nil {
 		f.t.Fatal(err)
 	}
 	var d map[string]string
@@ -249,7 +250,7 @@ func wantSwitchOffLeft(t *testing.T, f *vipDisableFix, job jobs.Job, failed stri
 	if err != nil || row.Enabled {
 		t.Errorf("row = %+v, %v; want it kept with enabled 0 for the ensure loop to finish", row, err)
 	}
-	if got := f.auditCount("ingress.vip_disabled"); got != 0 {
+	if got := f.auditCountResult("ingress.vip_disabled", audit.ResultSuccess); got != 0 {
 		t.Errorf("a switch-off that left things behind wrote %d ingress.vip_disabled rows", got)
 	}
 	if f.svc.VIPIsDisabling(f.envID) {

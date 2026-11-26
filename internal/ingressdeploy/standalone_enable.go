@@ -125,6 +125,8 @@ func (s *Service) runStandaloneEnable(ctx context.Context, r *jobs.Reporter, rel
 	}
 	for i, st := range steps {
 		if ctx.Err() != nil {
+			// The row is written before the items that end the job, so a reader that sees the job over finds it.
+			s.auditJobFailed(ctx, actor, audit.ActionIngressEnabled, info.ID, steps[i].ids[0], jobs.CodeCancelled)
 			run.release()
 			for _, later := range steps[i:] {
 				for _, id := range later.ids {
@@ -145,9 +147,15 @@ func (s *Service) runStandaloneEnable(ctx context.Context, r *jobs.Reporter, rel
 		if errors.As(err, &se) {
 			code, detail = se.code, se.detail
 		}
+		step := st.ids[0]
+		if errors.Is(err, errSystemFailed) {
+			// The deploy ended its own items with codes of its own; the row names the step as a whole.
+			step, code = auditStepSystem, CodeEnableSystemFailed
+		}
 		s.log().Warn("an ingress enable step failed", "environment", info.ID, "step", st.ids[0], "code", code, "error", err)
 		s.noteEnableFailed(ctx, info.ID)
 		r.Output("Ingress is still off. Switch it on again to carry on from what was made, or switch it off to remove it.")
+		s.auditJobFailed(ctx, actor, audit.ActionIngressEnabled, info.ID, step, code)
 		run.release()
 		if !errors.Is(err, errSystemFailed) {
 			if detail != "" {

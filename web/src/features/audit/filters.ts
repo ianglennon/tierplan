@@ -248,6 +248,9 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "ingress.wipe_done",
   "ingress.deploy_paused",
   "ingress.deploy_resumed",
+  // The ingress pages (Phase 27).
+  "ingress.claimed",
+  "ingress.vip_moved",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

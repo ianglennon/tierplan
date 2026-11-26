@@ -12,6 +12,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
@@ -244,7 +245,7 @@ func TestEnsureVIPFinishesARemoval(t *testing.T) {
 	if _, err := f.istore.GetVIP(ctx, f.envID); !errors.Is(err, ingressstore.ErrVIPNotFound) {
 		t.Errorf("GetVIP after the pass = %v, want ErrVIPNotFound", err)
 	}
-	if n := f.auditCount("ingress.vip_disabled"); n != 1 {
+	if n := f.auditCountResult("ingress.vip_disabled", audit.ResultSuccess); n != 1 {
 		t.Errorf("ingress.vip_disabled audit rows = %d, want 1", n)
 	}
 	if st, err := f.istore.DeployState(ctx, f.envID); err != nil || !st.Enabled {

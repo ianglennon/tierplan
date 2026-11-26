@@ -5,17 +5,22 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/acme"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingressrender"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // GET /api/env/{envId}/stacks/{stackId}/routes answers what each route of a stack is doing now (plan 24-25, D-24).
@@ -30,6 +35,8 @@ type stackRoutesAnswer struct {
 		State    string `json:"state"`
 		Reason   string `json:"reason"`
 		Stopped  bool   `json:"stopped"`
+		// Conditions are the route's five conditions, the same ones the environment's route list answers.
+		Conditions []routeConditionAnswer `json:"conditions"`
 	} `json:"routes"`
 }
 
@@ -39,6 +46,8 @@ type routeSourcesFake struct {
 	bundle  ingressbundle.Bundle
 	have    bool
 	nodes   []ingresshub.Node
+	// nodesErr is the error the node read answers, when set.
+	nodesErr error
 }
 
 func (s *routeSourcesFake) Skipped(string) []ingressrender.Skipped { return s.skipped }
@@ -46,7 +55,7 @@ func (s *routeSourcesFake) Current(string) (ingressbundle.Bundle, bool) {
 	return s.bundle, s.have
 }
 func (s *routeSourcesFake) ListNodes(context.Context, string) ([]ingresshub.Node, error) {
-	return s.nodes, nil
+	return s.nodes, s.nodesErr
 }
 
 // routeStates reads the routes of the stack as the caller and returns hostname+path to state.
@@ -178,26 +187,36 @@ func TestStackRoutesRoute(t *testing.T) {
 		set   func()
 		state string
 		why   string
+		// certificate and applied are the "state/reason" the route's two bundle conditions must read, when set.
+		certificate, applied string
 	}{
-		{"no bundle yet is pending", func() { *src = routeSourcesFake{} }, "pending", ""},
+		{"no bundle yet is pending", func() { *src = routeSourcesFake{} }, "pending", "", "", ""},
 		{"a bundle no node applied is pending", func() {
 			*src = routeSourcesFake{bundle: bundle("b1", "c.apps.example.com"), have: true, nodes: []ingresshub.Node{node("")}}
-		}, "pending", ""},
+		}, "pending", "", "", ""},
 		{"every active node on the bundle is serving", func() {
 			*src = routeSourcesFake{bundle: bundle("b1", "c.apps.example.com"), have: true, nodes: []ingresshub.Node{node("b1"), {Status: "revoked", AppliedBundleID: "old"}}}
-		}, "serving", ""},
+		}, "serving", "", "", ""},
 		{"one active node behind is pending", func() {
 			*src = routeSourcesFake{bundle: bundle("b2", "c.apps.example.com"), have: true, nodes: []ingresshub.Node{node("b2"), node("b1")}}
-		}, "pending", ""},
+		}, "pending", "", "", ""},
 		{"no active node is pending", func() {
 			*src = routeSourcesFake{bundle: bundle("b1", "c.apps.example.com"), have: true}
-		}, "pending", ""},
+		}, "pending", "", "", ""},
 		{"a route left out for a certificate is waiting, with the reason", func() {
 			*src = routeSourcesFake{
 				bundle: bundle("b1"), have: true, nodes: []ingresshub.Node{node("b1")},
 				skipped: []ingressrender.Skipped{{Hostname: "c.apps.example.com", PathPrefix: "/", Reason: ingressrender.SkipCertificateNotReady}},
 			}
-		}, "waiting_certificate", "certificate_not_ready"},
+		}, "waiting_certificate", "certificate_not_ready", "", ""},
+		{"nodes that cannot be read leave the applied condition unknown, not no_nodes", func() {
+			*src = routeSourcesFake{bundle: bundle("b1", "c.apps.example.com"), have: true, nodesErr: errors.New("the hub is down")}
+		}, "pending", "", "ready/", "unknown/engine_unreadable"},
+		{"a skipped list with no bundle does not make the route wait, so the state and the conditions agree", func() {
+			*src = routeSourcesFake{
+				skipped: []ingressrender.Skipped{{Hostname: "c.apps.example.com", PathPrefix: "/", Reason: ingressrender.SkipNoCertificate}},
+			}
+		}, "pending", "", "unknown/no_bundle", "unknown/no_bundle"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,6 +227,16 @@ func TestStackRoutesRoute(t *testing.T) {
 			}
 			if got.Routes[0].State != tc.state || got.Routes[0].Reason != tc.why {
 				t.Errorf("route = %+v, want %s %q", got.Routes[0], tc.state, tc.why)
+			}
+			for code, want := range map[string]string{"certificate_ready": tc.certificate, "applied": tc.applied} {
+				if want == "" {
+					continue
+				}
+				for _, c := range got.Routes[0].Conditions {
+					if c.Code == code && c.State+"/"+c.Reason != want {
+						t.Errorf("condition %s = %s/%s, want %s", code, c.State, c.Reason, want)
+					}
+				}
 			}
 		})
 	}
@@ -312,4 +341,78 @@ func TestStackRoutesStandaloneStates(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The stack page and the Ingress page read the same state and the same conditions for the same route (plan 27-10, D-09, A-03).
+func TestStackRoutesCarryConditions(t *testing.T) {
+	t.Parallel()
+	const host = "app.apps.example.com"
+	bothAnswers := func(t *testing.T, viewer *roleCaller) (stackRoutesAnswer, ingressRoutesAnswer) {
+		t.Helper()
+		_, stackSide := routeStates(t, viewer, "stack-shop")
+		all, _ := ingressRoutesOf(t, viewer)
+		// The list also names the reserved names of the domain; the routes are the rows of kind route.
+		envSide := ingressRoutesAnswer{Enabled: all.Enabled}
+		for _, r := range all.Routes {
+			if r.Kind == "route" {
+				envSide.Routes = append(envSide.Routes, r)
+			}
+		}
+		if len(stackSide.Routes) != 1 || len(envSide.Routes) != 1 {
+			t.Fatalf("stack answers %+v and environment answers %+v, want one route each", stackSide.Routes, envSide.Routes)
+		}
+		if a, b := stackSide.Routes[0], envSide.Routes[0]; a.State != b.State || a.Reason != b.Reason || a.Stopped != b.Stopped {
+			t.Errorf("the stack page says %s %q stopped=%v, the Ingress page says %s %q stopped=%v, want the same", a.State, a.Reason, a.Stopped, b.State, b.Reason, b.Stopped)
+		}
+		if !reflect.DeepEqual(stackSide.Routes[0].Conditions, envSide.Routes[0].Conditions) {
+			t.Errorf("conditions differ: stack page %+v, Ingress page %+v", stackSide.Routes[0].Conditions, envSide.Routes[0].Conditions)
+		}
+		return stackSide, envSide
+	}
+
+	t.Run("a service off the ingress network that runs no replica is backend not running on both pages", func(t *testing.T) {
+		t.Parallel()
+		_, _, viewer, src, _ := swarmRoutesRig(t, host, shopService(0))
+		*src = *servedBundle(host, ingresshub.Node{Status: "active", AppliedBundleID: "b1"})
+		stackSide, _ := bothAnswers(t, viewer)
+		if r := stackSide.Routes[0]; r.State != "backend_not_running" {
+			t.Fatalf("state = %q, want backend_not_running", r.State)
+		}
+		conds := stackSide.Routes[0].Conditions
+		if len(conds) != 5 {
+			t.Fatalf("conditions = %+v, want five", conds)
+		}
+		if c := conds[1]; c.Code != "network_attached" || c.State != "not_ready" || c.Reason != "not_attached" || c.Message == "" {
+			t.Errorf("network_attached = %+v, want not_ready not_attached with a message", c)
+		}
+		if c := conds[2]; c.Code != "backend_healthy" || c.State != "not_ready" || c.Reason != "no_running_task" || c.Message == "" {
+			t.Errorf("backend_healthy = %+v, want not_ready no_running_task with a message", c)
+		}
+	})
+
+	t.Run("a certificate that is not ready carries its own failure hint on both pages", func(t *testing.T) {
+		t.Parallel()
+		f, e, viewer, src, seed := swarmRoutesRig(t, host, shopService(1, ingress.NetworkName))
+		cert, _, err := f.ingressCertStore.CreatePending(testsupport.Context(t), ingresscert.PendingInput{
+			Hostname: host, EnvID: e.ID, DomainID: seed.domainID, Issuer: string(ingress.IssuerStaging), CreatedBy: "admin", NotRequested: true,
+		}, nil)
+		if err != nil {
+			t.Fatalf("queue a certificate: %v", err)
+		}
+		if _, err := f.st.Write.Exec(`UPDATE ingress_certs SET last_error_class = ? WHERE id = ?`, acme.ClassCAAForbids, cert.ID); err != nil {
+			t.Fatal(err)
+		}
+		b := servedBundle(host, ingresshub.Node{Status: "active", AppliedBundleID: "b1"})
+		b.bundle.Manifest.Routes = nil
+		b.skipped = []ingressrender.Skipped{{Hostname: host, PathPrefix: "/", Reason: ingressrender.SkipCertificateNotReady}}
+		*src = *b
+		stackSide, _ := bothAnswers(t, viewer)
+		if r := stackSide.Routes[0]; r.State != "waiting_certificate" || r.Reason != "certificate_not_ready" {
+			t.Fatalf("route = %+v, want waiting_certificate certificate_not_ready", r)
+		}
+		c := stackSide.Routes[0].Conditions[3]
+		if c.Code != "certificate_ready" || c.State != "not_ready" || c.Reason != "certificate_not_ready" || c.Message != ingresscert.FailureHint(acme.ClassCAAForbids) {
+			t.Errorf("certificate_ready = %+v, want not_ready with the CAA hint %q", c, ingresscert.FailureHint(acme.ClassCAAForbids))
+		}
+	})
 }

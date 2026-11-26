@@ -1,0 +1,594 @@
+{
+  "ingressPage": {
+    "page": {
+      "title": "Ingress",
+      "description": "Hostnames this environment serves, their certificates, and the nodes that serve them."
+    },
+    "tabs": {
+      "label": "Ingress sections",
+      "routes": "Routes",
+      "certificates": "Certificates",
+      "nodes": "Nodes",
+      "domains": "Domains",
+      "settings": "Settings"
+    },
+    "routes": {
+      "label": "Routes",
+      "loading": "Loading routes",
+      "error": "Couldn't read the routes.",
+      "retry": "Retry reading routes",
+      "columns": {
+        "route": "Route",
+        "stack": "Stack",
+        "status": "Status",
+        "conditions": "Conditions",
+        "certificate": "Certificate"
+      },
+      "target": "{{scheme}} to port {{port}}",
+      "targetStrip": "{{scheme}} to port {{port}}, path prefix removed",
+      "ready": "{{ready}} of 5 ready",
+      "none": "—",
+      "show": "Show conditions for {{host}}",
+      "conditionsList": "Conditions of {{host}}",
+      "filter": "Filter routes",
+      "filterPlaceholder": "Filter by hostname, stack or service",
+      "view": {
+        "label": "Which routes to show",
+        "all": "All",
+        "attention": "Needs attention"
+      },
+      "summary_one": "{{count}} route: {{serving}} serving, {{attention}} need attention, {{stopped}} stopped.",
+      "summary_other": "{{count}} routes: {{serving}} serving, {{attention}} need attention, {{stopped}} stopped.",
+      "claim": {
+        "badge": "Claim only",
+        "status": "No route",
+        "detail": "A stack holds this name but none of its services serves it."
+      },
+      "reserved": {
+        "badge": "Reserved",
+        "status": "Reserved",
+        "detail": "Held back on the <domains>Domains tab</domains>. No stack can claim it."
+      },
+      "empty": {
+        "title": "No routes yet",
+        "body": "A route appears when a stack has tierplan.ingress.* labels and is deployed. The Expose panel in the stack editor writes them."
+      },
+      "showAll": "Show all {{count}}",
+      "showFewer": "Show fewer",
+      "noMatch": "No route matches “{{filter}}”.",
+      "clearFilter": "Clear filter",
+      "noAttention": "No route needs attention.",
+      "proxyLogs": "View proxy logs",
+      "viewCertificate": "View certificate"
+    },
+    "conditions": {
+      "state": {
+        "ready": "Ready",
+        "not_ready": "Not ready",
+        "unknown": "Unknown"
+      },
+      "name": {
+        "claim_held": "Claim held",
+        "network_attached": "Network attached",
+        "backend_healthy": "Backend healthy",
+        "certificate_ready": "Certificate ready",
+        "applied": "Applied on nodes"
+      }
+    },
+    "reasons": {
+      "not_attached": "{{service}} isn't on the ingress network. Redeploy the stack to attach it.",
+      "stack_stopped": "The stack is stopped. Its hostnames stay reserved for it.",
+      "no_running_task": "{{service}} has no running task.",
+      "no_certificate": "No certificate has been asked for yet.",
+      "not_in_bundle": "The proxies' settings don't include this route yet.",
+      "no_nodes": "No node is enrolled to serve it.",
+      "nodes_behind": "On {{applied}} of {{total}} nodes. The rest are still updating.",
+      "ingress_off": "Ingress is off.",
+      "engine_unreadable": "TierPlan couldn't read this environment just now.",
+      "no_bundle": "Ingress hasn't published its settings yet.",
+      "appliedReady": "On {{applied}} of {{total}} nodes."
+    },
+    "off": {
+      "title": "Ingress is off",
+      "body": "Ingress serves your stacks' hostnames over HTTPS, with a certificate for each name. It is off for this environment, so no route is served.",
+      "reader": "Ask an Admin to turn it on.",
+      "turnOn": "Turn on ingress"
+    },
+    "alerts": {
+      "unreachable": "TierPlan can't reach this environment just now. What you see may be out of date.",
+      "paused": "Ingress is paused after a restore. Nothing is written to the swarm until an Admin resumes it.",
+      "resume": "Resume ingress",
+      "resumeFailed": "Couldn't resume ingress. Nothing was changed."
+    },
+    "certs": {
+      "label": "Certificates",
+      "loading": "Loading certificates",
+      "error": "Couldn't read the certificates.",
+      "retry": "Retry reading certificates",
+      "columns": {
+        "hostname": "Hostname",
+        "state": "State",
+        "issued": "Issued",
+        "expires": "Expires",
+        "renewal": "Next renewal",
+        "error": "Last error",
+        "actions": "Actions"
+      },
+      "staging": "Staging",
+      "source": {
+        "production": "Let's Encrypt, production",
+        "staging": "Let's Encrypt, staging",
+        "upload": "Uploaded"
+      },
+      "notServed": "Not served yet.",
+      "stagingNeverServed": "Staging certificates are never served.",
+      "nextAttempt": "Next attempt <time/>",
+      "waitingUntil": "Waiting for the authority until <time/>",
+      "none": "—",
+      "renewBasis": "How the renewal time is chosen",
+      "expiredState": "Expired",
+      "renewalDue": "Renewal due",
+      "showDetails": "Show details",
+      "hideDetails": "Hide details",
+      "filter": "Filter certificates",
+      "filterPlaceholder": "Filter by hostname",
+      "noMatch": "No certificate matches “{{filter}}”.",
+      "clearFilter": "Clear filter",
+      "showAll": "Show all {{count}}",
+      "showFewer": "Show fewer",
+      "empty": {
+        "title": "No certificates yet",
+        "body": "A certificate is ordered when a stack claims a hostname under a registered domain, or when you request one."
+      },
+      "budget": {
+        "label": "Certificate budget",
+        "line": "{{domain}}: {{used}} of {{cap}} new certificates used in the last 7 days.",
+        "lineStaging": "{{domain}} (staging): {{used}} of {{cap}} new certificates used in the last 7 days.",
+        "noHeadroom": "TierPlan orders no more until a slot opens <time/>.",
+        "shared": "Other names under {{domain}} share this budget."
+      },
+      "showing": "Showing {{host}}. Show all",
+      "request": {
+        "button": "Request certificate",
+        "title": "Request a certificate",
+        "hostname": "Hostname",
+        "helper": "Under a domain registered on the Domains tab. TierPlan orders it before a stack claims the name.",
+        "submit": "Request certificate",
+        "discard": "Discard request",
+        "done": "Requested a certificate for {{host}}."
+      },
+      "menu": {
+        "actionsFor": "Actions for {{host}}",
+        "view": "View details",
+        "retry": "Retry now",
+        "upload": "Upload certificate…",
+        "switch": "Switch back to Let's Encrypt…"
+      },
+      "retryDone": "Retrying {{host}}.",
+      "upload": {
+        "title": "Upload a certificate for {{host}}",
+        "chain": "Certificate chain (PEM)",
+        "key": "Private key (PEM)",
+        "helper": "TierPlan stores the key sealed and never shows it again.",
+        "submit": "Upload certificate",
+        "discard": "Discard upload",
+        "done": "Uploaded a certificate for {{host}}."
+      },
+      "switch": {
+        "title": "Switch {{host}} back to Let's Encrypt?",
+        "body": "TierPlan orders a certificate from Let's Encrypt for this name. The uploaded certificate keeps serving until the new one is ready or it expires.",
+        "keep": "Keep uploaded certificate",
+        "confirm": "Switch to Let's Encrypt",
+        "done": "Ordering a Let's Encrypt certificate for {{host}}."
+      },
+      "sheet": {
+        "title": "Certificate details",
+        "source": "Source",
+        "sourceAcme": "Let's Encrypt",
+        "issuer": "Issuer",
+        "issuerProduction": "Production",
+        "issuerStaging": "Staging",
+        "state": "State",
+        "ready": "Ready",
+        "yes": "Yes",
+        "no": "No",
+        "issued": "Issued",
+        "expires": "Expires",
+        "renewal": "Next renewal",
+        "failures": "Consecutive failures",
+        "nextAttempt": "Next attempt",
+        "waitingUntil": "Waiting until",
+        "requested": "Requested",
+        "requestedBy": "by {{user}}",
+        "unreferenced": "Unreferenced since",
+        "stopped": "Stopped reason",
+        "retired": "Retired",
+        "retiredReason": "Retired because",
+        "lastError": "Last error"
+      }
+    },
+    "nodes": {
+      "label": "Ingress nodes",
+      "loading": "Loading nodes",
+      "error": "Couldn't read the nodes.",
+      "retry": "Retry reading nodes",
+      "empty": {
+        "title": "No nodes enrolled yet",
+        "body": "A node appears here when its ingress proxy connects. If none does, check the proxy service on the Swarm page."
+      },
+      "columns": {
+        "node": "Node",
+        "enrolment": "Enrolment",
+        "supervisor": "Supervisor",
+        "health": "Proxy health",
+        "bundle": "Bundle",
+        "lastSeen": "Last seen",
+        "actions": "Actions",
+        "vip": "Virtual IP"
+      },
+      "enrolled": "Enrolled <time/>",
+      "never": "Never",
+      "enrolment": {
+        "connected": "Connected",
+        "notConnected": "Not connected",
+        "revoked": "Revoked"
+      },
+      "revokedAt": "Revoked <time/>",
+      "tokenMounted": "The join token it held may still be mounted.",
+      "incompatible": "Can't apply this server's settings",
+      "health": {
+        "ok": "Healthy",
+        "unhealthy": "Unhealthy",
+        "none": "Not reported"
+      },
+      "sync": {
+        "current": "Current",
+        "pending": "Updating",
+        "incompatible": "Can't apply",
+        "unknown": "Unknown"
+      },
+      "applied": "Applied {{id}}",
+      "appliedNone": "Applied none",
+      "currentBundle": "Current {{id}}",
+      "refused": "Refused {{id}}: {{reason}}",
+      "revoke": {
+        "button": "Revoke",
+        "buttonFor": "Revoke {{name}}",
+        "title": "Revoke {{name}}?",
+        "body": "This node stops serving routes now and its key is refused. It can't enrol again with the join token it holds, unless you allow that below.",
+        "reason": "Reason",
+        "reasonHelper": "Shown in the node table and the audit log.",
+        "allowReenrol": "Let this host enrol again with the join token it still holds",
+        "keep": "Keep node",
+        "confirm": "Revoke node",
+        "pending": "Revoking…",
+        "doneTitle": "Revoked {{name}}",
+        "joinToken": "Go to the join token",
+        "doneBody": "Rotate the join token. It is still mounted in that node's container.",
+        "held": "This node may still hold the keys for: <names/>. Request new certificates for them.",
+        "close": "Close details"
+      },
+      "vip": {
+        "title": "Virtual IP",
+        "loading": "Loading the virtual IP",
+        "error": "Couldn't read the virtual IP.",
+        "retry": "Retry reading the virtual IP",
+        "off": "The virtual IP is off. Turn it on in Settings.",
+        "offLinked": "The virtual IP is off. Turn it on in <settings>Settings</settings>.",
+        "holder": {
+          "one": "Held by {{node}}",
+          "none": "No node holds the address",
+          "many": "More than one node holds the address",
+          "since": "Since <time/>"
+        },
+        "address": "Address",
+        "routerId": "Router ID",
+        "routerDerived": "chosen by TierPlan",
+        "keyGeneration": "Key generation",
+        "lastCheck": "Last check",
+        "lastCheckFailed": "Failed <time/>: {{error}}",
+        "lastCheckNever": "Not run yet",
+        "foreignRouter": {
+          "title": "Another router uses this router ID"
+        },
+        "clock": {
+          "title": "A node's clock is out of step",
+          "body": "{{nodes}} are too far from the others. The virtual IP rejects adverts more than {{window}} s old, so the nodes may stop hearing each other. Fix the clock on those nodes."
+        },
+        "managers": {
+          "label": "Managers",
+          "manager": "Manager",
+          "privileged": "Privileged services",
+          "note": "Note",
+          "allows": "Allowed",
+          "refuses": "Refused",
+          "unknown": "Unknown",
+          "localSocket": "Reached through TierPlan's own Docker socket, so it counts as allowed.",
+          "setting": "Set <setting/> on this manager's agent.",
+          "unreadable": "TierPlan couldn't read the managers just now."
+        },
+        "state": {
+          "MASTER": "Holds the address",
+          "BACKUP": "Standby",
+          "FAULT": "Fault",
+          "STOP": "Stopped",
+          "none": "Not reporting"
+        },
+        "notCandidate": "—",
+        "lastCheckDone": "<time/>",
+        "lastCheckFailedNoTime": "Failed: {{error}}"
+      },
+      "moves": {
+        "title": "Address moves",
+        "label": "Address moves",
+        "loading": "Loading the address moves",
+        "error": "Couldn't read the address moves.",
+        "retry": "Retry reading the address moves",
+        "columns": {
+          "when": "When",
+          "move": "Move",
+          "why": "Why"
+        },
+        "move": "{{from}} to {{to}}",
+        "noNode": "no node",
+        "more": "Show more",
+        "empty": "The address hasn't moved.",
+        "reason": {
+          "holder_failed": "The previous holder stopped answering.",
+          "probe_failing": "The previous holder's proxy stopped answering.",
+          "drain_handoff": "The previous holder was drained.",
+          "disabled": "The virtual IP was turned off.",
+          "unknown": "TierPlan couldn't tell why."
+        }
+      }
+    },
+    "domains": {
+      "label": "Domains",
+      "loading": "Loading domains",
+      "error": "Couldn't read the domains.",
+      "retry": "Retry reading domains",
+      "offLine": "Domains can be registered before ingress is on.",
+      "columns": {
+        "domain": "Domain",
+        "issuer": "Issuer",
+        "provider": "DNS provider",
+        "token": "Token",
+        "certificates": "Certificates",
+        "actions": "Actions"
+      },
+      "issuer": {
+        "production": "Production",
+        "staging": "Staging"
+      },
+      "provider": {
+        "cloudflare": "Cloudflare"
+      },
+      "token": {
+        "saved": "Saved",
+        "none": "No token saved"
+      },
+      "show": "Show reserved names for {{suffix}}",
+      "reserved": {
+        "title": "Reserved names",
+        "none": "Nothing is reserved.",
+        "release": "Release {{name}}",
+        "field": "Reserve a name",
+        "helper": "A hostname under {{suffix}}. No stack can claim it.",
+        "submit": "Reserve hostname"
+      },
+      "empty": {
+        "title": "No domains yet",
+        "body": "Register a domain to let stacks in this environment serve hostnames under it. TierPlan needs a DNS token to prove it owns the name."
+      },
+      "menu": {
+        "actionsFor": "Actions for {{suffix}}",
+        "replaceToken": "Replace token…",
+        "changeIssuer": "Change issuer…",
+        "delete": "Delete domain…"
+      },
+      "add": {
+        "button": "Add domain",
+        "title": "Add domain",
+        "domain": "Domain",
+        "domainHelper": "A suffix such as apps.example.com. Hostnames must be below it.",
+        "issuer": "Certificates from",
+        "production": "Let's Encrypt production",
+        "staging": "Let's Encrypt staging",
+        "stagingHelper": "Staging certificates aren't trusted by browsers and TierPlan never serves them.",
+        "token": "DNS token",
+        "tokenHelper": "TierPlan tests the token before it saves the domain. It is stored sealed and never shown again.",
+        "submit": "Test and add domain",
+        "discard": "Discard domain",
+        "done": "Added {{suffix}}."
+      },
+      "changeIssuer": {
+        "title": "Change the issuer of {{suffix}}",
+        "field": "Change to",
+        "placeholder": "Choose a Let's Encrypt directory",
+        "current": "{{name}} (current)",
+        "loading": "Reading what the change would do",
+        "paragraph": "Certificates under {{suffix}} that came from the other Let's Encrypt directory are retired and ordered again from {{issuer}}.",
+        "count_one": "{{count}} certificate will be ordered again.",
+        "count_other": "{{count}} certificates will be ordered again.",
+        "uploads": "These uploaded certificates are left alone:",
+        "submit": "Change issuer",
+        "discard": "Discard change",
+        "done": "{{suffix}} now orders its certificates from {{issuer}}."
+      },
+      "replaceToken": {
+        "title": "Replace the DNS token for {{suffix}}",
+        "field": "New DNS token",
+        "helper": "TierPlan tests the new token before it replaces the saved one. It is stored sealed and never shown again.",
+        "submit": "Test and replace token",
+        "discard": "Discard token",
+        "done": "Replaced the DNS token for {{suffix}}."
+      },
+      "delete": {
+        "title": "Delete {{suffix}}?",
+        "body_one": "Its {{count}} certificate stops renewing and expires. Hostnames under it can't be claimed any more.",
+        "body_other": "Its {{count}} certificates stop renewing and expire. Hostnames under it can't be claimed any more.",
+        "inUse": "Stacks still use this domain",
+        "submit": "Delete domain",
+        "keep": "Keep domain",
+        "done": "Deleted {{suffix}}."
+      }
+    },
+    "settings": {
+      "ingress": {
+        "title": "Ingress",
+        "on": "On",
+        "off": "Off",
+        "enableFailed": "Turning on failed",
+        "disablingIncomplete": "Turning off didn't finish",
+        "enableFailedBody": "Turning ingress on failed. The objects it made are still in the swarm. Turn it on again to carry on, or off to remove them.",
+        "disablingIncompleteBody": "Turning ingress off didn't finish. Something is left in the swarm. Turn it off again to remove it.",
+        "pendingWipes_one": "{{count}} certificate cache volume is still to be wiped on a node TierPlan couldn't reach.",
+        "pendingWipes_other": "{{count}} certificate cache volumes are still to be wiped on nodes TierPlan couldn't reach.",
+        "redeploy_one": "{{count}} stack needs a redeploy to join the ingress network.",
+        "redeploy_other": "{{count}} stacks need a redeploy to join the ingress network.",
+        "showProgress": "Show progress",
+        "ready": "{{ready}} of {{expected}} proxy nodes are ready.",
+        "offBody": "Ingress serves your stacks' hostnames over HTTPS on this environment, with a certificate for each name.",
+        "turnOn": "Turn on ingress",
+        "turnOff": "Turn off ingress",
+        "error": "Couldn't read the ingress status.",
+        "retry": "Retry reading the ingress status"
+      },
+      "vip": {
+        "title": "Virtual IP",
+        "on": "On",
+        "off": "Off",
+        "offBody": "A virtual IP is one address that always points at a working proxy. It moves to another node if the one holding it fails.",
+        "turnOn": "Turn on virtual IP",
+        "change": "Change address or router ID",
+        "turnOff": "Turn off virtual IP",
+        "needsIngress": "Turn ingress on first. The virtual IP points at the proxies.",
+        "seeNodes": "See who holds it on the Nodes tab.",
+        "error": "Couldn't read the virtual IP.",
+        "retry": "Retry reading the virtual IP",
+        "form": {
+          "address": "Address",
+          "addressHelper": "The address with its prefix length. It must be unused and inside the network of every node.",
+          "routerId": "Router ID",
+          "routerIdHelper": "Leave empty and TierPlan chooses one. Change it if another router on the network uses the same ID."
+        }
+      },
+      "accessLog": {
+        "title": "Proxy access log",
+        "on": "On",
+        "off": "Off",
+        "switch": "Write the proxy's access log",
+        "helper": "Records each request, including the client's address and the path asked for. Read it in the proxy's logs.",
+        "toastOn": "Access log on.",
+        "toastOff": "Access log off."
+      },
+      "joinToken": {
+        "title": "Join token",
+        "active": "Active, made <time/>",
+        "activeBy": "Active, made <time/> by {{user}}",
+        "disabled": "Disabled",
+        "none": "No token has been made yet",
+        "error": "Couldn't read the join token.",
+        "retry": "Retry reading the join token",
+        "label": "the join token",
+        "once": "Copy it now. It isn't shown again.",
+        "rotate": {
+          "button": "Rotate token",
+          "title": "Rotate the join token?",
+          "body": "Nodes that are enrolled keep working. A node that enrols later needs the new token. The old one stops working at once.",
+          "confirm": "Rotate token",
+          "dismiss": "Keep current token",
+          "doneTitle": "The join token is rotated"
+        },
+        "disable": {
+          "button": "Disable token",
+          "title": "Disable the join token?",
+          "body": "No further node can enrol until you make a new one. Enrolled nodes keep working.",
+          "confirm": "Disable token",
+          "dismiss": "Keep token active"
+        },
+        "make": {
+          "button": "Make a new token",
+          "title": "Make a new join token?",
+          "body": "A node that enrols later needs this token. Enrolled nodes keep working.",
+          "confirm": "Make a new token",
+          "dismiss": "Keep token disabled",
+          "doneTitle": "The join token is made"
+        }
+      }
+    },
+    "review": {
+      "checking": "Checking…",
+      "blocked": "This can't go ahead",
+      "redeploy": {
+        "title": "Stacks to redeploy",
+        "more": "and {{n}} more",
+        "note": "Redeploy them after this finishes so they join the ingress network."
+      },
+      "unreachable": "These nodes aren't connected now. Their certificate cache volume is wiped when they connect: {{nodes}}.",
+      "closeDetails": "Close details",
+      "close": "Close",
+      "stepState": {
+        "waiting": "Waiting",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "skipped": "Not run",
+        "cancelled": "Cancelled"
+      },
+      "log": "What it did",
+      "jobFailed": "It didn't finish.",
+      "jobUnreadable": "TierPlan can't read this job any more. Check the page again for where ingress stands.",
+      "enable": {
+        "title": "Turn on ingress?",
+        "body": "TierPlan makes a join token, the ingress network and a proxy on each node. Stacks and their labels are not changed.",
+        "confirm": "Turn on ingress",
+        "dismiss": "Keep ingress off",
+        "progress": "Turning ingress on…",
+        "done": "Ingress is on.",
+        "failedHint": "Nothing is lost. Turn it on again to carry on, or off to remove what was made."
+      },
+      "disable": {
+        "title": "Turn off ingress?",
+        "body": "Routes stop being served on this environment. Stacks and their labels are not changed.",
+        "confirm": "Turn off ingress",
+        "dismiss": "Keep ingress on",
+        "progress": "Turning ingress off…",
+        "done": "Ingress is off.",
+        "failedHint": "Nothing is lost. Turn it off again to remove what is left, or on to carry on."
+      },
+      "check": "Check address",
+      "vip": {
+        "warningTitle": "Read this before you turn it on",
+        "warningText": "The virtual IP needs `TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` on every manager's agent. That setting lets TierPlan run privileged, host-network services on every node of this swarm, so a compromised TierPlan could take over every node. VRRP authentication only keeps honest neighbours apart; anything on this network segment can still contend for the address."
+      },
+      "vipEnable": {
+        "title": "Turn on virtual IP?",
+        "body": "Give the address the nodes will answer on. TierPlan checks it before anything is made.",
+        "confirm": "Turn on virtual IP",
+        "dismiss": "Keep virtual IP off",
+        "progress": "Turning virtual IP on…",
+        "done": "Virtual IP is on.",
+        "failedHint": "Nothing is lost. Turn it on again to carry on, or off to remove what was made."
+      },
+      "vipChange": {
+        "title": "Change virtual IP?",
+        "body": "Change the address, the router ID or both. TierPlan checks them and says how the change is made before anything is touched.",
+        "confirm": "Change virtual IP",
+        "dismiss": "Keep current address",
+        "progress": "Changing virtual IP…",
+        "done": "Virtual IP is changed.",
+        "failedHint": "Nothing is lost. Change it again to carry on, or turn the virtual IP off to remove what was made."
+      },
+      "vipDisable": {
+        "title": "Turn off virtual IP?",
+        "body": "Nodes stop answering on {{address}}. Ingress keeps serving on each node's own address.",
+        "confirm": "Turn off virtual IP",
+        "dismiss": "Keep virtual IP on",
+        "progress": "Turning virtual IP off…",
+        "done": "Virtual IP is off.",
+        "failedHint": "Nothing is lost. Turn it off again to remove what is left."
+      }
+    }
+  }
+}

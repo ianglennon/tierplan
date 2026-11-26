@@ -6,8 +6,10 @@ package api
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -277,30 +279,150 @@ func claimActor(actor string) audit.Actor {
 	return audit.Actor{Type: audit.ActorUser, ID: actor, Name: actor}
 }
 
-// claimHook records one audit row of a claim write in the write's own transaction. A nil Audit writes none.
-func (o ingressOps) claimHook(action, envID, stackID string, actor audit.Actor) ingressstore.ClaimHook {
+// claimHostnamesShown is how many hostnames a claim audit row lists before it says "and N more".
+const claimHostnamesShown = 10
+
+// hostnameList is the hostnames detail of a claim audit row: the first ten, in the order given (sorted by the caller),
+// then " and N more" when there are more. The row's count detail is the full number.
+func hostnameList(names []string) string {
+	if len(names) <= claimHostnamesShown {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:claimHostnamesShown], ", ") + " and " + strconv.Itoa(len(names)-claimHostnamesShown) + " more"
+}
+
+// claimDetails are the details of a claim audit row of the named stack for the hostnames.
+func claimDetails(stackName string, names []string) map[string]string {
+	return map[string]string{"stack": stackName, "hostnames": hostnameList(names), "count": strconv.Itoa(len(names))}
+}
+
+// stackNameOf is the name of the stack for the audit rows of its claims, or its ID when the name cannot be read.
+func (o ingressOps) stackNameOf(ctx context.Context, envID, stackID string) string {
+	if st, err := o.d.repo().Stack(ctx, envID, stackID); err == nil && st.Name != "" {
+		return st.Name
+	}
+	return stackID
+}
+
+// replaceHook records, in the write's own transaction, ingress.claimed for the hostnames the stack newly holds and
+// ingress.claim_replaced for the ones it let go of or whose routes changed (D-22). One write can record both. A nil
+// Audit writes none.
+func (o ingressOps) replaceHook(envID, stackID, stackName string, actor audit.Actor) ingressstore.ClaimHook {
 	if o.d.Audit == nil {
 		return nil
 	}
-	return func(ctx context.Context, tx *sql.Tx, p ingress.Plan) error {
+	return func(ctx context.Context, tx *sql.Tx, _ ingress.Plan, d ingressstore.ClaimDelta) error {
+		if len(d.Added) > 0 {
+			if err := o.d.Audit.RecordTx(ctx, tx, audit.Entry{
+				Actor: actor, Action: audit.ActionIngressClaimed, TargetType: ingressClaimTarget, TargetID: stackID, EnvID: envID,
+				Result: audit.ResultSuccess, Details: claimDetails(stackName, d.Added),
+			}); err != nil {
+				return err
+			}
+		}
+		replaced := append(slices.Clone(d.Removed), d.Changed...)
+		if len(replaced) == 0 {
+			return nil
+		}
+		slices.Sort(replaced)
 		return o.d.Audit.RecordTx(ctx, tx, audit.Entry{
-			Actor: actor, Action: action, TargetType: ingressClaimTarget, TargetID: stackID, EnvID: envID,
-			Result: audit.ResultSuccess, Details: map[string]string{"hostnames": strconv.Itoa(len(p.Claims))},
+			Actor: actor, Action: audit.ActionIngressClaimReplaced, TargetType: ingressClaimTarget, TargetID: stackID, EnvID: envID,
+			Result: audit.ResultSuccess, Details: claimDetails(stackName, replaced),
 		})
 	}
 }
 
-// ReplaceStackRoutes stores the stack's claims and audits a change as ingress.claim_replaced.
-func (o ingressOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput, actor audit.Actor) (ingress.Plan, error) {
-	if in.Hook == nil {
-		in.Hook = o.claimHook(audit.ActionIngressClaimReplaced, in.EnvID, in.StackID, actor)
+// releaseHook records ingress.claim_released with the number of hostnames the stack let go of, in the write's own
+// transaction. A nil Audit writes none.
+func (o ingressOps) releaseHook(envID, stackID, stackName string, actor audit.Actor) ingressstore.ClaimHook {
+	if o.d.Audit == nil {
+		return nil
 	}
-	return o.d.Ingress.ReplaceStackRoutes(ctx, in)
+	return func(ctx context.Context, tx *sql.Tx, _ ingress.Plan, d ingressstore.ClaimDelta) error {
+		return o.d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor: actor, Action: audit.ActionIngressClaimReleased, TargetType: ingressClaimTarget, TargetID: stackID, EnvID: envID,
+			Result: audit.ResultSuccess, Details: map[string]string{"stack": stackName, "count": strconv.Itoa(len(d.Removed))},
+		})
+	}
+}
+
+// requestedHostnames are the distinct hostnames the declarations ask for, sorted.
+func requestedHostnames(decls []ingress.Declaration) []string {
+	var out []string
+	for _, d := range decls {
+		if d.Host != "" {
+			out = append(out, d.Host)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// refusalCode is the code of the first error problem of a refused claim, else of its first problem.
+func refusalCode(e *ingressstore.RefusedError) string {
+	for _, p := range e.Problems {
+		if p.Severity == ingress.SeverityError {
+			return p.Code
+		}
+	}
+	if len(e.Problems) > 0 {
+		return e.Problems[0].Code
+	}
+	return ""
+}
+
+// recordRefusedClaim writes the failure row of a claim the store refused (A-01): the action the write would have
+// recorded, with the stable problem code as its reason and the stack's own requested hostnames. It never carries a
+// problem's message, which may name another environment's stack. It is written outside the rolled-back transaction; a
+// write that fails is logged, never allowed to change the refusal.
+func (o ingressOps) recordRefusedClaim(ctx context.Context, in ingressstore.ReplaceInput, stackName string, held bool, refused *ingressstore.RefusedError, actor audit.Actor) {
+	if o.d.Audit == nil {
+		return
+	}
+	action := audit.ActionIngressClaimReplaced
+	if !held {
+		action = audit.ActionIngressClaimed
+	}
+	if err := o.d.Audit.Record(ctx, audit.Entry{
+		Actor: actor, Action: action, TargetType: ingressClaimTarget, TargetID: in.StackID, EnvID: in.EnvID,
+		Result: audit.ResultFailure, Reason: refusalCode(refused), Details: claimDetails(stackName, requestedHostnames(in.Decls)),
+	}); err != nil {
+		lg := o.d.Log
+		if lg == nil {
+			lg = slog.Default()
+		}
+		lg.WarnContext(ctx, "the audit row of a refused hostname claim could not be written", "env", in.EnvID, "stack", in.StackID, "error", err)
+	}
+}
+
+// ReplaceStackRoutes stores the stack's claims and audits the change: ingress.claimed for new hostnames,
+// ingress.claim_replaced for ones let go of or changed, and a failure row of the action the write would have recorded
+// when the store refuses it.
+func (o ingressOps) ReplaceStackRoutes(ctx context.Context, in ingressstore.ReplaceInput, actor audit.Actor) (ingress.Plan, error) {
+	if o.d.Audit == nil {
+		return o.d.Ingress.ReplaceStackRoutes(ctx, in)
+	}
+	name := o.stackNameOf(ctx, in.EnvID, in.StackID)
+	if in.Hook == nil {
+		in.Hook = o.replaceHook(in.EnvID, in.StackID, name, actor)
+	}
+	// What the stack held before decides which action a refusal would have recorded. A read that fails is taken to mean
+	// it held something, so a refusal is never called a first claim on a guess.
+	held := true
+	if routes, err := o.HeldRoutes(ctx, in.EnvID, in.StackID); err == nil {
+		held = len(routes) > 0
+	}
+	plan, err := o.d.Ingress.ReplaceStackRoutes(ctx, in)
+	var refused *ingressstore.RefusedError
+	if errors.As(err, &refused) {
+		o.recordRefusedClaim(ctx, in, name, held, refused, actor)
+	}
+	return plan, err
 }
 
 // ReleaseStack lets go of the stack's claims and audits a change as ingress.claim_released.
 func (o ingressOps) ReleaseStack(ctx context.Context, envID, stackID string, actor audit.Actor) error {
-	return o.d.Ingress.ReleaseStack(ctx, envID, stackID, actor.ID, o.claimHook(audit.ActionIngressClaimReleased, envID, stackID, actor))
+	return o.d.Ingress.ReleaseStack(ctx, envID, stackID, actor.ID, o.releaseHook(envID, stackID, o.stackNameOf(ctx, envID, stackID), actor))
 }
 
 // Notify wakes the reconciler of the environment.

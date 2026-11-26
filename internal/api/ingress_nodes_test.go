@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -312,8 +313,8 @@ func TestIngressNodesPermissions(t *testing.T) {
 		if rec := f.call(t, authReq{method: c.method, path: c.path, body: c.body}); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s without a session: %d %s, want 401", c.op, rec.Code, rec.Body)
 		}
-		// An Operator of the environment may not manage ingress: 403.
-		if rec := f.credCall(t, f.operatorA, c.method, c.path, c.body); rec.Code != http.StatusForbidden {
+		// An Operator of the environment may read the nodes and the token's details (ingress.read) but not change anything: 403.
+		if rec := f.credCall(t, f.operatorA, c.method, c.path, c.body); c.method != http.MethodGet && rec.Code != http.StatusForbidden {
 			t.Errorf("%s as an Operator of the environment: %d %s, want 403", c.op, rec.Code, rec.Body)
 		}
 		// An Admin of another environment does not learn this one exists.
@@ -515,5 +516,133 @@ func TestIngressJoinTokenRotationNotEnrolled(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "tpit_") || strings.Contains(rec.Body.String(), `"token"`) {
 		t.Errorf("the refusal carries a token: %s", rec.Body)
+	}
+}
+
+// D-14 tracer: the node list and the join token's details are readable from Viewer up; the writes stay with the Admin
+// (ingress.manage) and the revoke with environments.revoke.
+func TestIngressNodesReadableByViewers(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	items := f.enrolled(t, f.adminA, f.envA, []string{nodesSwarmNodeA}, "edge-a")
+	viewer := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+
+	for who, u := range map[string]credentialUser{"a Viewer of A": viewer, "an Operator of A": f.operatorA} {
+		for _, c := range nodeCalls(f.envA, items[0].ID) {
+			rec := f.credCall(t, u, c.method, c.path, c.body)
+			if c.method == http.MethodGet {
+				if rec.Code != http.StatusOK {
+					t.Errorf("%s as %s: %d %s, want 200", c.op, who, rec.Code, rec.Body)
+				}
+				continue
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s as %s: %d %s, want 403", c.op, who, rec.Code, rec.Body)
+			}
+		}
+	}
+	// The Admin of another environment still does not learn this one exists.
+	if rec := f.credCall(t, f.adminB, http.MethodGet, nodesPath(f.envA, "nodes"), ""); rec.Code != http.StatusNotFound {
+		t.Errorf("list as an Admin of another environment: %d %s, want 404", rec.Code, rec.Body)
+	}
+	if after := f.listNodes(t, f.adminA, f.envA); after[0].Status != "active" {
+		t.Fatalf("node after the refused writes = %+v, want active", after[0])
+	}
+}
+
+// A-05: the list says which bundle the environment's nodes should hold, beside each node's applied one, and never how many
+// versions behind a node is.
+func TestIngressNodeListCarriesTheCurrentBundle(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	items := f.enrolled(t, f.adminA, f.envA, []string{nodesSwarmNodeA, nodesSwarmNodeB}, "n-current", "n-behind")
+	for _, q := range []struct{ sql, id string }{
+		{`UPDATE ingress_nodes SET applied_bundle_id = 'b-123' WHERE id = ?`, items[0].ID},
+		{`UPDATE ingress_nodes SET applied_bundle_id = 'b-001' WHERE id = ?`, items[1].ID},
+	} {
+		if _, err := f.st.Write.Exec(q.sql, q.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	viewer := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+	body := func() map[string]json.RawMessage {
+		rec := f.credCall(t, viewer, http.MethodGet, nodesPath(f.envA, "nodes"), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", rec.Code, rec.Body)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	f.ingressCurrentBundle = func(string) (string, bool) { return "b-123", true }
+	f.h = f.build(t)
+	m := body()
+	if string(m["currentBundleId"]) != `"b-123"` {
+		t.Fatalf("currentBundleId = %s, want \"b-123\"", m["currentBundleId"])
+	}
+	// Only the items and the current bundle are in the body: no count of versions behind.
+	if len(m) != 2 {
+		t.Fatalf("list body keys = %v, want items and currentBundleId only", m)
+	}
+	listed := f.listNodes(t, viewer, f.envA)
+	if listed[0].Sync != "current" || listed[1].Sync != "pending" {
+		t.Fatalf("sync = %q and %q, want current and pending", listed[0].Sync, listed[1].Sync)
+	}
+
+	// With no bundle built the field is the empty string, not absent.
+	f.ingressCurrentBundle = func(string) (string, bool) { return "", false }
+	f.h = f.build(t)
+	if got := string(body()["currentBundleId"]); got != `""` {
+		t.Fatalf("currentBundleId with no bundle = %s, want an empty string", got)
+	}
+}
+
+// A-04: which hostnames a revoked node held, why and by whom it was revoked and who made the token are for ingress.manage
+// holders; a Viewer gets the same items with those fields empty.
+func TestIngressNodeAdminFieldsOnlyForManagers(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	items := f.enrolled(t, f.adminA, f.envA, []string{nodesSwarmNodeA}, "edge-a")
+	if _, err := f.st.Write.Exec(`UPDATE ingress_nodes SET held_hostnames = ? WHERE id = ?`, `["a.example.com"]`, items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if rec := f.credCall(t, f.adminA, http.MethodPost, nodesPath(f.envA, "nodes", items[0].ID, "revoke"), `{"reason":"key leaked"}`); rec.Code != http.StatusOK {
+		t.Fatalf("revoke: %d %s", rec.Code, rec.Body)
+	}
+	viewer := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+
+	adminRow := f.listNodes(t, f.adminA, f.envA)[0]
+	if strings.Join(adminRow.HeldHostnames, ",") != "a.example.com" || adminRow.RevokeReason != "key leaked" || adminRow.RevokedBy == "" {
+		t.Fatalf("the Admin's node = %+v, want heldHostnames, revokeReason and revokedBy", adminRow)
+	}
+	viewRow := f.listNodes(t, viewer, f.envA)[0]
+	if viewRow.HeldHostnames == nil || len(viewRow.HeldHostnames) != 0 || viewRow.RevokeReason != "" || viewRow.RevokedBy != "" {
+		t.Fatalf("the Viewer's node = %+v, want those three empty (hostnames as [])", viewRow)
+	}
+	// Everything else is the same.
+	adminRow.HeldHostnames, adminRow.RevokeReason, adminRow.RevokedBy = viewRow.HeldHostnames, "", ""
+	if !reflect.DeepEqual(adminRow, viewRow) {
+		t.Fatalf("the Viewer's node differs in more than the manager fields: %+v vs %+v", viewRow, adminRow)
+	}
+	if rec := f.credCall(t, viewer, http.MethodGet, nodesPath(f.envA, "nodes"), ""); !strings.Contains(rec.Body.String(), `"heldHostnames":[]`) {
+		t.Fatalf("the Viewer's heldHostnames is not []: %s", rec.Body)
+	}
+
+	// The token's maker is the Admin's to read.
+	status := func(u credentialUser) ingressTokenStatusResp {
+		rec := f.credCall(t, u, http.MethodGet, nodesPath(f.envA, "join-token"), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("token status: %d %s", rec.Code, rec.Body)
+		}
+		return decodeBody[ingressTokenStatusResp](t, rec)
+	}
+	if st := status(f.adminA); st.CreatedBy == "" || !st.Exists {
+		t.Fatalf("the Admin's token status = %+v, want createdBy", st)
+	}
+	if st := status(viewer); st.CreatedBy != "" || !st.Exists || st.Generation != 1 || st.CreatedAt == "" {
+		t.Fatalf("the Viewer's token status = %+v, want existing generation 1 with createdAt and no createdBy", st)
 	}
 }

@@ -38,6 +38,7 @@ import { Route as AppEnvEnvIdConfigsRouteImport } from './routes/_app/env/$envId
 import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$envId/containers'
 import { Route as AppEnvEnvIdEventsRouteImport } from './routes/_app/env/$envId/events'
 import { Route as AppEnvEnvIdImagesRouteImport } from './routes/_app/env/$envId/images'
+import { Route as AppEnvEnvIdIngressRouteImport } from './routes/_app/env/$envId/ingress'
 import { Route as AppEnvEnvIdJanitorRouteImport } from './routes/_app/env/$envId/janitor'
 import { Route as AppEnvEnvIdNetworksRouteImport } from './routes/_app/env/$envId/networks'
 import { Route as AppEnvEnvIdNodesRouteImport } from './routes/_app/env/$envId/nodes'
@@ -55,6 +56,11 @@ import { Route as AppEnvEnvIdConfigsConfigIdRouteImport } from './routes/_app/en
 import { Route as AppEnvEnvIdContainersContainerIdRouteImport } from './routes/_app/env/$envId/containers_.$containerId'
 import { Route as AppEnvEnvIdGitStacksNewRouteImport } from './routes/_app/env/$envId/git-stacks.new'
 import { Route as AppEnvEnvIdImagesImageIdRouteImport } from './routes/_app/env/$envId/images_.$imageId'
+import { Route as AppEnvEnvIdIngressIndexRouteImport } from './routes/_app/env/$envId/ingress.index'
+import { Route as AppEnvEnvIdIngressCertificatesRouteImport } from './routes/_app/env/$envId/ingress.certificates'
+import { Route as AppEnvEnvIdIngressDomainsRouteImport } from './routes/_app/env/$envId/ingress.domains'
+import { Route as AppEnvEnvIdIngressNodesRouteImport } from './routes/_app/env/$envId/ingress.nodes'
+import { Route as AppEnvEnvIdIngressSettingsRouteImport } from './routes/_app/env/$envId/ingress.settings'
 import { Route as AppEnvEnvIdNetworksNetworkIdRouteImport } from './routes/_app/env/$envId/networks_.$networkId'
 import { Route as AppEnvEnvIdNodesNodeIdRouteImport } from './routes/_app/env/$envId/nodes_.$nodeId'
 import { Route as AppEnvEnvIdSecretsSecretIdRouteImport } from './routes/_app/env/$envId/secrets_.$secretId'
@@ -266,6 +272,11 @@ const AppEnvEnvIdImagesRoute = AppEnvEnvIdImagesRouteImport.update({
   path: '/images',
   getParentRoute: () => AppEnvEnvIdRoute,
 } as any)
+const AppEnvEnvIdIngressRoute = AppEnvEnvIdIngressRouteImport.update({
+  id: '/ingress',
+  path: '/ingress',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
 const AppEnvEnvIdJanitorRoute = AppEnvEnvIdJanitorRouteImport.update({
   id: '/janitor',
   path: '/janitor',
@@ -355,6 +366,34 @@ const AppEnvEnvIdImagesImageIdRoute =
     id: '/images_/$imageId',
     path: '/images/$imageId',
     getParentRoute: () => AppEnvEnvIdRoute,
+  } as any)
+const AppEnvEnvIdIngressIndexRoute = AppEnvEnvIdIngressIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppEnvEnvIdIngressRoute,
+} as any)
+const AppEnvEnvIdIngressCertificatesRoute =
+  AppEnvEnvIdIngressCertificatesRouteImport.update({
+    id: '/certificates',
+    path: '/certificates',
+    getParentRoute: () => AppEnvEnvIdIngressRoute,
+  } as any)
+const AppEnvEnvIdIngressDomainsRoute =
+  AppEnvEnvIdIngressDomainsRouteImport.update({
+    id: '/domains',
+    path: '/domains',
+    getParentRoute: () => AppEnvEnvIdIngressRoute,
+  } as any)
+const AppEnvEnvIdIngressNodesRoute = AppEnvEnvIdIngressNodesRouteImport.update({
+  id: '/nodes',
+  path: '/nodes',
+  getParentRoute: () => AppEnvEnvIdIngressRoute,
+} as any)
+const AppEnvEnvIdIngressSettingsRoute =
+  AppEnvEnvIdIngressSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppEnvEnvIdIngressRoute,
   } as any)
 const AppEnvEnvIdNetworksNetworkIdRoute =
   AppEnvEnvIdNetworksNetworkIdRouteImport.update({
@@ -779,6 +818,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
   '/env/$envId/images': typeof AppEnvEnvIdImagesRoute
+  '/env/$envId/ingress': typeof AppEnvEnvIdIngressRouteWithChildren
   '/env/$envId/janitor': typeof AppEnvEnvIdJanitorRoute
   '/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/env/$envId/nodes': typeof AppEnvEnvIdNodesRoute
@@ -797,6 +837,10 @@ export interface FileRoutesByFullPath {
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/env/$envId/images/$imageId': typeof AppEnvEnvIdImagesImageIdRouteWithChildren
+  '/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
+  '/env/$envId/ingress/domains': typeof AppEnvEnvIdIngressDomainsRoute
+  '/env/$envId/ingress/nodes': typeof AppEnvEnvIdIngressNodesRoute
+  '/env/$envId/ingress/settings': typeof AppEnvEnvIdIngressSettingsRoute
   '/env/$envId/networks/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   '/env/$envId/nodes/$nodeId': typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
   '/env/$envId/secrets/$secretId': typeof AppEnvEnvIdSecretsSecretIdRouteWithChildren
@@ -814,6 +858,7 @@ export interface FileRoutesByFullPath {
   '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/popout/$envId/services/$serviceId/logs': typeof PopoutEnvIdServicesServiceIdLogsRoute
   '/popout/$envId/stacks/$stackId/logs': typeof PopoutEnvIdStacksStackIdLogsRoute
+  '/env/$envId/ingress/': typeof AppEnvEnvIdIngressIndexRoute
   '/settings/environments/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/env/$envId/configs/$configId/inspect': typeof AppEnvEnvIdConfigsConfigIdInspectRoute
   '/env/$envId/configs/$configId/used-by': typeof AppEnvEnvIdConfigsConfigIdUsedByRoute
@@ -903,6 +948,10 @@ export interface FileRoutesByTo {
   '/settings/access': typeof AppSettingsAccessIndexRoute
   '/env/$envId/address-space/guide': typeof AppEnvEnvIdAddressSpaceGuideRoute
   '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
+  '/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
+  '/env/$envId/ingress/domains': typeof AppEnvEnvIdIngressDomainsRoute
+  '/env/$envId/ingress/nodes': typeof AppEnvEnvIdIngressNodesRoute
+  '/env/$envId/ingress/settings': typeof AppEnvEnvIdIngressSettingsRoute
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
   '/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
@@ -913,6 +962,7 @@ export interface FileRoutesByTo {
   '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/popout/$envId/services/$serviceId/logs': typeof PopoutEnvIdServicesServiceIdLogsRoute
   '/popout/$envId/stacks/$stackId/logs': typeof PopoutEnvIdStacksStackIdLogsRoute
+  '/env/$envId/ingress': typeof AppEnvEnvIdIngressIndexRoute
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/env/$envId/configs/$configId/inspect': typeof AppEnvEnvIdConfigsConfigIdInspectRoute
   '/env/$envId/configs/$configId/used-by': typeof AppEnvEnvIdConfigsConfigIdUsedByRoute
@@ -993,6 +1043,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/_app/env/$envId/events': typeof AppEnvEnvIdEventsRoute
   '/_app/env/$envId/images': typeof AppEnvEnvIdImagesRoute
+  '/_app/env/$envId/ingress': typeof AppEnvEnvIdIngressRouteWithChildren
   '/_app/env/$envId/janitor': typeof AppEnvEnvIdJanitorRoute
   '/_app/env/$envId/networks': typeof AppEnvEnvIdNetworksRoute
   '/_app/env/$envId/nodes': typeof AppEnvEnvIdNodesRoute
@@ -1011,6 +1062,10 @@ export interface FileRoutesById {
   '/_app/env/$envId/containers_/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/_app/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/_app/env/$envId/images_/$imageId': typeof AppEnvEnvIdImagesImageIdRouteWithChildren
+  '/_app/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
+  '/_app/env/$envId/ingress/domains': typeof AppEnvEnvIdIngressDomainsRoute
+  '/_app/env/$envId/ingress/nodes': typeof AppEnvEnvIdIngressNodesRoute
+  '/_app/env/$envId/ingress/settings': typeof AppEnvEnvIdIngressSettingsRoute
   '/_app/env/$envId/networks_/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   '/_app/env/$envId/nodes_/$nodeId': typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
   '/_app/env/$envId/secrets_/$secretId': typeof AppEnvEnvIdSecretsSecretIdRouteWithChildren
@@ -1028,6 +1083,7 @@ export interface FileRoutesById {
   '/popout/$envId/containers/$containerId/shell': typeof PopoutEnvIdContainersContainerIdShellRoute
   '/popout/$envId/services/$serviceId/logs': typeof PopoutEnvIdServicesServiceIdLogsRoute
   '/popout/$envId/stacks/$stackId/logs': typeof PopoutEnvIdStacksStackIdLogsRoute
+  '/_app/env/$envId/ingress/': typeof AppEnvEnvIdIngressIndexRoute
   '/_app/settings/environments_/$envId/': typeof AppSettingsEnvironmentsEnvIdIndexRoute
   '/_app/env/$envId/configs_/$configId/inspect': typeof AppEnvEnvIdConfigsConfigIdInspectRoute
   '/_app/env/$envId/configs_/$configId/used-by': typeof AppEnvEnvIdConfigsConfigIdUsedByRoute
@@ -1108,6 +1164,7 @@ export interface FileRouteTypes {
     | '/env/$envId/containers'
     | '/env/$envId/events'
     | '/env/$envId/images'
+    | '/env/$envId/ingress'
     | '/env/$envId/janitor'
     | '/env/$envId/networks'
     | '/env/$envId/nodes'
@@ -1126,6 +1183,10 @@ export interface FileRouteTypes {
     | '/env/$envId/containers/$containerId'
     | '/env/$envId/git-stacks/new'
     | '/env/$envId/images/$imageId'
+    | '/env/$envId/ingress/certificates'
+    | '/env/$envId/ingress/domains'
+    | '/env/$envId/ingress/nodes'
+    | '/env/$envId/ingress/settings'
     | '/env/$envId/networks/$networkId'
     | '/env/$envId/nodes/$nodeId'
     | '/env/$envId/secrets/$secretId'
@@ -1143,6 +1204,7 @@ export interface FileRouteTypes {
     | '/popout/$envId/containers/$containerId/shell'
     | '/popout/$envId/services/$serviceId/logs'
     | '/popout/$envId/stacks/$stackId/logs'
+    | '/env/$envId/ingress/'
     | '/settings/environments/$envId/'
     | '/env/$envId/configs/$configId/inspect'
     | '/env/$envId/configs/$configId/used-by'
@@ -1232,6 +1294,10 @@ export interface FileRouteTypes {
     | '/settings/access'
     | '/env/$envId/address-space/guide'
     | '/env/$envId/git-stacks/new'
+    | '/env/$envId/ingress/certificates'
+    | '/env/$envId/ingress/domains'
+    | '/env/$envId/ingress/nodes'
+    | '/env/$envId/ingress/settings'
     | '/env/$envId/services/new'
     | '/env/$envId/update-jobs/$jobId'
     | '/settings/access/teams/$teamId'
@@ -1242,6 +1308,7 @@ export interface FileRouteTypes {
     | '/popout/$envId/containers/$containerId/shell'
     | '/popout/$envId/services/$serviceId/logs'
     | '/popout/$envId/stacks/$stackId/logs'
+    | '/env/$envId/ingress'
     | '/settings/environments/$envId'
     | '/env/$envId/configs/$configId/inspect'
     | '/env/$envId/configs/$configId/used-by'
@@ -1321,6 +1388,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/containers'
     | '/_app/env/$envId/events'
     | '/_app/env/$envId/images'
+    | '/_app/env/$envId/ingress'
     | '/_app/env/$envId/janitor'
     | '/_app/env/$envId/networks'
     | '/_app/env/$envId/nodes'
@@ -1339,6 +1407,10 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/containers_/$containerId'
     | '/_app/env/$envId/git-stacks/new'
     | '/_app/env/$envId/images_/$imageId'
+    | '/_app/env/$envId/ingress/certificates'
+    | '/_app/env/$envId/ingress/domains'
+    | '/_app/env/$envId/ingress/nodes'
+    | '/_app/env/$envId/ingress/settings'
     | '/_app/env/$envId/networks_/$networkId'
     | '/_app/env/$envId/nodes_/$nodeId'
     | '/_app/env/$envId/secrets_/$secretId'
@@ -1356,6 +1428,7 @@ export interface FileRouteTypes {
     | '/popout/$envId/containers/$containerId/shell'
     | '/popout/$envId/services/$serviceId/logs'
     | '/popout/$envId/stacks/$stackId/logs'
+    | '/_app/env/$envId/ingress/'
     | '/_app/settings/environments_/$envId/'
     | '/_app/env/$envId/configs_/$configId/inspect'
     | '/_app/env/$envId/configs_/$configId/used-by'
@@ -1624,6 +1697,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdImagesRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
+    '/_app/env/$envId/ingress': {
+      id: '/_app/env/$envId/ingress'
+      path: '/ingress'
+      fullPath: '/env/$envId/ingress'
+      preLoaderRoute: typeof AppEnvEnvIdIngressRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
     '/_app/env/$envId/janitor': {
       id: '/_app/env/$envId/janitor'
       path: '/janitor'
@@ -1742,6 +1822,41 @@ declare module '@tanstack/react-router' {
       fullPath: '/env/$envId/images/$imageId'
       preLoaderRoute: typeof AppEnvEnvIdImagesImageIdRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/ingress/': {
+      id: '/_app/env/$envId/ingress/'
+      path: '/'
+      fullPath: '/env/$envId/ingress/'
+      preLoaderRoute: typeof AppEnvEnvIdIngressIndexRouteImport
+      parentRoute: typeof AppEnvEnvIdIngressRoute
+    }
+    '/_app/env/$envId/ingress/certificates': {
+      id: '/_app/env/$envId/ingress/certificates'
+      path: '/certificates'
+      fullPath: '/env/$envId/ingress/certificates'
+      preLoaderRoute: typeof AppEnvEnvIdIngressCertificatesRouteImport
+      parentRoute: typeof AppEnvEnvIdIngressRoute
+    }
+    '/_app/env/$envId/ingress/domains': {
+      id: '/_app/env/$envId/ingress/domains'
+      path: '/domains'
+      fullPath: '/env/$envId/ingress/domains'
+      preLoaderRoute: typeof AppEnvEnvIdIngressDomainsRouteImport
+      parentRoute: typeof AppEnvEnvIdIngressRoute
+    }
+    '/_app/env/$envId/ingress/nodes': {
+      id: '/_app/env/$envId/ingress/nodes'
+      path: '/nodes'
+      fullPath: '/env/$envId/ingress/nodes'
+      preLoaderRoute: typeof AppEnvEnvIdIngressNodesRouteImport
+      parentRoute: typeof AppEnvEnvIdIngressRoute
+    }
+    '/_app/env/$envId/ingress/settings': {
+      id: '/_app/env/$envId/ingress/settings'
+      path: '/settings'
+      fullPath: '/env/$envId/ingress/settings'
+      preLoaderRoute: typeof AppEnvEnvIdIngressSettingsRouteImport
+      parentRoute: typeof AppEnvEnvIdIngressRoute
     }
     '/_app/env/$envId/networks_/$networkId': {
       id: '/_app/env/$envId/networks_/$networkId'
@@ -2275,6 +2390,25 @@ const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
   AppSettingsRouteChildren,
 )
 
+interface AppEnvEnvIdIngressRouteChildren {
+  AppEnvEnvIdIngressCertificatesRoute: typeof AppEnvEnvIdIngressCertificatesRoute
+  AppEnvEnvIdIngressDomainsRoute: typeof AppEnvEnvIdIngressDomainsRoute
+  AppEnvEnvIdIngressNodesRoute: typeof AppEnvEnvIdIngressNodesRoute
+  AppEnvEnvIdIngressSettingsRoute: typeof AppEnvEnvIdIngressSettingsRoute
+  AppEnvEnvIdIngressIndexRoute: typeof AppEnvEnvIdIngressIndexRoute
+}
+
+const AppEnvEnvIdIngressRouteChildren: AppEnvEnvIdIngressRouteChildren = {
+  AppEnvEnvIdIngressCertificatesRoute: AppEnvEnvIdIngressCertificatesRoute,
+  AppEnvEnvIdIngressDomainsRoute: AppEnvEnvIdIngressDomainsRoute,
+  AppEnvEnvIdIngressNodesRoute: AppEnvEnvIdIngressNodesRoute,
+  AppEnvEnvIdIngressSettingsRoute: AppEnvEnvIdIngressSettingsRoute,
+  AppEnvEnvIdIngressIndexRoute: AppEnvEnvIdIngressIndexRoute,
+}
+
+const AppEnvEnvIdIngressRouteWithChildren =
+  AppEnvEnvIdIngressRoute._addFileChildren(AppEnvEnvIdIngressRouteChildren)
+
 interface AppEnvEnvIdConfigsConfigIdRouteChildren {
   AppEnvEnvIdConfigsConfigIdInspectRoute: typeof AppEnvEnvIdConfigsConfigIdInspectRoute
   AppEnvEnvIdConfigsConfigIdUsedByRoute: typeof AppEnvEnvIdConfigsConfigIdUsedByRoute
@@ -2518,6 +2652,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdContainersRoute: typeof AppEnvEnvIdContainersRoute
   AppEnvEnvIdEventsRoute: typeof AppEnvEnvIdEventsRoute
   AppEnvEnvIdImagesRoute: typeof AppEnvEnvIdImagesRoute
+  AppEnvEnvIdIngressRoute: typeof AppEnvEnvIdIngressRouteWithChildren
   AppEnvEnvIdJanitorRoute: typeof AppEnvEnvIdJanitorRoute
   AppEnvEnvIdNetworksRoute: typeof AppEnvEnvIdNetworksRoute
   AppEnvEnvIdNodesRoute: typeof AppEnvEnvIdNodesRoute
@@ -2552,6 +2687,7 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdContainersRoute: AppEnvEnvIdContainersRoute,
   AppEnvEnvIdEventsRoute: AppEnvEnvIdEventsRoute,
   AppEnvEnvIdImagesRoute: AppEnvEnvIdImagesRoute,
+  AppEnvEnvIdIngressRoute: AppEnvEnvIdIngressRouteWithChildren,
   AppEnvEnvIdJanitorRoute: AppEnvEnvIdJanitorRoute,
   AppEnvEnvIdNetworksRoute: AppEnvEnvIdNetworksRoute,
   AppEnvEnvIdNodesRoute: AppEnvEnvIdNodesRoute,

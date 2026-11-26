@@ -545,9 +545,9 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Description: "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds, or on a standalone host which of the network, proxy container and cache volume it holds; " +
 			"how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; " +
 			"how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. " +
-			"It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).",
+			"It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressStatusOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *EnvironmentPathInput) (*IngressStatusOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}

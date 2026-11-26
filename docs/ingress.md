@@ -7,9 +7,9 @@ Ingress lets a stack's compose file ask for a public hostname, and TierPlan runs
 hostname over HTTPS: one on every node of a swarm, and one on a standalone host (a host with an agent, or TierPlan's own
 local socket). This page covers the part you operate in this version: switching ingress on and off for an environment,
 what that creates and what stops it, how existing stacks join, and what the proxy's access log records. The sections up
-to [On a standalone host](#on-a-standalone-host) describe a swarm; that section says what differs on a standalone host. Every step on this page is an API call in this version. The page in the web interface
-comes in a later version, and until then you use the calls below with a token that has the `ingress.manage` permission
-on the environment (an Admin has it; see [permissions.md](permissions.md)).
+to [On a standalone host](#on-a-standalone-host) describe a swarm; that section says what differs on a standalone host. Every step on this page is an API call, and the Ingress page in the web interface covers them. Reading needs the
+`ingress.read` permission on the environment (a Viewer has it) and changing needs `ingress.manage` (an Admin has it; see
+[permissions.md](permissions.md)).
 
 - [What switching on creates](#what-switching-on-creates)
 - [Switching on](#switching-on)
@@ -293,7 +293,7 @@ the address only while its own proxy is ready, so a node whose proxy has stopped
 
 The virtual IP is for swarms. A standalone host has one node and its own address already reaches its proxy, so the switch-on
 is refused there with `vip_swarm_only`. Like the rest of this page, it is an API call in this version. Every route below is
-under `/api/env/{envId}/ingress/vip` and needs the `ingress.manage` permission on the environment.
+under `/api/env/{envId}/ingress/vip`. The status and the moves need `ingress.read` on the environment and the changes need `ingress.manage`.
 
 - [What it needs](#what-it-needs)
 - [What the opt-in gives away](#what-the-opt-in-gives-away)

@@ -540,9 +540,10 @@ func TestChangeAndDisableIngressVIPRoutes(t *testing.T) {
 	}
 }
 
-// TestIngressVIPRoutesNeedIngressManage: each of the seven virtual IP routes (the status and the history, the two previews, the
-// enable, the change and the switch-off) needs ingress.manage on the environment, which is its Admin: an Operator is 403, an
-// Admin of another environment is no one here, an anonymous caller is 401, and an Admin passes the check. Nothing is written for
+// TestIngressVIPRoutesNeedIngressManage: the five write and preview routes (the two previews, the enable, the change and the
+// switch-off) need ingress.manage on the environment, which is its Admin: an Operator is 403, an Admin of another environment is
+// no one here, an anonymous caller is 401, and an Admin passes the check. The status and the history are ingress.read since
+// Phase 27 (D-14): an Operator reads both with 200 once the swarm has a virtual IP, the history before it as well. Nothing is written for
 // a caller who is refused, and no answer to the Admin, with a virtual IP on, carries the key (T-26-55, PROH-26-03).
 func TestIngressVIPRoutesNeedIngressManage(t *testing.T) {
 	t.Parallel()
@@ -551,18 +552,25 @@ func TestIngressVIPRoutesNeedIngressManage(t *testing.T) {
 	// Bodies that an Admin's request is refused on, so that passing the permission check writes nothing: an address outside the
 	// network of the nodes, and no virtual IP to change or remove.
 	refused := vipBody("192.168.5.50/24")
-	routes := []struct{ name, method, path, body string }{
-		{"getIngressVIP", http.MethodGet, base, ""},
-		{"listIngressVIPMoves", http.MethodGet, base + "/moves", ""},
-		{"previewIngressVIP", http.MethodPost, base + "/preview", refused},
-		{"enableIngressVIP", http.MethodPost, base, refused},
-		{"changeIngressVIP", http.MethodPut, base, refused},
-		{"previewIngressVIPDisable", http.MethodPost, base + "/disable/preview", ""},
-		{"disableIngressVIP", http.MethodDelete, base, ""},
+	routes := []struct {
+		name, method, path, body string
+		read                     bool // an ingress.read route: an Operator reads it
+	}{
+		{"getIngressVIP", http.MethodGet, base, "", true},
+		{"listIngressVIPMoves", http.MethodGet, base + "/moves", "", true},
+		{"previewIngressVIP", http.MethodPost, base + "/preview", refused, false},
+		{"enableIngressVIP", http.MethodPost, base, refused, false},
+		{"changeIngressVIP", http.MethodPut, base, refused, false},
+		{"previewIngressVIPDisable", http.MethodPost, base + "/disable/preview", "", false},
+		{"disableIngressVIP", http.MethodDelete, base, "", false},
 	}
 	for _, rt := range routes {
-		if rec := v.credCall(t, v.operatorA, rt.method, rt.path, rt.body); rec.Code != http.StatusForbidden {
-			t.Errorf("%s: an Operator got %d %s, want 403", rt.name, rec.Code, rec.Body)
+		op := v.credCall(t, v.operatorA, rt.method, rt.path, rt.body)
+		switch {
+		case !rt.read && op.Code != http.StatusForbidden:
+			t.Errorf("%s: an Operator got %d %s, want 403", rt.name, op.Code, op.Body)
+		case rt.read && (op.Code == http.StatusUnauthorized || op.Code == http.StatusForbidden || op.Code >= http.StatusInternalServerError):
+			t.Errorf("%s: an Operator got %d %s, want the read allowed", rt.name, op.Code, op.Body)
 		}
 		if rec := v.call(t, authReq{method: rt.method, path: rt.path, body: rt.body}); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s: an anonymous caller got %d %s, want 401", rt.name, rec.Code, rec.Body)
@@ -586,6 +594,13 @@ func TestIngressVIPRoutesNeedIngressManage(t *testing.T) {
 		body := rt.body
 		if body == refused {
 			body = refusedNow
+		}
+		if op := v.credCall(t, v.operatorA, rt.method, rt.path, body); rt.read && op.Code != http.StatusOK {
+			t.Errorf("%s with a virtual IP: an Operator got %d %s, want 200", rt.name, op.Code, op.Body)
+		} else if !rt.read && op.Code != http.StatusForbidden {
+			t.Errorf("%s with a virtual IP: an Operator got %d %s, want 403", rt.name, op.Code, op.Body)
+		} else if rt.read {
+			v.wantNoVIPKey(t, rt.name+" to an Operator", op.Body.String())
 		}
 		rec := v.credCall(t, v.adminA, rt.method, rt.path, body)
 		if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden || rec.Code >= http.StatusInternalServerError {

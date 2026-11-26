@@ -26,8 +26,8 @@ import (
 
 // The per-hostname certificate routes (Phase 20, CRT-03, CRT-05, CRT-06): an Admin lists the certificates of an
 // environment, asks for one ahead of any claim, asks for another attempt now, and reads the weekly budget the
-// queue waits on. Every route needs ingress.manage on the environment (its Admin), no route ever returns a private
-// key or a sealed value, and every answer is no-store.
+// queue waits on. The list and the budget need ingress.read on the environment (Viewer); the request and the retry need
+// ingress.manage (its Admin). No route ever returns a private key or a sealed value, and every answer is no-store.
 
 const (
 	problemIngressCertNotFound = "ingress_cert_not_found"
@@ -59,7 +59,7 @@ type IngressCertDeps struct {
 
 // IngressCertQueueBody says why a queued certificate waits.
 type IngressCertQueueBody struct {
-	Code       string     `json:"code" doc:"Why the certificate waits: no_account, rate_limit_new, rate_limit_duplicate, rate_limit_orders, ca_hold or concurrency"`
+	Code       string     `json:"code" doc:"Why the certificate waits: no_account, rate_limit_new, rate_limit_duplicate, rate_limit_orders, ca_rate_limited or concurrency"`
 	Reason     string     `json:"reason" doc:"The reason in one sentence, built from the figures below; it never carries the certificate authority's own words"`
 	Used       int        `json:"used" doc:"How many of the budget is used"`
 	Cap        int        `json:"cap" doc:"Where TierPlan stops ordering, which is below the certificate authority's own limit"`
@@ -71,11 +71,11 @@ type IngressCertQueueBody struct {
 type IngressCertErrorBody struct {
 	Class  string     `json:"class" doc:"The class of the failure, such as dns_token_invalid or rate_limited"`
 	Hint   string     `json:"hint" doc:"One fixed sentence for a person about this class of failure"`
-	Detail string     `json:"detail,omitempty" doc:"What the certificate authority or DNS provider answered, capped in length. Only Admins read it here"`
+	Detail string     `json:"detail,omitempty" doc:"What the certificate authority or DNS provider answered, capped in length. Filled only for callers who hold ingress.manage on the environment; empty otherwise"`
 	At     *time.Time `json:"at,omitempty" doc:"When the attempt failed"`
 }
 
-// IngressCertBody is one certificate as an Admin sees it. It never carries a private key or a sealed value.
+// IngressCertBody is one certificate as a member of the environment sees it. It never carries a private key or a sealed value.
 type IngressCertBody struct {
 	ID                  string                `json:"id" doc:"The certificate's ID, used in the paths of the routes below"`
 	Hostname            string                `json:"hostname" doc:"The hostname the certificate covers"`
@@ -96,7 +96,7 @@ type IngressCertBody struct {
 	RetryAfterUntil     *time.Time            `json:"retryAfterUntil,omitempty" doc:"Until when the certificate authority asked TierPlan to wait"`
 	Queue               *IngressCertQueueBody `json:"queue,omitempty" doc:"Why the certificate waits, left out when it waits for nothing"`
 	RequestedAt         *time.Time            `json:"requestedAt,omitempty" doc:"When an Admin last asked for the certificate ahead of a claim"`
-	RequestedBy         string                `json:"requestedBy,omitempty" doc:"The ID of the user who asked for it"`
+	RequestedBy         string                `json:"requestedBy,omitempty" doc:"The ID of the user who asked for it. Filled only for callers who hold ingress.manage on the environment; empty otherwise"`
 	UnreferencedSince   *time.Time            `json:"unreferencedSince,omitempty" doc:"Since when no stack and no request refers to the hostname"`
 	RetiredAt           *time.Time            `json:"retiredAt,omitempty" doc:"When the certificate was retired, left out while it is live"`
 	RetiredReason       string                `json:"retiredReason,omitempty" doc:"Why it was retired"`
@@ -229,8 +229,8 @@ func ingressCertBlocked(e *ingresscert.BlockedError, now time.Time) error {
 }
 
 // RegisterIngressCerts registers the per-hostname certificate routes: list, request ahead, retry now and the budget.
-// Every one needs ingress.manage on the environment (its Admin) and every certificate id is looked up inside that
-// environment, so an id of another environment is a 404, exactly like one that does not exist. The routes are always
+// The list and the budget need ingress.read on the environment (Viewer), the request and the retry ingress.manage (its
+// Admin), and every certificate id is looked up inside that environment, so an id of another environment is a 404, exactly like one that does not exist. The routes are always
 // registered; without a manager they answer 503 ingress_unavailable.
 func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 	if d.Log == nil {
@@ -264,12 +264,13 @@ func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 		Path:        "/api/env/{envId}/ingress/certificates",
 		Summary:     "List the certificates of an environment",
 		Description: "Every per-hostname certificate of the environment, live and retired, by hostname: its issuer (staging flagged), source, state and the state in words, whether it is ready to serve, " +
-			"when it was issued and expires, when it renews next and on what basis, its last failure (class, a fixed hint, the capped detail and the time), the failures in a row, when the next attempt is, " +
-			"how long the certificate authority asked TierPlan to wait, why a queued certificate waits (a code, one sentence, the figures and the next slot), who asked for it and when, since when nothing " +
-			"refers to it, and why a retired one was retired. No private key and no sealed value is ever returned. Needs ingress.manage on the environment (its Admin).",
+			"when it was issued and expires, when it renews next and on what basis, its last failure (class, a fixed hint, the time and, for callers who hold ingress.manage, the capped detail), the failures in a row, when the next attempt is, " +
+			"how long the certificate authority asked TierPlan to wait, why a queued certificate waits (a code, one sentence, the figures and the next slot), who asked for it (for callers who hold ingress.manage) and when, since when nothing " +
+			"refers to it, and why a retired one was retired. No private key and no sealed value is ever returned. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *ListIngressCertsInput) (*IngressCertsOutput, error) {
-		if httpx.PrincipalFrom(ctx) == nil {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *ListIngressCertsInput) (*IngressCertsOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
 		if !ready() {
@@ -279,11 +280,25 @@ func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 		if err != nil {
 			return nil, internal("list the certificates", err)
 		}
+		// The authority's and the DNS provider's own words and the name of whoever asked stay with the people who manage
+		// the environment's ingress (A-04); a Viewer gets the same rows without them.
+		manager := false
+		if d.Checker != nil {
+			dec := d.Checker.Check(ctx, p, rbac.Requirement{Perm: rbac.PermIngressManage, Scope: rbac.ScopeEnvironment}, in.EnvID)
+			manager = dec.Err == nil && dec.Allowed
+		}
 		at := now()
 		out := &IngressCertsOutput{CacheControl: "no-store"}
 		out.Body.Items = make([]IngressCertBody, 0, len(certs))
 		for _, c := range certs {
-			out.Body.Items = append(out.Body.Items, ingressCertBody(c, at))
+			b := ingressCertBody(c, at)
+			if !manager {
+				b.RequestedBy = ""
+				if b.LastError != nil {
+					b.LastError.Detail = ""
+				}
+			}
+			out.Body.Items = append(out.Body.Items, b)
 		}
 		return out, nil
 	})
@@ -378,9 +393,9 @@ func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 		Summary:     "Read the weekly new-certificate budget",
 		Description: "One row per registered domain and issuer the environment's domains use: the new certificates used in the last 7 days (orders in flight and TierPlan's own certificate included), where " +
 			"TierPlan stops (cap), the certificate authority's own limit, the headroom, when the next slot opens, the environment's own domains under it, and whether the budget is shared with another " +
-			"domain or TierPlan's own address, which is never named. The counts are install-wide. Needs ingress.manage on the environment (its Admin).",
+			"domain or TierPlan's own address, which is never named. The counts are install-wide. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressCertBudgetInput) (*IngressCertBudgetOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *IngressCertBudgetInput) (*IngressCertBudgetOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}

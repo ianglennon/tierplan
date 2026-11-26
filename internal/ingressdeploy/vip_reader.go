@@ -6,6 +6,7 @@ package ingressdeploy
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
@@ -417,7 +419,7 @@ func (s *Service) readVIPOnce(ctx context.Context, envID string) {
 	}
 	for _, m := range moves {
 		m.EnvID = envID
-		if err := s.d.Store.InsertVIPMove(ctx, m); err != nil {
+		if err := s.d.Store.InsertVIPMoveWithHook(ctx, m, s.vipMovedHook(envID, m)); err != nil {
 			s.log().Warn("the virtual IP reader could not store a move", "environment", envID, "error", err)
 			env.mu.Lock()
 			env.settled = false
@@ -761,4 +763,19 @@ func (s *Service) vipHolderlessSince(envID string) time.Time {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.view.HolderlessSince
+}
+
+// vipMovedHook is the audit row of one stored move (D-21, A-07), written in the move's own transaction by system:ingress.
+// It holds node names and the reason, never the VRRP key. It is nil when there is no audit writer.
+func (s *Service) vipMovedHook(envID string, m ingressstore.VIPMove) ingressstore.DeployHook {
+	if s.d.Audit == nil {
+		return nil
+	}
+	return func(ctx context.Context, tx *sql.Tx) error {
+		return s.d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor: audit.SystemIngress, Action: audit.ActionIngressVIPMoved, TargetType: "environment", TargetID: envID,
+			EnvID: envID, Result: audit.ResultSuccess,
+			Details: map[string]string{"from": m.FromNodeName, "to": m.ToNodeName, "reason": m.Reason},
+		})
+	}
 }

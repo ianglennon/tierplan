@@ -1412,7 +1412,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 				b, ok := ingressRecon.Current(envID)
 				return b.ID, ok
 			},
-			Log: log,
+			Checker: checker,
+			Log:     log,
 		},
 	})
 	// A route that skipped the policy seam stops startup, before anything listens (D-44).

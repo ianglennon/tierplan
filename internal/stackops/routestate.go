@@ -52,6 +52,19 @@ type RouteStateInput struct {
 	InBundle map[RouteKey]bool
 	// NodesApplied is true when there is at least one active node and every active node's applied bundle is the current one.
 	NodesApplied bool
+	// ActiveNodes is how many nodes of the environment are active, and AppliedNodes how many of those applied the current
+	// bundle. They feed the applied condition's N of M; NodesApplied stays the legacy single answer.
+	ActiveNodes, AppliedNodes int
+	// NodesUnreadable is true when the environment's nodes could not be read, so how many are active and how many applied the
+	// bundle is not known: the applied condition is unknown, never "no node is active".
+	NodesUnreadable bool
+	// BundleKnown is true when the reconciler has published a bundle for the environment. Without one the certificate and
+	// applied conditions are unknown.
+	BundleKnown bool
+	// EngineUnreadable is true when the engine could not be read, so what runs and what is attached is not known.
+	EngineUnreadable bool
+	// CertMessages is, by hostname, the server's sentence for a certificate that is not ready.
+	CertMessages map[string]string
 }
 
 // RouteState is what one route is doing now.
@@ -63,6 +76,9 @@ type RouteState struct {
 	Reason string
 	// Stopped is true when State is RouteBackendNotRunning because the stack is stopped.
 	Stopped bool
+	// Conditions are the route's five conditions in a fixed order: claim held, network attached, backend healthy,
+	// certificate ready, applied. They are derived from the same input as State and never contradict it.
+	Conditions []Condition
 }
 
 // RouteStates derives the state of each route of a stack, in hostname then path order. The first test that holds
@@ -73,7 +89,7 @@ func RouteStates(in RouteStateInput) []RouteState {
 	out := make([]RouteState, 0, len(in.Routes))
 	for _, r := range in.Routes {
 		key := RouteKey{Hostname: r.Hostname, Path: routePath(r.PathPrefix)}
-		s := RouteState{Hostname: key.Hostname, Path: key.Path, Service: r.Service}
+		s := RouteState{Hostname: key.Hostname, Path: key.Path, Service: r.Service, Conditions: routeConditions(in, r, key)}
 		switch reason := in.Skipped[key]; {
 		case !in.Enabled:
 			s.State = RouteIngressOff

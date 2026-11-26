@@ -3,8 +3,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
-import { CircleX, TriangleAlert } from "lucide-react";
-import { type KeyboardEvent, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { CircleX, TriangleAlert, Waypoints } from "lucide-react";
+import { type KeyboardEvent, useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
 import { Trans } from "react-i18next";
 import { usePullStackGit } from "@/api/stack-git";
 import {
@@ -37,6 +37,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
+import { ExposePanel } from "@/features/stack-editor/expose/expose-panel";
 import { FileEditor, type FileEditorHandle } from "@/features/stack-editor/file-editor";
 import { FileRail } from "@/features/stack-editor/file-rail";
 import { ProblemsPanel } from "@/features/stack-editor/problems-panel";
@@ -148,6 +149,9 @@ export function StackEditorPage({
   // Review and deploy has been pressed: it saves, then opens the Review. The button says Saving…
   // and then Checking… until the page is left (UI-SPEC "Editor" footer).
   const [reviewing, setReviewing] = useState(false);
+  // The Expose panel is closed by default and keeps its state for this visit to the editor (S7).
+  const [exposeOpen, setExposeOpen] = useState(false);
+  const exposeId = useId();
   const loaded = useRef(false);
   const copyRef = useRef(copy);
   copyRef.current = copy;
@@ -470,6 +474,13 @@ export function StackEditorPage({
   }
 
   const ready = copy.loaded && open !== undefined;
+  // The Expose panel works on a compose file of the stack: compose.yaml, or one of the compose
+  // files of a multi-file stack. A secret file the server holds has no text to edit.
+  const canExpose =
+    ready &&
+    stack.data !== undefined &&
+    !open.hidden &&
+    (open.path === COMPOSE_FILE || (copy.composeFiles ?? []).includes(open.path));
   const pending = save$.isPending;
   const keys = {
     indent: mac ? "⌘]" : "Ctrl+]",
@@ -580,33 +591,67 @@ export function StackEditorPage({
               </div>
             )}
             <div className="flex min-w-0 flex-col gap-2">
-              {ready && open ? (
-                open.hidden ? (
-                  <SecretFileCard
-                    key={open.path}
-                    path={open.path}
-                    canReveal={canReveal}
-                    readOnly={!canEdit || open.origin === "repo"}
-                    reveal={() => revealFile(envId, stackId, open.path)}
-                    onReplace={() => dispatch({ type: "replaceFile", path: open.path })}
-                    onUpload={(content) => dispatch({ type: "edit", path: open.path, content })}
-                  />
-                ) : (
-                  <FileEditor
-                    key={open.path}
-                    ref={editor}
-                    file={open}
-                    readOnly={!canEdit || open.origin === "repo"}
-                    problems={markers}
-                    variableNames={completionNames}
-                    onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
-                  />
-                )
-              ) : (
-                <div role="status" aria-label={t("stackEditor.loading")}>
-                  <Skeleton className="h-100 w-full" />
+              {canExpose && open ? (
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-11 md:h-8"
+                    aria-expanded={exposeOpen}
+                    aria-controls={exposeId}
+                    onClick={() => setExposeOpen((o) => !o)}
+                  >
+                    <Waypoints aria-hidden="true" />
+                    {t("stackEditor.expose.toggle")}
+                  </Button>
                 </div>
-              )}
+              ) : null}
+              <div className="flex flex-col gap-2 xl:flex-row xl:gap-0">
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  {ready && open ? (
+                    open.hidden ? (
+                      <SecretFileCard
+                        key={open.path}
+                        path={open.path}
+                        canReveal={canReveal}
+                        readOnly={!canEdit || open.origin === "repo"}
+                        reveal={() => revealFile(envId, stackId, open.path)}
+                        onReplace={() => dispatch({ type: "replaceFile", path: open.path })}
+                        onUpload={(content) => dispatch({ type: "edit", path: open.path, content })}
+                      />
+                    ) : (
+                      <FileEditor
+                        key={open.path}
+                        ref={editor}
+                        file={open}
+                        readOnly={!canEdit || open.origin === "repo"}
+                        problems={markers}
+                        variableNames={completionNames}
+                        onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
+                      />
+                    )
+                  ) : (
+                    <div role="status" aria-label={t("stackEditor.loading")}>
+                      <Skeleton className="h-100 w-full" />
+                    </div>
+                  )}
+                </div>
+                {canExpose && exposeOpen && open && stack.data ? (
+                  <div className="w-full rounded-md border bg-card xl:w-80 xl:shrink-0 xl:rounded-none xl:border-0 xl:border-l">
+                    <ExposePanel
+                      id={exposeId}
+                      envId={envId}
+                      text={open.content}
+                      target={stack.data.target === "standalone" ? "standalone" : "swarm"}
+                      readOnly={!canEdit || open.origin === "repo" || fromGit}
+                      gitSource={open.origin === "repo" || fromGit}
+                      onEdit={(content) => dispatch({ type: "edit", path: open.path, content })}
+                      onClose={() => setExposeOpen(false)}
+                    />
+                  </div>
+                ) : null}
+              </div>
               {ready ? (
                 <ProblemsPanel
                   problems={check.problems}

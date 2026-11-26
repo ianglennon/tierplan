@@ -1965,3 +1965,92 @@ describe("a line in the address", () => {
     await waitFor(() => expect(editorView().state.selection.main.head).toBe(8));
   });
 });
+
+// The Expose panel (plan 27-24, D-18, D-19): it edits the working copy through the pure label
+// editor and never saves. The save, check and render answers are the stub above.
+describe("Expose", () => {
+  const EXPOSED =
+    'services:\n  api:\n    image: nginx:1.27-alpine\n    deploy:\n      labels:\n        tierplan.ingress.host: old.apps.example.com\n        tierplan.ingress.port: "8080"\n';
+
+  it("opens from the compose file and puts a changed hostname into the working copy, unsaved", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({ files: [{ path: "compose.yaml", content: EXPOSED, secret: false }] }),
+      );
+    mount();
+    await ready();
+    const toggle = await screen.findByRole("button", { name: "Expose routes" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(toggle.getAttribute("aria-controls") ?? "")).toBeTruthy();
+    const host = screen.getByRole("textbox", { name: "Hostname" }) as HTMLInputElement;
+    expect(host.value).toBe("old.apps.example.com");
+
+    fireEvent.change(host, { target: { value: "new.apps.example.com" } });
+    // Typing alone writes nothing: the working copy takes the value when the field loses focus.
+    expect(editorText()).toBe(EXPOSED);
+    fireEvent.blur(host);
+
+    expect(editorText()).toContain("tierplan.ingress.host: new.apps.example.com");
+    expect(editorText()).toContain("deploy:\n      labels:");
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("is read-only for a Viewer, says what it needs, and offers no change", async () => {
+    server.role = "viewer";
+    server.draft = () =>
+      Response.json(
+        draftBody({ files: [{ path: "compose.yaml", content: EXPOSED, secret: false }] }),
+      );
+    mount();
+    await ready();
+    fireEvent.click(await screen.findByRole("button", { name: "Expose routes" }));
+    expect(await screen.findByText("Read-only. Needs Operator.")).toBeTruthy();
+    const host = screen.getByRole("textbox", { name: "Hostname" }) as HTMLInputElement;
+    expect(host.readOnly).toBe(true);
+    expect(host.getAttribute("aria-readonly")).toBe("true");
+    for (const name of ["Add a route", /^Remove route/, /^Move to/, "Remove the ignored copy"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    fireEvent.change(host, { target: { value: "new.apps.example.com" } });
+    fireEvent.blur(host);
+    expect(editorText()).toBe(EXPOSED);
+  });
+
+  it("is read-only for a repository file and says the labels are changed in Git", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [{ path: "compose.yaml", content: EXPOSED, secret: false, origin: "repo" }],
+        }),
+      );
+    mount();
+    await ready();
+    fireEvent.click(await screen.findByRole("button", { name: "Expose routes" }));
+    expect(
+      await screen.findByText("This stack comes from a Git repository. Change the labels there."),
+    ).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "Hostname" }) as HTMLInputElement).readOnly).toBe(
+      true,
+    );
+    expect(screen.queryByRole("button", { name: "Add a route" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove route/ })).toBeNull();
+  });
+
+  it("is not offered on a file that is not a compose file", async () => {
+    server.draft = () =>
+      Response.json(
+        draftBody({
+          files: [
+            { path: "compose.yaml", content: EXPOSED, secret: false },
+            { path: "notes.txt", content: "hello\n", secret: false },
+          ],
+        }),
+      );
+    mount("notes.txt");
+    await screen.findByRole("textbox", { name: "notes.txt, text" });
+    expect(screen.queryByRole("button", { name: "Expose routes" })).toBeNull();
+  });
+});
