@@ -313,7 +313,14 @@ func (s *Store) RecordVIPEnsure(ctx context.Context, envID string, at time.Time,
 // rows, in one transaction. m.ID is ignored: the store assigns it. Two moves at the same instant are
 // two rows.
 func (s *Store) InsertVIPMove(ctx context.Context, m VIPMove) error {
-	return s.writeQuiet(ctx, func(_ *sql.Tx, q *sqlc.Queries) (bool, error) {
+	return s.InsertVIPMoveWithHook(ctx, m, nil)
+}
+
+// InsertVIPMoveWithHook is InsertVIPMove with hook run in the same transaction, after the row is written and the
+// history pruned: an error of the hook rolls both back. The reader writes the move's audit row here, so a stored move
+// never lacks it and a rolled-back one leaves neither. A nil hook is InsertVIPMove.
+func (s *Store) InsertVIPMoveWithHook(ctx context.Context, m VIPMove, hook DeployHook) error {
+	return s.writeQuiet(ctx, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
 		if err := q.InsertVIPMove(ctx, sqlc.InsertVIPMoveParams{
 			EnvID: m.EnvID, At: toNanos(m.At), FromNodeID: m.FromNodeID, FromNodeName: m.FromNodeName,
 			ToNodeID: m.ToNodeID, ToNodeName: m.ToNodeName, Reason: m.Reason,
@@ -322,6 +329,11 @@ func (s *Store) InsertVIPMove(ctx context.Context, m VIPMove) error {
 		}
 		if err := q.PruneVIPMoves(ctx, sqlc.PruneVIPMovesParams{EnvID: m.EnvID, Keep: VIPMovesKept}); err != nil {
 			return false, fmt.Errorf("ingressstore: prune the virtual IP moves of environment %q: %w", m.EnvID, err)
+		}
+		if hook != nil {
+			if err := hook(ctx, tx); err != nil {
+				return false, err
+			}
 		}
 		return true, nil
 	})
