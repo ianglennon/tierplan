@@ -215,3 +215,79 @@ describe("the Change issuer dialog (D-07)", () => {
     expect(writes).toHaveLength(0);
   });
 });
+
+describe("the Replace token dialog", () => {
+  const TITLE = "Replace the DNS token for apps.example.com";
+  const TOKEN = "cf-NEW-SECRET-TOKEN-0123456789";
+
+  it("keeps the primary unavailable while the field is empty, and the field is a password field", async () => {
+    const dialog = await openFromMenu("Replace token…", TITLE);
+    const field = within(dialog).getByLabelText("New DNS token") as HTMLInputElement;
+    expect(field.type).toBe("password");
+    expect(field.getAttribute("autocomplete")).toBe("off");
+    const submit = within(dialog).getByRole("button", { name: "Test and replace token" });
+    expect(submit.hasAttribute("disabled")).toBe(true);
+    fireEvent.change(field, { target: { value: TOKEN } });
+    expect(submit.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("sends the token once, with a Spinner in the button, then closes with a toast that does not hold it", async () => {
+    let release: (r: Response) => void = () => {};
+    writeAnswer = () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+    const dialog = await openFromMenu("Replace token…", TITLE);
+    fireEvent.change(within(dialog).getByLabelText("New DNS token"), { target: { value: TOKEN } });
+    const submit = within(dialog).getByRole("button", { name: "Test and replace token" });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    await waitFor(() => expect(submit.hasAttribute("disabled")).toBe(true));
+    expect(submit.querySelector("[role='status'], svg")).toBeTruthy();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ method: "PUT", path: `${BASE}/token` });
+    expect(JSON.parse(writes[0]?.body ?? "{}")).toEqual({ token: TOKEN });
+    release(Response.json(domain()));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await screen.findByText("Replaced the DNS token for apps.example.com.");
+    for (const live of document.querySelectorAll("[aria-live], [role='status'], [role='alert']")) {
+      expect(live.textContent).not.toContain(TOKEN);
+    }
+    expect(document.body.textContent).not.toContain(TOKEN);
+  });
+
+  it("shows the reason a token failed its test in a destructive alert and keeps the dialog open", async () => {
+    writeAnswer = () =>
+      problem(
+        422,
+        "ingress_token_invalid",
+        "The DNS provider refused the token for apps.example.com.",
+      );
+    const dialog = await openFromMenu("Replace token…", TITLE);
+    fireEvent.change(within(dialog).getByLabelText("New DNS token"), { target: { value: TOKEN } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Test and replace token" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("The DNS provider refused the token for apps.example.com.");
+    expect(alert.getAttribute("data-variant") ?? alert.className).toMatch(/destructive/);
+    expect(screen.getByRole("dialog", { name: TITLE })).toBeTruthy();
+    for (const live of document.querySelectorAll("[aria-live], [role='status'], [role='alert']")) {
+      expect(live.textContent).not.toContain(TOKEN);
+    }
+  });
+
+  it("clears the field when the dialog closes and sends nothing on Discard token", async () => {
+    const dialog = await openFromMenu("Replace token…", TITLE);
+    fireEvent.change(within(dialog).getByLabelText("New DNS token"), { target: { value: TOKEN } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard token" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(writes).toHaveLength(0);
+    const table = await screen.findByRole("table", { name: "Domains" });
+    fireEvent.keyDown(within(table).getByRole("button", { name: "Actions for apps.example.com" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Replace token…" }));
+    const again = await screen.findByRole("dialog", { name: TITLE });
+    expect((within(again).getByLabelText("New DNS token") as HTMLInputElement).value).toBe("");
+    for (const input of document.querySelectorAll("input")) expect(input.value).not.toBe(TOKEN);
+  });
+});

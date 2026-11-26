@@ -44,7 +44,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AddDomainDialog } from "@/features/ingress/add-domain-dialog";
-import { ChangeIssuerDialog } from "@/features/ingress/domain-dialogs";
+import { ChangeIssuerDialog, ReplaceTokenDialog } from "@/features/ingress/domain-dialogs";
 import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -211,6 +211,11 @@ export function DomainsTab({ envId }: { envId: string }) {
         </>
       )}
       <AddDomainDialog envId={envId} open={adding} onOpenChange={setAdding} />
+      <ReplaceTokenDialog
+        envId={envId}
+        domain={action?.kind === "replaceToken" ? action.domain : null}
+        onClose={() => setAction(null)}
+      />
       <ChangeIssuerDialog
         envId={envId}
         domain={action?.kind === "changeIssuer" ? action.domain : null}
@@ -299,7 +304,7 @@ function DomainActions({
           <NeedsTooltip key={item} reason={needs.reason}>
             <DropdownMenuItem
               className="max-md:min-h-11"
-              disabled={!needs.allowed || item !== "changeIssuer"}
+              disabled={!needs.allowed || item === "delete"}
               onSelect={() => onAction({ kind: item, domain: d })}
             >
               {t(`ingressPage.domains.menu.${item}`)}

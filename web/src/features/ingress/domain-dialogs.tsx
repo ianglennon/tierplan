@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useId, useRef, useState } from "react";
 
 import { IngressActionError, type IngressDomain } from "@/api/ingress";
-import { type DomainIssuer, useChangeIssuer, useIssuerPreview } from "@/api/ingress-domains";
+import {
+  type DomainIssuer,
+  useChangeIssuer,
+  useIssuerPreview,
+  useReplaceDomainToken,
+} from "@/api/ingress-domains";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +19,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldLabel } from "@/components/ui/field";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -196,6 +202,103 @@ function ChangeIssuerForm({
         <Button type="submit" className={TOUCH_HEIGHT} disabled={!data || change.isPending}>
           {change.isPending ? <Spinner aria-hidden="true" /> : null}
           {t("ingressPage.domains.changeIssuer.submit")}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+// ReplaceTokenDialog replaces a domain's DNS token (UI-SPEC S5). The server tests the new token before it replaces the
+// saved one, so the button shows a Spinner while it does and a failed test reads in the dialog, as the server worded
+// it, with the old token still in place. The token lives only in the form's state and the form is mounted only while
+// the dialog is open, so closing it, on success or on Discard token, drops it. It is never echoed after the request,
+// never put in a toast and never in a live region (T-27-66).
+export function ReplaceTokenDialog({ envId, domain, onClose }: DomainDialogProps) {
+  const shown = useShownDomain(domain);
+  return (
+    <Dialog open={domain !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent aria-describedby={undefined}>
+        {shown ? <ReplaceTokenForm envId={envId} domain={shown} onClose={onClose} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ReplaceTokenForm({
+  envId,
+  domain,
+  onClose,
+}: {
+  envId: string;
+  domain: IngressDomain;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const replace = useReplaceDomainToken(envId);
+  const ids = useId();
+  const [token, setToken] = useState("");
+  // Set the moment a request leaves, ahead of the render that disables the button, so a double press sends one.
+  const sending = useRef(false);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (token === "" || replace.isPending || sending.current) return;
+    sending.current = true;
+    replace.mutate(
+      { domainId: domain.id, token },
+      {
+        onSettled: () => {
+          sending.current = false;
+        },
+        onSuccess: () => {
+          toastSuccess(t("ingressPage.domains.replaceToken.done", { suffix: domain.suffix }));
+          onClose();
+        },
+      },
+    );
+  }
+
+  return (
+    <form noValidate onSubmit={submit} className="flex flex-col gap-4">
+      <DialogHeader>
+        <DialogTitle className="break-words">
+          {t("ingressPage.domains.replaceToken.title", { suffix: domain.suffix })}
+        </DialogTitle>
+      </DialogHeader>
+      {replace.isError ? <Refusal error={replace.error} /> : null}
+      <Field>
+        <FieldLabel htmlFor={`${ids}-token`}>
+          {t("ingressPage.domains.replaceToken.field")}
+        </FieldLabel>
+        <Input
+          id={`${ids}-token`}
+          type="password"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          disabled={replace.isPending}
+          className={TOUCH_HEIGHT}
+          aria-describedby={`${ids}-token-helper`}
+        />
+        <FieldDescription id={`${ids}-token-helper`}>
+          {t("ingressPage.domains.replaceToken.helper")}
+        </FieldDescription>
+      </Field>
+      <DialogFooter>
+        <Button
+          type="button"
+          variant="outline"
+          className={TOUCH_HEIGHT}
+          disabled={replace.isPending}
+          onClick={onClose}
+        >
+          {t("ingressPage.domains.replaceToken.discard")}
+        </Button>
+        <Button type="submit" className={TOUCH_HEIGHT} disabled={token === "" || replace.isPending}>
+          {replace.isPending ? <Spinner aria-hidden="true" /> : null}
+          {t("ingressPage.domains.replaceToken.submit")}
         </Button>
       </DialogFooter>
     </form>
