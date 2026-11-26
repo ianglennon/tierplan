@@ -123,11 +123,14 @@ export function ingressDomainsQuery(envId: string) {
 export class IngressActionError extends Error {
   readonly status: number;
   readonly detail?: string;
-  constructor(status: number, detail?: string) {
+  // The problem's `type`, when the server sent one, so a caller can tell two refusals with one status apart.
+  readonly type?: string;
+  constructor(status: number, detail?: string, type?: string) {
     super(`ingress request failed (${status})`);
     this.name = "IngressActionError";
     this.status = status;
     this.detail = detail;
+    this.type = type;
   }
 }
 

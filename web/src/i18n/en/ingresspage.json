@@ -396,6 +396,37 @@
         "submit": "Test and add domain",
         "discard": "Discard domain",
         "done": "Added {{suffix}}."
+      },
+      "changeIssuer": {
+        "title": "Change the issuer of {{suffix}}",
+        "field": "Change to",
+        "placeholder": "Choose a Let's Encrypt directory",
+        "current": "{{name}} (current)",
+        "loading": "Reading what the change would do",
+        "paragraph": "Certificates under {{suffix}} that came from the other Let's Encrypt directory are retired and ordered again from {{issuer}}.",
+        "count_one": "{{count}} certificate will be ordered again.",
+        "count_other": "{{count}} certificates will be ordered again.",
+        "uploads": "These uploaded certificates are left alone:",
+        "submit": "Change issuer",
+        "discard": "Discard change",
+        "done": "{{suffix}} now orders its certificates from {{issuer}}."
+      },
+      "replaceToken": {
+        "title": "Replace the DNS token for {{suffix}}",
+        "field": "New DNS token",
+        "helper": "TierPlan tests the new token before it replaces the saved one. It is stored sealed and never shown again.",
+        "submit": "Test and replace token",
+        "discard": "Discard token",
+        "done": "Replaced the DNS token for {{suffix}}."
+      },
+      "delete": {
+        "title": "Delete {{suffix}}?",
+        "body_one": "Its {{count}} certificate stops renewing and expires. Hostnames under it can't be claimed any more.",
+        "body_other": "Its {{count}} certificates stop renewing and expire. Hostnames under it can't be claimed any more.",
+        "inUse": "Stacks still use this domain",
+        "submit": "Delete domain",
+        "keep": "Keep domain",
+        "done": "Deleted {{suffix}}."
       }
     }
   }

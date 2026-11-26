@@ -44,6 +44,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AddDomainDialog } from "@/features/ingress/add-domain-dialog";
+import { ChangeIssuerDialog } from "@/features/ingress/domain-dialogs";
 import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,7 @@ export function DomainsTab({ envId }: { envId: string }) {
   const status = useQuery(ingressStatusQuery(envId));
   const needs = useNeeds("ingress.manage", envId);
   const [adding, setAdding] = useState(false);
+  const [action, setAction] = useState<DomainAction | null>(null);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
 
   if (query.isPending) return <Loading />;
@@ -187,7 +189,7 @@ export function DomainsTab({ envId }: { envId: string }) {
                         {d.certificates}
                       </TableCell>
                       <TableCell className="align-top">
-                        <DomainActions domain={d} needs={needs} />
+                        <DomainActions domain={d} needs={needs} onAction={setAction} />
                       </TableCell>
                     </TableRow>
                     {expanded ? (
@@ -209,6 +211,11 @@ export function DomainsTab({ envId }: { envId: string }) {
         </>
       )}
       <AddDomainDialog envId={envId} open={adding} onOpenChange={setAdding} />
+      <ChangeIssuerDialog
+        envId={envId}
+        domain={action?.kind === "changeIssuer" ? action.domain : null}
+        onClose={() => setAction(null)}
+      />
     </div>
   );
 }
@@ -257,10 +264,21 @@ function TokenCell({ domain: d }: { domain: IngressDomain }) {
   );
 }
 
+// DomainAction is the write a row's menu opened a dialog for, with the domain it is for.
+type DomainAction = { kind: "replaceToken" | "changeIssuer" | "delete"; domain: IngressDomain };
+
 // DomainActions is a row's menu (UI-SPEC S5): replace the token, change the issuer, delete the domain. The items are
-// drawn for everyone and, for a reader, disabled with the reason; the server checks ingress.manage again. The dialogs
-// behind them come with the rest of the domain writes, so for a person who may manage they stay unavailable here.
-function DomainActions({ domain: d, needs }: { domain: IngressDomain; needs: Needs }) {
+// drawn for everyone and, for a reader, disabled with the reason; the server checks ingress.manage again. Each opens
+// its dialog, which the tab draws once for the whole table.
+function DomainActions({
+  domain: d,
+  needs,
+  onAction,
+}: {
+  domain: IngressDomain;
+  needs: Needs;
+  onAction: (action: DomainAction) => void;
+}) {
   const t = useT();
   const items = ["replaceToken", "changeIssuer", "delete"] as const;
   return (
@@ -279,7 +297,11 @@ function DomainActions({ domain: d, needs }: { domain: IngressDomain; needs: Nee
       <DropdownMenuContent align="end">
         {items.map((item) => (
           <NeedsTooltip key={item} reason={needs.reason}>
-            <DropdownMenuItem className="max-md:min-h-11" disabled={needs.allowed}>
+            <DropdownMenuItem
+              className="max-md:min-h-11"
+              disabled={!needs.allowed || item !== "changeIssuer"}
+              onSelect={() => onAction({ kind: item, domain: d })}
+            >
               {t(`ingressPage.domains.menu.${item}`)}
             </DropdownMenuItem>
           </NeedsTooltip>
