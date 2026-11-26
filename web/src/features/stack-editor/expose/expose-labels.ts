@@ -3,6 +3,7 @@
 
 import {
   type Document,
+  type DocumentOptions,
   isAlias,
   isCollection,
   isMap,
@@ -10,8 +11,11 @@ import {
   isSeq,
   type Node,
   Pair,
+  type ParseOptions,
   parseDocument,
-  type Scalar,
+  Scalar,
+  type ScalarTag,
+  type SchemaOptions,
   YAMLMap,
   YAMLSeq,
 } from "yaml";
@@ -95,8 +99,29 @@ function otherWhere(where: Where): Where {
   return where === "deploy" ? "plain" : "deploy";
 }
 
+// A plain integer written with a leading zero (mode: 0440, 007, 08). The core schema reads it as a
+// decimal number and writes it back without the zeros, and compose reads such a value as an octal
+// mode or an identifier, so the editor keeps the text it was given: the node holds the source string
+// and is written plain. A node the editor makes itself has no plain type and is quoted.
+const RAW_INT_RE = /^[-+]?0[0-9]+$/;
+const rawInt: ScalarTag = {
+  tag: "tag:yaml.org,2002:int",
+  default: true,
+  test: RAW_INT_RE,
+  identify: (v) => typeof v === "string" && RAW_INT_RE.test(v),
+  resolve: (str) => new Scalar(str),
+  stringify: (item) => {
+    const v = String((item as Scalar).value);
+    if ((item as Scalar).type === Scalar.PLAIN) return v;
+    return (item as Scalar).type === Scalar.QUOTE_SINGLE ? `'${v}'` : `"${v}"`;
+  },
+};
+const PARSE: ParseOptions & DocumentOptions & SchemaOptions = {
+  customTags: (tags) => [rawInt, ...tags],
+};
+
 function load(text: string): Document.Parsed | null {
-  const doc = parseDocument(text);
+  const doc = parseDocument(text, PARSE);
   return doc.errors.length > 0 ? null : doc;
 }
 
@@ -405,8 +430,127 @@ function styleOf(text: string): { indent: number; indentSeq: boolean } {
   return { indent, indentSeq: !flush };
 }
 
+// ---- keeping the rest of the file as it was ----
+//
+// doc.toString writes the whole document, and it normalises what it did not need to touch: line
+// endings become LF, 1e3 becomes 1e+3, a flow sequence gains inner spaces, a folded block is
+// re-flowed. The editor must change nothing but the labels it was asked to change, so render writes
+// the document twice, as parsed (base) and as edited (mod), and takes only the lines that differ
+// between the two onto the original text. An original line that the writer would have normalised is
+// left alone unless the edit is on that very line; then the whole edited text is the answer.
+
+type Match = [number, number];
+
+// matchLines pairs equal lines of a and b in order (a longest common subsequence). Both ends are
+// trimmed first, since a label edit leaves almost everything common. It returns null when the
+// differing middle is too large to compare.
+function matchLines(a: string[], b: string[]): Match[] | null {
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (
+    tail < a.length - head &&
+    tail < b.length - head &&
+    a[a.length - 1 - tail] === b[b.length - 1 - tail]
+  )
+    tail++;
+  const n = a.length - head - tail;
+  const m = b.length - head - tail;
+  if (n * m > 4_000_000) return null;
+  const width = m + 1;
+  const len = new Uint32Array((n + 1) * width);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      len[i * width + j] =
+        a[head + i] === b[head + j]
+          ? (len[(i + 1) * width + j + 1] as number) + 1
+          : Math.max(len[(i + 1) * width + j] as number, len[i * width + j + 1] as number);
+    }
+  }
+  const out: Match[] = [];
+  for (let i = 0; i < head; i++) out.push([i, i]);
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[head + i] === b[head + j]) {
+      out.push([head + i, head + j]);
+      i++;
+      j++;
+    } else if ((len[(i + 1) * width + j] as number) >= (len[i * width + j + 1] as number)) i++;
+    else j++;
+  }
+  for (let k = 0; k < tail; k++) out.push([a.length - tail + k, b.length - tail + k]);
+  return out;
+}
+
+function stripEol(line: string): string {
+  return line.replace(/\r?\n$/, "");
+}
+
+// carryEdits applies to orig the lines that differ between base and mod, or returns null when an
+// edit does not sit on lines that orig and base share.
+function carryEdits(orig: string[], base: string[], mod: string[], eol: string): string[] | null {
+  const origKeys = orig.map(stripEol);
+  const baseOrig = matchLines(base, origKeys);
+  const edits = matchLines(base, mod);
+  if (!baseOrig || !edits) return null;
+  const toOrig = new Array<number>(base.length).fill(-1);
+  for (const [bi, oi] of baseOrig) toOrig[bi] = oi;
+
+  const out: string[] = [];
+  let cursor = 0;
+  const push = (lines: string[]) => {
+    for (const line of lines) {
+      const last = out.length - 1;
+      if (last >= 0 && !/\n$/.test(out[last] as string)) out[last] = (out[last] as string) + eol;
+      out.push(line + eol);
+    }
+  };
+  const copyTo = (to: number) => {
+    for (; cursor < to; cursor++) out.push(orig[cursor] as string);
+  };
+
+  let pb = 0;
+  let pm = 0;
+  for (const [bi, mi] of [...edits, [base.length, mod.length] as Match]) {
+    if (bi > pb || mi > pm) {
+      const added = mod.slice(pm, mi);
+      let from: number;
+      let to: number;
+      if (bi > pb) {
+        from = toOrig[pb] as number;
+        to = toOrig[bi - 1] as number;
+        if (from < 0 || to < 0 || to - from !== bi - 1 - pb) return null;
+        for (let k = pb; k < bi; k++) if (toOrig[k] !== from + (k - pb)) return null;
+        to += 1;
+      } else {
+        from = pb === 0 ? 0 : (toOrig[pb - 1] as number) + 1;
+        if (pb > 0 && from === 0) return null;
+        if (pb < base.length && toOrig[pb] !== from) return null;
+        to = from;
+      }
+      if (from < cursor) return null;
+      copyTo(from);
+      push(added);
+      cursor = to;
+    }
+    pb = bi + 1;
+    pm = mi + 1;
+  }
+  copyTo(orig.length);
+  return out;
+}
+
 function render(doc: Document.Parsed, text: string): string {
-  return doc.toString({ lineWidth: 0, ...styleOf(text) });
+  const opts = { lineWidth: 0, ...styleOf(text) };
+  const mod = doc.toString(opts);
+  const eol = /\r?\n/.exec(text)?.[0] === "\r\n" ? "\r\n" : "\n";
+  const lines = (s: string) => s.split(/(?<=\n)/);
+  const orig = lines(text);
+  const modLines = lines(mod).map(stripEol);
+  const baseLines = lines(parseDocument(text, PARSE).toString(opts)).map(stripEol);
+  const merged = carryEdits(orig, baseLines, modLines, eol);
+  return merged ? merged.join("") : eol === "\n" ? mod : mod.replace(/\n/g, eol);
 }
 
 function pruneEmpty(svc: YAMLMap, where: Where): void {

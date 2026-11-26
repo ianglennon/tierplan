@@ -683,5 +683,44 @@
       {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "x.example.com"}
     ],
     "output": "services:\n  api:\n    image: nginx:1.27\n    image: nginx:1.28\n"
+  },
+  {
+    "name": "leading-zero-scalars-kept",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    environment:\n      UMASK: 007\n      MODE: 0440\n      CODE: 08\n      QUOTED: \"0440\"\n      SINGLE: '007'\n    deploy:\n      labels:\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    environment:\n      UMASK: 007\n      MODE: 0440\n      CODE: 08\n      QUOTED: \"0440\"\n      SINGLE: '007'\n    deploy:\n      labels:\n        traefik.x: \"1\"\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "crlf-line-endings-kept",
+    "target": "swarm",
+    "input": "services:\r\n  api:\r\n    image: nginx:1.27\r\n    environment:\r\n      UMASK: 007\r\n      MODE: 0440\r\n      CODE: 08\r\n      QUOTED: \"0440\"\r\n      SINGLE: '007'\r\n    deploy:\r\n      labels:\r\n        traefik.x: \"1\"\r\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\r\n  api:\r\n    image: nginx:1.27\r\n    environment:\r\n      UMASK: 007\r\n      MODE: 0440\r\n      CODE: 08\r\n      QUOTED: \"0440\"\r\n      SINGLE: '007'\r\n    deploy:\r\n      labels:\r\n        traefik.x: \"1\"\r\n        tierplan.ingress.host: app.example.com\r\n        tierplan.ingress.port: \"8080\"\r\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
+  },
+  {
+    "name": "untouched-scalars-and-flow-kept",
+    "target": "swarm",
+    "input": "services:\n  api:\n    image: nginx:1.27\n    environment:\n      LIMIT: 1e3\n      MASK: 0x1F\n    command: [ \"a\",   \"b\" ]\n    healthcheck:\n      test: >-\n        curl -f\n        http://localhost\n    deploy:\n      labels:\n        traefik.x: \"1\"\n",
+    "ops": [
+      {"kind": "set", "service": "api", "route": "default", "field": "host", "value": "app.example.com"},
+      {"kind": "set", "service": "api", "route": "default", "field": "port", "value": "8080"}
+    ],
+    "output": "services:\n  api:\n    image: nginx:1.27\n    environment:\n      LIMIT: 1e3\n      MASK: 0x1F\n    command: [ \"a\",   \"b\" ]\n    healthcheck:\n      test: >-\n        curl -f\n        http://localhost\n    deploy:\n      labels:\n        traefik.x: \"1\"\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: \"8080\"\n",
+    "declarations": [
+      {"service": "api", "name": "default", "host": "app.example.com", "port": 8080, "path": "/", "scheme": "http", "strip": false}
+    ]
   }
 ]

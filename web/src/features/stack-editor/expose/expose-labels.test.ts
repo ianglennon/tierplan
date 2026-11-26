@@ -358,3 +358,37 @@ describe("a compose file that is not valid YAML", () => {
     expect(removeIgnoredCopy(bad, "api", "swarm")).toBe(bad);
   });
 });
+
+describe("the rest of the file is left as it was", () => {
+  const crlf = (s: string) => s.replace(/\n/g, "\r\n");
+  const base =
+    "services:\n  api:\n    image: nginx:1.27\n    environment:\n      MODE: 0440\n      LIMIT: 1e3\n" +
+    '    deploy:\n      labels:\n        tierplan.ingress.host: app.example.com\n        tierplan.ingress.port: "80"\n';
+
+  it("removes a route without touching a leading-zero scalar or a line ending", () => {
+    const out = removeRoute(crlf(base), "api", "swarm", "default");
+    expect(out).toBe(
+      crlf(
+        "services:\n  api:\n    image: nginx:1.27\n    environment:\n      MODE: 0440\n      LIMIT: 1e3\n",
+      ),
+    );
+  });
+
+  it("keeps a leading zero and CRLF when the edited line is itself rewritten by the writer", () => {
+    // The labels are a flow map, which the writer re-spaces, so the edit cannot be carried line by
+    // line and the whole document is written; the zeros and the line endings still survive.
+    const text = crlf(
+      'services:\n  api:\n    image: nginx\n    environment:\n      MODE: 0440\n    deploy:\n      labels: {tierplan.ingress.host: a.example.com, tierplan.ingress.port: "80"}\n',
+    );
+    const out = setRouteField(text, "api", "swarm", "default", "host", "b.example.com");
+    expect(out).toContain("MODE: 0440\r\n");
+    expect(out).toContain("b.example.com");
+    expect(out.replace(/\r\n/g, "")).not.toMatch(/\n/);
+  });
+
+  it("writes a number it creates itself as a quoted string", () => {
+    const out = setRouteField(base, "api", "swarm", "default", "port", "0080");
+    expect(out).toContain('tierplan.ingress.port: "0080"');
+    expect(out).toContain("MODE: 0440\n");
+  });
+});
