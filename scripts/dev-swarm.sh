@@ -3,17 +3,17 @@
 # SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # A local Docker Swarm for the development loop (D-60): three managers and one
-# worker, each a privileged docker:<engine>-dind container, with the agent and the
-# ingress proxy built from this source tree loaded on every node. `make dev` is the
+# worker, each a privileged docker:<engine>-dind container, with the agent, the
+# ingress proxy and the keepalived image built from this source tree loaded on every node. `make dev` is the
 # TierPlan they report to.
 #
-#   scripts/dev-swarm.sh up      create the swarm and load the agent and ingress images
-#   scripts/dev-swarm.sh load    rebuild both images and reload them on a running dev swarm
+#   scripts/dev-swarm.sh up      create the swarm and load the agent, ingress and keepalived images
+#   scripts/dev-swarm.sh load    rebuild the three images and reload them on a running dev swarm
 #   scripts/dev-swarm.sh down    remove what `up` created
 #   scripts/dev-swarm.sh dns     print the DNS servers `up` would give the nodes
 #
 # The swarm's containers persist across sessions. After the source changes, `load`
-# rebuilds the agent and the ingress proxy and loads and retags them on the running
+# rebuilds the agent, the ingress proxy and the keepalived image and loads and retags them on the running
 # nodes without recreating the swarm; it refuses when a labelled node is absent.
 #
 # `down` removes only the four containers named tierplan-dev-m1..m3 and
@@ -46,7 +46,7 @@
 #   DEV_SWARM_DOCKER   the docker command; a test hook for scripts/test-scripts.sh,
 #                      default docker from PATH.
 #
-# Needs Docker (with buildx, for the agent and ingress images) and make. Run it through
+# Needs Docker (with buildx, for the agent, ingress and keepalived images) and make. Run it through
 # `sg docker -c '...'` when your shell predates your docker group membership.
 set -euo pipefail
 
@@ -60,6 +60,8 @@ AGENT_LOCAL=tierplan-agent:dev
 AGENT_EDGE=ghcr.io/ianglennon/tierplan-agent:edge
 INGRESS_LOCAL=tierplan-ingress:dev
 INGRESS_EDGE=ghcr.io/ianglennon/tierplan-ingress:edge
+KEEPALIVED_LOCAL=tierplan-keepalived:dev
+KEEPALIVED_EDGE=ghcr.io/ianglennon/tierplan-keepalived:edge
 MANAGERS=(tierplan-dev-m1 tierplan-dev-m2 tierplan-dev-m3)
 WORKERS=(tierplan-dev-w1)
 NODES=("${MANAGERS[@]}" "${WORKERS[@]}")
@@ -175,18 +177,21 @@ all_nodes_ready() {
   [[ "$(grep -c '^Ready|' <<<"${out}")" == "${#NODES[@]}" ]] && grep -q '|Leader$' <<<"${out}"
 }
 
-# build_and_load_images: builds the agent and the ingress proxy from this tree and loads
-# and retags both on every node. ghcr.io resolves to the node itself (see `up`), so the
-# release image names that the install commands and the ingress service use are satisfied
+# build_and_load_images: builds the agent, the ingress proxy and the keepalived image from
+# this tree and loads and retags each on every node. ghcr.io resolves to the node itself (see
+# `up`), so the release image names that the install commands, the ingress service and the
+# virtual IP service use are satisfied
 # by what is loaded here and no registry is contacted.
 build_and_load_images() {
   local n
-  make agent-image ingress-image
+  make agent-image ingress-image keepalived-image
   for n in "${NODES[@]}"; do
     docker save "${AGENT_LOCAL}" | docker exec -i "${n}" docker load >/dev/null
     docker exec "${n}" docker tag "${AGENT_LOCAL}" "${AGENT_EDGE}"
     docker save "${INGRESS_LOCAL}" | docker exec -i "${n}" docker load >/dev/null
     docker exec "${n}" docker tag "${INGRESS_LOCAL}" "${INGRESS_EDGE}"
+    docker save "${KEEPALIVED_LOCAL}" | docker exec -i "${n}" docker load >/dev/null
+    docker exec "${n}" docker tag "${KEEPALIVED_LOCAL}" "${KEEPALIVED_EDGE}"
   done
 }
 
@@ -202,7 +207,7 @@ Start TierPlan so the nodes can reach it and the agents are accepted:
 EOF
 }
 
-# load: reloads the agent and ingress images on the running dev swarm.
+# load: reloads the agent, ingress and keepalived images on the running dev swarm.
 load() {
   local n
   for n in "${NODES[@]}"; do
@@ -222,7 +227,7 @@ load() {
   build_and_load_images
   cat <<EOF
 
-The agent (${AGENT_EDGE}) and the ingress proxy (${INGRESS_EDGE}) built from this tree are loaded on every node.
+The agent (${AGENT_EDGE}), the ingress proxy (${INGRESS_EDGE}) and the keepalived image (${KEEPALIVED_EDGE}) built from this tree are loaded on every node.
 Services that are already running keep the image they started with; update the service to pick the new one up.
 
 Next:
@@ -296,7 +301,7 @@ up() {
   cat <<EOF
 
 The dev swarm is up: ${#MANAGERS[@]} managers and ${#WORKERS[@]} worker on network ${NETWORK} (${SUBNET}), docker:${ENGINE}-dind.
-The agent and the ingress proxy built from this tree are loaded on every node as ${AGENT_EDGE} and ${INGRESS_EDGE}.
+The agent, the ingress proxy and the keepalived image built from this tree are loaded on every node as ${AGENT_EDGE}, ${INGRESS_EDGE} and ${KEEPALIVED_EDGE}.
 $(if ((${#dns_servers[@]} > 0)); then echo "The nodes' Docker daemons use DNS server(s): ${dns_servers[*]}"; else echo "No DNS server was found for the nodes: agents there use Docker's fallback 8.8.8.8, which cannot resolve LAN names (set DEV_SWARM_DNS)."; fi)
 
 Next:

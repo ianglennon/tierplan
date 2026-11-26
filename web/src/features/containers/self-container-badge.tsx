@@ -8,9 +8,10 @@ import { useT } from "@/i18n/use-t";
 
 interface SelfContainerBadgeProps {
   // server for the container TierPlan runs in, agent for an agent's container, and
-  // agent-service for the swarm service whose tasks are the agents, and ingress for what the
-  // ingress proxy is made of (its service, network, volumes, secret and tasks).
-  kind: "server" | "agent" | "agent-service" | "ingress";
+  // agent-service for the swarm service whose tasks are the agents, ingress for what the
+  // ingress proxy is made of (its service, network, volumes, secret and tasks), and ingress_vip
+  // for a task of the virtual IP service, which reads the same as the proxy's (U-03).
+  kind: "server" | "agent" | "agent-service" | "ingress" | "ingress_vip";
 }
 
 // SelfContainerBadge marks a container TierPlan itself depends on: a neutral

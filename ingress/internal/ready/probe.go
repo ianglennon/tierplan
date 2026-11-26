@@ -24,6 +24,12 @@ func DefaultReadyURL() string {
 	return "http://127.0.0.1:" + strconv.Itoa(ingressbundle.ReadyPort) + ingressbundle.ReadyPath
 }
 
+// PublishedReadyURL is the readiness endpoint as the node's own loopback sees it on a published host port,
+// which is how the keepalived container, in the host network namespace, reaches the proxy (D-13).
+func PublishedReadyURL(port int) string {
+	return "http://127.0.0.1:" + strconv.Itoa(port) + ingressbundle.ReadyPath
+}
+
 // NewProbeClient returns the client the health check uses. It ignores proxy variables, so an HTTP_PROXY in
 // the container's environment cannot redirect a loopback probe, and it does not follow redirects, because
 // only a 200 from the readiness URL itself counts.

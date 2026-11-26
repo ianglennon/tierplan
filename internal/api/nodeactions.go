@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
@@ -48,6 +50,23 @@ type NodeAvailabilityInput struct {
 	Body NodeAvailabilityRequest
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// VIPHandoffBody says how the move of the virtual address off a drained node went (D-25).
+type VIPHandoffBody struct {
+	Outcome string `json:"outcome" enum:"moved,no_candidate,agent_unreachable,timeout" doc:"moved (another node reported MASTER, named by holder), no_candidate (no other node was ready to take the address, so nothing was stopped), agent_unreachable (the node's agent was not connected or the stop failed) or timeout (no other node reported MASTER within 10 seconds). The drain was made whatever the outcome"`
+	Holder  string `json:"holder,omitempty" doc:"The host name of the node that took the address; present only when the outcome is moved"`
+}
+
+// NodeAvailabilityBody is the answer of an availability change that ran a virtual IP handoff.
+type NodeAvailabilityBody struct {
+	VIPHandoff *VIPHandoffBody `json:"vipHandoff,omitempty" doc:"How the move of the virtual IP off the node went; present only for a drain of the node that held it"`
+}
+
+// NodeAvailabilityOutput is the answer of an availability change: 204 with no body, or 200 with the handoff's.
+type NodeAvailabilityOutput struct {
+	Status int
+	Body   *NodeAvailabilityBody
 }
 
 // NodeRoleRequest is the body of a role change.
@@ -86,9 +105,15 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 		Summary: "Drain, pause or activate a node",
 		Description: "Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, " +
 			"so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs TierPlan or of the only connected manager agent) " +
-			"the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. " + changeErrors + " Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.",
-		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
-	}, need, func(ctx context.Context, in *NodeAvailabilityInput) (*struct{}, error) {
+			"the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. " + changeErrors + " Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code. " +
+			"The answer is 204 with no body, except for a drain of the node that holds the environment's virtual IP: that first stops the node's keepalived through its agent so the address moves to another node (waiting at most 10 seconds for one to report MASTER), " +
+			"and the answer is then 200 with vipHandoff giving the outcome (moved with the new holder, no_candidate, agent_unreachable or timeout). The drain is made whatever the outcome, and each handoff is audited as ingress.vip_handoff with the node, the holder and the outcome. " +
+			"A stale version is refused with 409 node_changed before the handoff, so nothing is stopped for it. A drain that is refused after the handoff (a read-only host, no connected manager, or another change that got in first) " +
+			"has still moved the address: the answer is then the error, with no vipHandoff, and the ingress.vip_handoff audit row is where the move is recorded.",
+		// 200 is the documented success with a body, and 204 the one without; the handler sets Status to say which.
+		Tags: []string{"environments"}, DefaultStatus: http.StatusOK,
+		Responses: map[string]*huma.Response{"204": {Description: "No Content: the drain, pause or activate was made and no virtual IP handoff ran"}},
+	}, need, func(ctx context.Context, in *NodeAvailabilityInput) (*NodeAvailabilityOutput, error) {
 		p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 		if p == nil || env == nil {
 			return nil, huma.Error500InternalServerError("internal error")
@@ -97,10 +122,19 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 		if in.Body.Availability == impactDrain || in.Body.Availability == impactPause {
 			impact = in.Body.Availability
 		}
-		return nil, setNode(ctx, d, p, env.ID, nodeChange{
+		handoff, err := setNode(ctx, d, p, env.ID, nodeChange{
 			action: audit.ActionNodeAvailabilityChanged, nodeID: in.NodeID, impact: impact, version: in.Body.Version,
 			to: in.Body.Availability, confirm: in.Body.Confirm, userAgent: in.UserAgent,
 		})
+		if err != nil {
+			return nil, err
+		}
+		if handoff == nil {
+			return &NodeAvailabilityOutput{Status: http.StatusNoContent}, nil
+		}
+		return &NodeAvailabilityOutput{Status: http.StatusOK, Body: &NodeAvailabilityBody{
+			VIPHandoff: &VIPHandoffBody{Outcome: handoff.Outcome, Holder: handoff.Holder},
+		}}, nil
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -119,10 +153,11 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 		if in.Body.Role == "worker" {
 			impact = impactDemote
 		}
-		return nil, setNode(ctx, d, p, env.ID, nodeChange{
+		_, err := setNode(ctx, d, p, env.ID, nodeChange{
 			action: audit.ActionNodeRoleChanged, nodeID: in.NodeID, impact: impact, version: in.Body.Version,
 			to: in.Body.Role, confirm: in.Body.Confirm, userAgent: in.UserAgent,
 		})
+		return nil, err
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -286,19 +321,23 @@ type nodeChange struct {
 
 // setNode makes one availability or role change. It reads the node and judges the change as
 // nodeImpact does, refuses one that needs the node's name when it was not typed, and then writes
-// once on a manager with the version it was given. Every attempt on a node that exists is audited.
-func setNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, ch nodeChange) error {
+// once on a manager with the version it was given. A drain of the node that holds the virtual IP first moves the address off
+// it (D-25): the handoff runs after the name check and the version check and before the write, is best-effort and bounded, and
+// is returned so the answer can say how it went; it never stops the drain. A write that is refused after the handoff (the host
+// is read-only, no manager is connected, the swarm saw another change first) leaves the address moved and the node not drained.
+// Every attempt on a node that exists is audited.
+func setNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, ch nodeChange) (*ingressdeploy.VIPHandoff, error) {
 	if err := requireSwarm(ctx, d.services(), envID); err != nil {
-		return err
+		return nil, err
 	}
 	in, err := gatherImpact(ctx, d, envID, ch.nodeID, ch.impact)
 	if err != nil {
 		if errors.Is(err, dockerx.ErrNodeNotFound) {
-			return nodeNotFound()
+			return nil, nodeNotFound()
 		}
 		code, problem := nodeActionProblem(d, envID, err)
 		auditNodeChange(ctx, d, p, envID, ch, nodeAudit{code: code})
-		return problem
+		return nil, problem
 	}
 	impact := nodeImpact(in)
 	from := in.Node.Availability
@@ -311,8 +350,21 @@ func setNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, 
 	if impact.NeedsConfirm && !typed {
 		rec.code = codeConfirmationRequired
 		auditNodeChange(ctx, d, p, envID, ch, rec)
-		return httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired,
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, codeConfirmationRequired,
 			"Type the node's name, "+impact.Hostname+", to confirm this.")
+	}
+
+	var handoff *ingressdeploy.VIPHandoff
+	if ch.action == audit.ActionNodeAvailabilityChanged && ch.to == impactDrain && d.VIP != nil {
+		// A stale version is the commonest reason the write is refused afterwards, and it is known now: the node was read a
+		// moment ago. Refuse it here, so a drain that will not be made never stops the holder's keepalived.
+		if in.Version != ch.version {
+			code, problem := nodeActionProblem(d, envID, dockerx.ErrNodeChanged)
+			rec.code = code
+			auditNodeChange(ctx, d, p, envID, ch, rec)
+			return nil, problem
+		}
+		handoff = handOffVIP(ctx, d, p, envID, ch, impact.Hostname)
 	}
 
 	// The write is sent once and seen through, so a browser that goes away while it runs does not
@@ -332,12 +384,47 @@ func setNode(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, 
 		code, problem := nodeActionProblem(d, envID, err)
 		rec.code = code
 		auditNodeChange(ctx, d, p, envID, ch, rec)
-		return problem
+		return handoff, problem
 	}
 	refreshClusters(ctx, d.services(), envID)
 	rec.code = actionDone
 	auditNodeChange(ctx, d, p, envID, ch, rec)
-	return nil
+	return handoff, nil
+}
+
+// vipHandoffMargin is what a handoff is given beyond ingressdeploy.VIPHandoffBound before the route stops waiting for it.
+const vipHandoffMargin = 2 * time.Second
+
+// handOffVIP moves the virtual address off the node about to be drained and audits the outcome as ingress.vip_handoff. It
+// returns nil when the node does not hold the address or the hook could not tell, and it never fails the drain: it is
+// bounded, runs on a context that outlives the request so a browser that goes away does not leave a stopped keepalived with
+// no drain, and every failure is an outcome (PROH-26-04).
+func handOffVIP(ctx context.Context, d NodesDeps, p *rbac.Principal, envID string, ch nodeChange, hostname string) *ingressdeploy.VIPHandoff {
+	hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ingressdeploy.VIPHandoffBound+vipHandoffMargin)
+	defer cancel()
+	h, err := d.VIP.HandoffVIP(hctx, envID, ch.nodeID)
+	if err != nil {
+		d.Log.Warn("the drain handoff could not tell whether the node holds the virtual IP; draining without it", "node", ch.nodeID, "error", err)
+		return nil
+	}
+	if h == nil {
+		return nil
+	}
+	result, reason := audit.ResultSuccess, ""
+	if h.Outcome != ingressdeploy.VIPHandoffMoved && h.Outcome != ingressdeploy.VIPHandoffNoCandidate {
+		result, reason = audit.ResultFailure, h.Outcome
+	}
+	wctx, wcancel := doneActionAuditContext(ctx)
+	defer wcancel()
+	if err := d.Audit.Record(wctx, audit.Entry{
+		Actor: p.AuditActor(), Action: audit.ActionIngressVIPHandoff, TargetType: nodeTargetType, TargetID: ch.nodeID,
+		EnvID: envID, Result: result, Reason: reason,
+		IP: httpx.ClientIP(ctx), UserAgent: ch.userAgent,
+		Details: map[string]string{"node": hostname, "holder": h.Holder, "outcome": h.Outcome},
+	}); err != nil {
+		d.Log.Error("could not audit a virtual IP handoff", "node", ch.nodeID, "error", err)
+	}
+	return h
 }
 
 // nodeActionProblem turns the error of a node read or update into the code its audit row records

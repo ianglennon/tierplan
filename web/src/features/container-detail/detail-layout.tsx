@@ -196,7 +196,8 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
                 ) : null}
                 {data.selfKind === "server" ||
                 data.selfKind === "agent" ||
-                data.selfKind === "ingress" ? (
+                data.selfKind === "ingress" ||
+                data.selfKind === "ingress_vip" ? (
                   <SelfContainerBadge kind={data.selfKind} />
                 ) : null}
               </div>

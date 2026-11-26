@@ -227,6 +227,10 @@ function refreshNodes(queryClient: ReturnType<typeof useQueryClient>, envId: str
 }
 
 export type NodeAvailability = "active" | "pause" | "drain";
+
+// VIPHandoff is how the move of the virtual IP off a drained node went. The answer carries it only
+// for a drain of the node that held the address; a 204 carries none.
+export type VIPHandoff = components["schemas"]["VIPHandoffBody"];
 export type NodeRole = "manager" | "worker";
 
 export interface NodeAvailabilityChange {
@@ -245,10 +249,11 @@ export interface NodeRoleChange {
   confirm?: string;
 }
 
-// useSetNodeAvailability is the mutation behind Drain, Pause and Activate. It does not retry.
+// useSetNodeAvailability is the mutation behind Drain, Pause and Activate. It does not retry. It
+// resolves with the virtual IP handoff when the drain had one, and undefined on a 204.
 export function useSetNodeAvailability(envId: string) {
   const queryClient = useQueryClient();
-  return useMutation<void, NodeActionError, NodeAvailabilityChange>({
+  return useMutation<VIPHandoff | undefined, NodeActionError, NodeAvailabilityChange>({
     mutationKey: ["env", envId, "node-action"],
     mutationFn: async ({ nodeId, availability, version, confirm }) => {
       try {
@@ -257,6 +262,7 @@ export function useSetNodeAvailability(envId: string) {
           body: { availability, version, ...(confirm ? { confirm } : {}) },
         });
         if (!res.response.ok) throw nodeActionError(res.error, res.response);
+        return res.data?.vipHandoff;
       } catch (e) {
         throw e instanceof NodeActionError ? e : new NodeActionError(0);
       }

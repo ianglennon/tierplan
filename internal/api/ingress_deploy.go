@@ -219,6 +219,12 @@ type IngressDisableNodeBody struct {
 	Name   string `json:"name" doc:"The node's name"`
 }
 
+// IngressDisableVIPBody is the virtual IP a switch-off of ingress removes first.
+type IngressDisableVIPBody struct {
+	Address string `json:"address" doc:"The virtual IP with the prefix length of its segment, for example 192.168.1.250/24"`
+	Secret  string `json:"secret" doc:"The name of the swarm secret that holds the virtual IP's key; never the key"`
+}
+
 // IngressDisableRemovesBody is what a switch-off would remove.
 type IngressDisableRemovesBody struct {
 	Service   string                   `json:"service" doc:"The proxy service's name; empty when the swarm was read and does not hold it"`
@@ -226,6 +232,7 @@ type IngressDisableRemovesBody struct {
 	Container string                   `json:"container" doc:"The proxy container's name on a standalone host; empty when the host does not hold it and on a swarm"`
 	Secrets   []string                 `json:"secrets" doc:"The names of the join token secrets the swarm holds"`
 	Volumes   []IngressDisableNodeBody `json:"volumes" doc:"The nodes whose certificate cache volume is wiped: every node of a swarm, the one host of a standalone environment"`
+	VirtualIP *IngressDisableVIPBody   `json:"virtualIP,omitempty" doc:"The environment's virtual IP, with the name of its key secret, which the switch-off removes before it touches the proxies; absent when the environment has none and on a standalone host"`
 }
 
 // IngressDisablePreviewBody is the answer to the preview of a switch-off.
@@ -261,12 +268,12 @@ type IngressJobPathInput struct {
 // IngressJobBody is an ingress job.
 type IngressJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
-	Kind       string               `json:"kind" enum:"ingress_enable,ingress_disable,ingress_ensure" doc:"What the job does: ingress_enable, ingress_disable, or ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person)"`
+	Kind       string               `json:"kind" enum:"ingress_enable,ingress_disable,ingress_ensure,ingress_vip_enable,ingress_vip_change,ingress_vip_disable" doc:"What the job does: ingress_enable, ingress_disable, ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person), or, for the virtual IP, ingress_vip_enable, ingress_vip_change or ingress_vip_disable"`
 	StartedBy  string               `json:"startedBy" doc:"Who started it, as the hub records its owner"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
-	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable"`
+	Items      []StackJobItemBody   `json:"items" doc:"The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; virtual_ip (which removes the virtual IP first, and is done with nothing removed when there is none), switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable; vip_key, vip_secret, vip_service and vip_switch for ingress_vip_enable; vip_change_service, vip_change_wait and vip_change_save for ingress_vip_change; vip_remove_service, vip_wait_tasks, vip_remove_secret and vip_forget for ingress_vip_disable"`
 	Output     []StackJobOutputLine `json:"output" doc:"The output log, oldest first"`
 }
 
@@ -434,7 +441,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Method:      http.MethodPost,
 		Path:        "/api/env/{envId}/ingress/disable/preview",
 		Summary:     "Preview switching ingress off for a swarm or standalone environment",
-		Description: "Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) " +
+		Description: "Says what switching ingress off would remove (the virtual IP, when the environment has one, with the address and the name of its key secret in removes.virtualIP; the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) " +
 			"and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live " +
 			"while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. " +
 			"A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: " +
@@ -467,6 +474,9 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		for _, n := range res.Removes.Volumes {
 			body.Removes.Volumes = append(body.Removes.Volumes, IngressDisableNodeBody{NodeID: n.ID, Name: n.Name})
 		}
+		if v := res.Removes.VirtualIP; v != nil {
+			body.Removes.VirtualIP = &IngressDisableVIPBody{Address: v.Address.String(), Secret: v.SecretName}
+		}
 		return &IngressDisablePreviewOutput{CacheControl: "no-store", Body: body}, nil
 	})
 
@@ -476,7 +486,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Path:          "/api/env/{envId}/ingress/disable",
 		Summary:       "Switch ingress off for a swarm or standalone environment",
 		DefaultStatus: http.StatusAccepted,
-		Description: "Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), " +
+		Description: "Refused while routes are live; otherwise answers 202 with a job's ID at once. On a swarm the job runs in this order: remove the virtual IP when the environment has one (its keepalived service, the wait for every node to release the address, its key secret and its row), which is the first item, virtual_ip, and ends vip_remove_failed with every later item not run when it fails, so the proxies are never removed under a running keepalived and ingress stays on; then stop serving routes (ingress is switched off and the proxies' sessions are closed), " +
 			"remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, " +
 			"disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped " +
 			"when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. " +

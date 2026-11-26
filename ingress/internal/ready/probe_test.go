@@ -120,3 +120,21 @@ func TestProbeDefaultReadyURLComesFromTheProtoConstants(t *testing.T) {
 		t.Fatalf("DefaultReadyURL = %q, want %q", got, want)
 	}
 }
+
+func TestPublishedReadyURL(t *testing.T) {
+	for _, tc := range []struct {
+		port int
+		want string
+	}{
+		{ingressbundle.ReadyPublishedPort, "http://127.0.0.1:7483/readyz"},
+		{ingressbundle.ReadyPort, "http://127.0.0.1:8083/readyz"},
+		{1, "http://127.0.0.1:1/readyz"},
+	} {
+		if got := PublishedReadyURL(tc.port); got != tc.want {
+			t.Errorf("PublishedReadyURL(%d) = %q, want %q", tc.port, got, tc.want)
+		}
+	}
+	if got, want := PublishedReadyURL(ingressbundle.ReadyPort), DefaultReadyURL(); got != want {
+		t.Errorf("PublishedReadyURL(ReadyPort) = %q, want DefaultReadyURL %q", got, want)
+	}
+}

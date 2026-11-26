@@ -20,7 +20,8 @@ import (
 )
 
 // The values of the proxy service. The container listens on unprivileged ports (D-06) and the service
-// publishes them on 80 and 443 in host mode, so the proxy sees the client's own address (D-08).
+// publishes them on 80 and 443 in host mode, so the proxy sees the client's own address (D-08), and
+// publishes its readiness endpoint on a third host port (D-13).
 const (
 	// ImageRepository is the proxy image without a tag; goreleaser publishes it.
 	ImageRepository = "ghcr.io/ianglennon/tierplan-ingress"
@@ -37,10 +38,17 @@ const (
 	// HTTPPublished and HTTPTarget are the published and the container port of plain HTTP.
 	HTTPPublished = 80
 	HTTPTarget    = 8080
-	// HTTPSPublished and HTTPSTarget are the published and the container port of HTTPS. The two target
-	// ports differ on purpose: two published ports that share one target collapse into one mapping (S2).
+	// HTTPSPublished and HTTPSTarget are the published and the container port of HTTPS. The target
+	// ports differ on purpose: published ports that share one target collapse into one mapping (S2).
 	HTTPSPublished = 443
 	HTTPSTarget    = 8443
+	// ReadyPublished and ReadyTarget are the published and the container port of the proxy's readiness
+	// endpoint (D-13, A-06). The port is published always, whether or not a virtual IP is on, so
+	// switching the virtual IP on never rolls the proxies. It is visible on the LAN; the endpoint
+	// answers a bare status code and nothing else. The three target ports 8080, 8443 and 8083 are
+	// distinct (S2).
+	ReadyPublished = ingressbundle.ReadyPublishedPort
+	ReadyTarget    = ingressbundle.ReadyPort
 
 	// UpdateMonitor is how long Swarm watches a replaced task before it counts the update as done. It
 	// is longer than the health check interval, so an update whose new task fails its first probes
@@ -166,6 +174,7 @@ func ProxyServiceSpec(in SpecInput) swarm.ServiceSpec {
 		EndpointSpec: &swarm.EndpointSpec{Ports: []swarm.PortConfig{
 			{Protocol: "tcp", TargetPort: HTTPTarget, PublishedPort: HTTPPublished, PublishMode: swarm.PortConfigPublishModeHost},
 			{Protocol: "tcp", TargetPort: HTTPSTarget, PublishedPort: HTTPSPublished, PublishMode: swarm.PortConfigPublishModeHost},
+			{Protocol: "tcp", TargetPort: ReadyTarget, PublishedPort: ReadyPublished, PublishMode: swarm.PortConfigPublishModeHost},
 		}},
 		UpdateConfig: &swarm.UpdateConfig{
 			Parallelism:   1,

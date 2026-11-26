@@ -247,11 +247,23 @@ jobs:
         with:
           node-version: 24
       - run: make build && make smoke
+      # The keepalived source tarball (D-26), cached by the hash of the script that pins its
+      # version, URL and sha256, so a run downloads it at most once per runner. The script
+      # still checks the hash of whatever the cache restored and fetches it again if it
+      # differs. The Docker layer cache on the runner reuses the image's C build stage
+      # until the tarball or that stage's own lines change (A-09).
+      - name: Cache the keepalived source tarball
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/keepalived
+          key: keepalived-source-${{ hashFiles('scripts/keepalived-source.sh') }}
       # The agent image under the install commands' hardening flags: UID 1000,
       # no-new-privileges, a writable state volume, the Docker socket. The ingress image
       # runs non-root with no capability, no socket and no-new-privileges, and is
-      # unhealthy with nothing to serve.
-      - run: make agent-image agent-image-smoke ingress-image ingress-image-smoke
+      # unhealthy with nothing to serve. The keepalived image (amd64 only on a pull
+      # request, A-09) must report keepalived 2.4.3, carry its licence text and SBOM, and
+      # hold no shell.
+      - run: make agent-image agent-image-smoke ingress-image ingress-image-smoke keepalived-image keepalived-image-smoke
       # D-23: what the smokes labelled with this job's owner, whatever the outcome.
       - name: Remove what this job left on the VM's Docker
         if: always()
@@ -277,8 +289,10 @@ jobs:
   integration:
     runs-on: [self-hosted, linux, x64]
     # Two legs can share a 4-core runner VM under -race, which roughly doubles the
-    # hosted runner's 11-13 minutes; go test itself allows 30 (make test-int).
-    timeout-minutes: 45
+    # hosted runner's 11-13 minutes. The virtual IP's real-engine tests (Phase 26) put the
+    # internal/ingressdeploy package at about 35 minutes on the dev host under -race, so go
+    # test itself allows 60 (make test-int) and the job 75.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -328,6 +342,20 @@ jobs:
       # node on the engine-29 leg (23-16), so it is built on the runner first too.
       - name: Build the ingress image
         run: make ingress-image
+      # The virtual IP tests in internal/vip run the real keepalived image in their dind
+      # nodes (26-01), so it is built on the runner first too, from the cached source.
+      # The keepalived source tarball (D-26), cached by the hash of the script that pins its
+      # version, URL and sha256, so a run downloads it at most once per runner. The script
+      # still checks the hash of whatever the cache restored and fetches it again if it
+      # differs. The Docker layer cache on the runner reuses the image's C build stage
+      # until the tarball or that stage's own lines change (A-09).
+      - name: Cache the keepalived source tarball
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/keepalived
+          key: keepalived-source-${{ hashFiles('scripts/keepalived-source.sh') }}
+      - name: Build the keepalived image
+        run: make keepalived-image
       - run: make test-int
         env:
           TIERPLAN_TEST_DOCKER_HOST: tcp://localhost:${{ job.services.dind.ports['2375'] }}
@@ -347,8 +375,8 @@ jobs:
   # D-57, D-58: the multi-node suite on the oldest and newest Engines, on every
   # pull request. Unlike the integration job there is no dind service: every test
   # starts its own swarm of dind nodes (3 managers and a worker) on a network of
-  # its own, so the in-process TierPlan is reachable from them, and loads the agent
-  # image built here. A leg runs the swarm-tagged internal/agents suite only
+  # its own, so the in-process TierPlan is reachable from them, and loads the agent,
+  # ingress and keepalived images built here. A leg runs the swarm-tagged internal/agents suite only
   # (make test-swarm, shuffled); go test allows 80 minutes and the job 90, so a
   # hang ends in Go's goroutine dump and not in a silent kill (D-22).
   swarm:
@@ -381,6 +409,18 @@ jobs:
           # The runner VMs keep Go caches between runs; restoring the action cache
           # over them while another job on the VM builds corrupts them.
           cache: false
+      # The virtual IP case of the shared suite (26-32) switches ingress and the virtual IP on
+      # through real agents, so the proxy and keepalived images are built on the runner first and
+      # the case loads them into its dind nodes. make test-swarm builds all three images itself
+      # (they are its prerequisites); building them here puts the build in its own step and reuses
+      # the keepalived source tarball cache of the integration job (D-26, A-09).
+      - name: Cache the keepalived source tarball
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/keepalived
+          key: keepalived-source-${{ hashFiles('scripts/keepalived-source.sh') }}
+      - name: Build the ingress and keepalived images
+        run: make ingress-image keepalived-image
       - run: make test-swarm
       # D-21: the failing and hung tests, their packages and the shuffle seed.
       - name: Name the failing tests
@@ -645,7 +685,7 @@ jobs:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Build the binaries and the image contexts
         run: make edge-context
-      # Every image (server, agent, ingress) is pushed and signed in this one step, so
+      # Every image (server, agent, ingress, keepalived) is pushed and signed in this one step, so
       # nothing can leave an :edge tag pushed but unsigned (WR-11).
       - name: Build, push and sign the edge images
         run: |
@@ -669,3 +709,4 @@ jobs:
           publish tierplan dist/edge
           publish tierplan-agent dist/edge-agent
           publish tierplan-ingress dist/edge-ingress
+          publish tierplan-keepalived dist/edge-keepalived

@@ -935,7 +935,7 @@ export interface paths {
         put?: never;
         /**
          * Open a shell in a container
-         * @description Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for TierPlan's own server, an agent's container or an ingress proxy task, and 409 ingress_owned for TierPlan's standalone ingress proxy container, even when it is stopped (each decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).
+         * @description Starts an interactive TTY process in a running container and returns a pending session the browser attaches to over a WebSocket within 30 seconds, at wsPath. The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). 422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), 409 host_read_only on a read-only host, 409 own_container for TierPlan's own server, an agent's container, an ingress proxy task or a task of the virtual IP service, and 409 ingress_owned for TierPlan's standalone ingress proxy container, even when it is stopped (each decided from a fresh inspect), 409 container_not_running, 502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, 503 stream_busy when the host's agent serves as many logs and shells as it can. What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. Needs containers.exec on the environment (an extra permission: Operator only when granted; Admin always).
          */
         post: operations["openShell"];
         delete?: never;
@@ -1563,7 +1563,7 @@ export interface paths {
         put?: never;
         /**
          * Switch ingress off for a swarm or standalone environment
-         * @description Refused while routes are live; otherwise answers 202 with a job's ID at once. The job runs in this order: stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; On a standalone host the job removes the proxy container, the ingress network and the cache volume through the host's one node; a network another container still uses fails the job, naming it. 409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).
+         * @description Refused while routes are live; otherwise answers 202 with a job's ID at once. On a swarm the job runs in this order: remove the virtual IP when the environment has one (its keepalived service, the wait for every node to release the address, its key secret and its row), which is the first item, virtual_ip, and ends vip_remove_failed with every later item not run when it fails, so the proxies are never removed under a running keepalived and ingress stays on; then stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; On a standalone host the job removes the proxy container, the ingress network and the cache volume through the host's one node; a network another container still uses fails the job, naming it. 409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).
          */
         post: operations["disableIngress"];
         delete?: never;
@@ -1583,7 +1583,7 @@ export interface paths {
         put?: never;
         /**
          * Preview switching ingress off for a swarm or standalone environment
-         * @description Says what switching ingress off would remove (the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         * @description Says what switching ingress off would remove (the virtual IP, when the environment has one, with the address and the name of its key secret in removes.virtualIP; the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
          */
         post: operations["previewIngressDisable"];
         delete?: never;
@@ -1882,6 +1882,98 @@ export interface paths {
         get: operations["getIngressStatus"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/vip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the virtual IP status of a swarm
+         * @description Says which address the swarm's ingress answers on and which node holds it (none, one or many), when it last lost its holder, how each node that can hold it stands (its VRRP state, whether its proxy is ready, its keepalived task, its last fault and when TierPlan last heard from it), whether each manager allows privileged services, whether another router uses the router ID, which nodes have clock trouble, the authentication window in seconds and the last pass that kept the service as wanted. A swarm with no virtual IP answers 404 vip_not_enabled. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["getIngressVIP"];
+        /**
+         * Change the address or the router ID of a swarm's virtual IP
+         * @description The body is the whole configuration, as the preview takes it: an address, and a router ID or none to derive it from the cluster ID again. Takes the environment's operation lock, runs every check of the preview again on the new request and answers 202 with a job's ID at once. The job updates the keepalived service, waits until every node runs it and only then stores the new address with its audit entry (ingress.vip_changed). A wait that runs out of time (10 minutes) or is cancelled ends its item failed or cancelled and the address is stored all the same, since swarm carries on; an update that swarm stopped or rolled back is not stored. The key and its secret are kept: a change never rotates them. An address change rolls one node at a time and a router ID change removes the service and creates it again, which the preview says first. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 404 vip_not_enabled when the environment has no virtual IP. A refusal is 409 with the finding's code as the type and the server's sentence as the detail, as for the enable, and an address that is not an address with its prefix length (from /8 to /32) is 422 vip_address_invalid; a virtual IP whose switch-off failed part way is 409 vip_removal_pending, and switching it off again finishes the removal; 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin).
+         */
+        put: operations["changeIngressVIP"];
+        /**
+         * Switch the virtual IP on for a swarm
+         * @description Takes the environment's operation lock, runs every check of the preview again and answers 202 with a job's ID at once. The job makes the VRRP key, stores it as a swarm secret, creates the global keepalived service and stores the address with its audit entry (ingress.vip_enabled). Follow it at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. A refusal is 409 with the finding's code as the type and the server's sentence as the detail, and each refusing finding in errors: vip_swarm_only, vip_ingress_off, ingress_paused, vip_already_enabled, vip_privileged_not_allowed (naming TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true, with each manager and its state in errors), vip_not_unicast, vip_is_network_or_broadcast, vip_outside_node_subnet, vip_is_node_address, vip_in_use_by_environment, vip_overlaps_docker, vip_router_id_in_use, vip_ipv6_unsupported and vip_name_taken. An address that is not an address with its prefix length, from /8 to /32, is 422 vip_address_invalid. 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. TierPlan never sets the privileged-services setting itself: every manager's agent must already allow it. The answer and the job never carry the VRRP key. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["enableIngressVIP"];
+        /**
+         * Switch a swarm's virtual IP off
+         * @description Takes the environment's operation lock and answers 202 with a job's ID at once. The job removes the keepalived service, waits for every node to release the address, removes the key's swarm secret and deletes the stored row with its audit entry (ingress.vip_disabled). A step that fails leaves the row switched off and names what is left in the swarm; switching off again finishes it. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 404 vip_not_enabled when the environment has no virtual IP; 409 operation_locked while another operation holds the environment, naming it. Nothing is written when it is refused. Needs ingress.manage on the environment (its Admin).
+         */
+        delete: operations["disableIngressVIP"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/vip/disable/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching a swarm's virtual IP off
+         * @description Says what switching the virtual IP off would remove: the keepalived service, with how many of its tasks run now, and the swarm secret that holds the key, by name and never by content. It writes nothing and needs no manager check, since removing a service is not an escalation. items lists the steps of the job. 404 vip_not_enabled when the environment has no virtual IP. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["previewIngressVIPDisable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/vip/moves": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the moves of a swarm's virtual IP
+         * @description Pages the history of the address moving from one node to another, newest first by time and, for moves at the same instant, newest recorded first. limit is 1 to 100 (50 by default); before is the next of the previous page, an opaque cursor, and a value that is not one is 422 vip_bad_cursor. next is absent on the last page. A swarm with no moves answers an empty list. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        get: operations["listIngressVIPMoves"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/vip/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching the virtual IP on or changing it
+         * @description Runs every check of the virtual IP on the address and the router ID asked for and writes nothing: no key is made and no secret created. On an environment with no virtual IP it previews switching it on; on one that has a virtual IP it previews changing it, and change is true, with current, currentRouterId, the strategy of the change (roll, replace or none) and a notice that says what it does to the address. The answer is 200 whether or not the checks refuse: each finding has a code, the server's sentence, the items it is about and a severity, where error refuses the job and warning does not. The fixed privilege warning is always in warning, and managers lists each manager's privileged-services setting. The checks are the job's own: an address with no prefix length is the finding vip_address_invalid, and the others are vip_swarm_only, vip_ingress_off, ingress_paused, vip_already_enabled, vip_privileged_not_allowed (naming TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true, with each manager and its state), vip_ipv6_unsupported, vip_not_unicast, vip_is_network_or_broadcast, vip_outside_node_subnet, vip_is_node_address, vip_in_use_by_environment, vip_overlaps_docker, vip_router_id_in_use and vip_name_taken, and, for a change of a virtual IP whose switch-off failed part way, vip_removal_pending, with the warnings vip_inside_pool and vip_unverified. It never carries the VRRP key. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         */
+        post: operations["previewIngressVIP"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2275,7 +2367,7 @@ export interface paths {
         put?: never;
         /**
          * Drain, pause or activate a node
-         * @description Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs TierPlan or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. TierPlan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.
+         * @description Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs TierPlan or of the only connected manager agent) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. TierPlan itself never blocks a change that was confirmed by typing the node's name. Needs nodes.manage (Admin) on the environment. Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code. The answer is 204 with no body, except for a drain of the node that holds the environment's virtual IP: that first stops the node's keepalived through its agent so the address moves to another node (waiting at most 10 seconds for one to report MASTER), and the answer is then 200 with vipHandoff giving the outcome (moved with the new holder, no_candidate, agent_unreachable or timeout). The drain is made whatever the outcome, and each handoff is audited as ingress.vip_handoff with the node, the holder and the outcome. A stale version is refused with 409 node_changed before the handoff, so nothing is stopped for it. A drain that is refused after the handoff (a read-only host, no connected manager, or another change that got in first) has still moved the address: the answer is then the error, with no vipHandoff, and the ingress.vip_handoff audit row is where the move is recorded.
          */
         post: operations["setNodeAvailability"];
         delete?: never;
@@ -2293,7 +2385,7 @@ export interface paths {
         };
         /**
          * What a change to a swarm node will do
-         * @description Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_tierplan, only_manager_agent and facts_unreadable, and needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
+         * @description Judges a drain, pause, promote or demote of one node from a live read of the swarm, and is the same judgement the change itself enforces. For a drain or a pause it lists the node's tasks that are meant to run with what happens to each: moves (another active, ready node meets the service's placement constraints), stops (a global service's task is not moved), cannot_place, or stays (a pause). managers gives the manager counts now and after the change. warnings are quorum_at_risk, even_count, runs_tierplan, only_manager_agent and facts_unreadable, and, for a drain of the node that holds the environment's virtual IP, holds_vip (the address is moved to another node first) or holds_vip_alone (no other node is ready to take it); neither of those two asks for the name. needsConfirm says the node's name must be typed for the change to be accepted. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. Needs nodes.manage (Admin) on the environment.
          */
         get: operations["getNodeActionImpact"];
         put?: never;
@@ -4253,7 +4345,7 @@ export interface paths {
         };
         /**
          * List the environment problems that need attention
-         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again) and the automatic deploys of git stacks: a commit that was held back (git_autodeploy_skipped, with commit and reasonDetail; it goes when a deploy ends the wait), a deploy that put changes made outside the stack back (git_autodeploy_reverted, with count, example and revision; it goes with the next deploy of the stack) and an automation that is paused (git_autodeploy_paused, with reasonCode owner or rollback, revision and owner; it goes when it is resumed or turned off). These three go to the user the automation runs for and to callers who hold git.manage on the environment, and to no one else. An image update that failed is told too: one that was put back (update_rolled_back, with service or container, digest, reason and since) and one whose rollback failed as well, so the workload may be partly updated (update_rollback_failed, an error). They go while the tag still points at the digest that failed, which a newer digest or a good update ends, and are told only to callers who hold services.read (a service) or containers.read (a container) on the environment. More than five put-back updates of one environment are told as one item with count. Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again) and the automatic deploys of git stacks: a commit that was held back (git_autodeploy_skipped, with commit and reasonDetail; it goes when a deploy ends the wait), a deploy that put changes made outside the stack back (git_autodeploy_reverted, with count, example and revision; it goes with the next deploy of the stack) and an automation that is paused (git_autodeploy_paused, with reasonCode owner or rollback, revision and owner; it goes when it is resumed or turned off). These three go to the user the automation runs for and to callers who hold git.manage on the environment, and to no one else. An image update that failed is told too: one that was put back (update_rolled_back, with service or container, digest, reason and since) and one whose rollback failed as well, so the workload may be partly updated (update_rollback_failed, an error). They go while the tag still points at the digest that failed, which a newer digest or a good update ends, and are told only to callers who hold services.read (a service) or containers.read (a container) on the environment. More than five put-back updates of one environment are told as one item with count. The virtual IP's conditions are told as well, only to callers who hold ingress.manage on the environment and only while the virtual IP is on: nobody has held it for more than 10 seconds (vip_no_holder, an error), more than one node holds it (vip_multiple_holders), its only holder has not been heard from for more than two minutes (vip_holder_unheard), it moved in the last hour (vip_moved), another router uses its router ID (vip_foreign_router), a node's clock is out of step (vip_clock_skew, one item per node) and a manager stopped allowing privileged services (vip_privileged_lost); each carries a vip object with its facts. Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
          */
         get: operations["listEnvironmentWarnings"];
         put?: never;
@@ -7223,7 +7315,7 @@ export interface components {
         };
         ContainerActionResult: {
             /**
-             * @description Why a target failed. ingress_owned: the container is TierPlan's standalone ingress proxy, which only switching ingress off removes; with result failed for a single target and skipped in a bulk, and nothing is sent. own_container (with result skipped): TierPlan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
+             * @description Why a target failed. ingress_owned: the container is TierPlan's standalone ingress proxy, which only switching ingress off removes; with result failed for a single target and skipped in a bulk, and nothing is sent. own_container (with result skipped): TierPlan's own server, an agent container, or a task container of the ingress proxy or the virtual IP service, in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message
              * @enum {string}
              */
             code?: "own_container" | "ingress_owned" | "node_unreachable" | "not_found" | "host_read_only" | "agent_policy_denied" | "container_running" | "connection_lost" | "action_failed";
@@ -7322,10 +7414,10 @@ export interface components {
             /** @enum {string} */
             restartPolicy: "no" | "always" | "on-failure" | "unless-stopped";
             /**
-             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), empty otherwise
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container, ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), ingress_vip for a task container of TierPlan's virtual IP service (the component label keepalived and the service name tierplan-keepalived), empty otherwise
              * @enum {string}
              */
-            selfKind: "" | "server" | "agent" | "ingress";
+            selfKind: "" | "server" | "agent" | "ingress" | "ingress_vip";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
@@ -7392,10 +7484,10 @@ export interface components {
             /** @description Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise */
             restartLoop?: components["schemas"]["ContainerRestartLoopBody"];
             /**
-             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
+             * @description server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), ingress for a task container of TierPlan's swarm ingress proxy (the component label and the service name tierplan-ingress) and also for the standalone proxy container (the component label, project tierplan-ingress and service proxy), ingress_vip for a task container of TierPlan's virtual IP service (the component label keepalived and the service name tierplan-keepalived), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect
              * @enum {string}
              */
-            selfKind: "" | "server" | "agent" | "ingress";
+            selfKind: "" | "server" | "agent" | "ingress" | "ingress_vip";
             /** @description The swarm service name (com.docker.swarm.service.name); empty when the container has none */
             service: string;
             /** @description The swarm stack namespace (com.docker.stack.namespace); empty when the container has none */
@@ -7975,7 +8067,7 @@ export interface components {
             value?: string;
         };
         EnvWarningBody: {
-            /** @description For cert_not_renewing and clock_skew: the agent */
+            /** @description For cert_not_renewing, clock_skew and vip_clock_skew when an agent's clock gave the item: the agent */
             agentId?: string;
             /** @description For git_autodeploy_skipped: the short commit that is waiting for a fix or a manual review */
             commit?: string;
@@ -7985,7 +8077,7 @@ export interface components {
             containerId?: string;
             /**
              * Format: int64
-             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window. For update_rolled_back: on an item that stands for more than five updates, how many; absent on an item for one update
+             * @description For manual_update_needed: how many agents need an update by hand. For restart_loop: how many tasks of the service failed inside the window. For restart_loop_container: how many times the container died inside the window. For update_rolled_back: on an item that stands for more than five updates, how many; absent on an item for one update. For vip_multiple_holders: how many nodes hold the virtual IP. For vip_moved: how many moves of the last hour. For vip_privileged_lost: how many managers refuse
              */
             count?: number;
             /**
@@ -8007,21 +8099,21 @@ export interface components {
              */
             expiresAt?: string;
             /**
-             * @description Which problem this is
+             * @description Which problem this is. The vip_ items are for callers who hold ingress.manage on the environment: vip_no_holder (an error: no node has held the virtual IP for more than 10 seconds, with address and since), vip_multiple_holders (count, address), vip_holder_unheard (TierPlan has not heard from the only node that holds the address for more than two minutes; node, address and since), vip_moved (the address moved in the last hour; one item with count, from, to, moveReason and since for the latest move), vip_foreign_router (another router uses this router ID and fails authentication; routerId and, when valid, sender), vip_clock_skew (one item per node, with node, windowSeconds and, when known, offsetSeconds) and vip_privileged_lost (a manager's agent stopped allowing privileged services; count and, for one manager, node)
              * @enum {string}
              */
-            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container" | "git_sync_error" | "git_autodeploy_skipped" | "git_autodeploy_reverted" | "git_autodeploy_paused" | "update_rolled_back" | "update_rollback_failed";
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container" | "git_sync_error" | "git_autodeploy_skipped" | "git_autodeploy_reverted" | "git_autodeploy_paused" | "update_rolled_back" | "update_rollback_failed" | "vip_no_holder" | "vip_multiple_holders" | "vip_holder_unheard" | "vip_moved" | "vip_foreign_router" | "vip_clock_skew" | "vip_privileged_lost";
             /** @description For restart_loop_container: the exit code of the container's newest death */
             lastExitCode?: string;
             /** @description For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none */
             latestError?: string;
-            /** @description For cert_not_renewing and clock_skew: the node's host name, at most 64 characters */
+            /** @description For cert_not_renewing, clock_skew and vip_clock_skew: the node's host name, at most 64 characters. For vip_holder_unheard: the holder's host name. For vip_privileged_lost: the manager's host name, only when it is one manager */
             node?: string;
             /** @description For restart_loop_container: the node the container is on, as the container routes take it */
             nodeId?: string;
             /**
              * Format: int64
-             * @description For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind
+             * @description For clock_skew and vip_clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind. Absent on a vip_clock_skew item that only the keepalived helper reported
              */
             offsetSeconds?: number;
             /** @description For git_autodeploy_paused: the name of the user the automation runs for, at most 64 characters; absent when it has no owner any more */
@@ -8057,6 +8149,8 @@ export interface components {
             stackName?: string;
             /** @description For cert_not_renewing and clock_skew: the agent is the standby agent on the node of this TierPlan host, which TierPlan reaches through the Docker socket (D-19). For manual_update_needed: the standby agent is among the agents counted (D-22) */
             standby?: boolean;
+            /** @description For the vip_ items: the facts of the virtual IP the item is about */
+            vip?: components["schemas"]["VIPWarningBody"];
             /**
              * Format: int64
              * @description For restart_loop and restart_loop_container: the window the count is over, in minutes
@@ -10608,12 +10702,20 @@ export interface components {
             secrets: string[] | null;
             /** @description The proxy service's name; empty when the swarm was read and does not hold it */
             service: string;
+            /** @description The environment's virtual IP, with the name of its key secret, which the switch-off removes before it touches the proxies; absent when the environment has none and on a standalone host */
+            virtualIP?: components["schemas"]["IngressDisableVIPBody"];
             /** @description The nodes whose certificate cache volume is wiped: every node of a swarm, the one host of a standalone environment */
             volumes: components["schemas"]["IngressDisableNodeBody"][] | null;
         };
         IngressDisableStartBody: {
             /** @description The disable job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
             jobId: string;
+        };
+        IngressDisableVIPBody: {
+            /** @description The virtual IP with the prefix length of its segment, for example 192.168.1.250/24 */
+            address: string;
+            /** @description The name of the swarm secret that holds the virtual IP's key; never the key */
+            secret: string;
         };
         IngressDomainBody: {
             /**
@@ -10720,13 +10822,13 @@ export interface components {
             finishedAt: string;
             /** @description The job ID */
             id: string;
-            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable */
+            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; virtual_ip (which removes the virtual IP first, and is done with nothing removed when there is none), switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable; vip_key, vip_secret, vip_service and vip_switch for ingress_vip_enable; vip_change_service, vip_change_wait and vip_change_save for ingress_vip_change; vip_remove_service, vip_wait_tasks, vip_remove_secret and vip_forget for ingress_vip_disable */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What the job does: ingress_enable, ingress_disable, or ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person)
+             * @description What the job does: ingress_enable, ingress_disable, ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person), or, for the virtual IP, ingress_vip_enable, ingress_vip_change or ingress_vip_disable
              * @enum {string}
              */
-            kind: "ingress_enable" | "ingress_disable" | "ingress_ensure";
+            kind: "ingress_enable" | "ingress_disable" | "ingress_ensure" | "ingress_vip_enable" | "ingress_vip_change" | "ingress_vip_disable";
             /** @description The output log, oldest first */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /** @description Who started it, as the hub records its owner */
@@ -10952,6 +11054,216 @@ export interface components {
             service: boolean;
             /** @description True when the certificate cache volume exists on a standalone host; always false on a swarm, whose volumes are on its nodes */
             volume: boolean;
+        };
+        IngressVIPBody: {
+            /** @description The virtual address with the prefix length of its network, for example 192.168.10.250/24 */
+            address: string;
+            /**
+             * Format: int64
+             * @description How far, in seconds, an advert's authentication may differ from a node's clock before the node refuses it
+             */
+            authWindowSeconds: number;
+            /** @description The nodes that run a keepalived task or have reported a state, ordered by host name then node ID */
+            candidates: components["schemas"]["IngressVIPCandidateBody"][] | null;
+            /** @description The swarm node IDs of the nodes whose clock is too far from the others for the authentication window */
+            clockSkewNodes: string[] | null;
+            /** @description True while the virtual IP is switched on */
+            enabled: boolean;
+            /** @description The warning that another router on the network uses this router ID */
+            foreignRouter: components["schemas"]["IngressVIPForeignRouterBody"];
+            /** @description Which nodes hold the address */
+            holder: components["schemas"]["IngressVIPHolderBody"];
+            /**
+             * Format: date-time
+             * @description When the address last lost its holder; absent while it is held, or before TierPlan has read the environment
+             */
+            holderlessSince?: string;
+            /**
+             * Format: int64
+             * @description How many times the VRRP key has been made; the key itself is never shown
+             */
+            keyGeneration: number;
+            /** @description The last pass that keeps the keepalived service as wanted */
+            lastEnsure: components["schemas"]["IngressVIPEnsureBody"];
+            /** @description The privileged-services opt-in of every manager */
+            managers: components["schemas"]["IngressVIPManagerBody"][] | null;
+            /** @description False when the managers could not be read, which leaves managers empty */
+            managersReadable: boolean;
+            /** @description True when TierPlan chose the router ID, false when an Admin did */
+            routerDerived: boolean;
+            /**
+             * Format: int64
+             * @description The VRRP router ID
+             */
+            routerId: number;
+        };
+        IngressVIPCandidateBody: {
+            /** @description The node's host name, empty when it is not known */
+            hostname: string;
+            /** @description Why the node's keepalived last reported a fault, empty when it has not */
+            lastFault: string;
+            /**
+             * Format: date-time
+             * @description When TierPlan last read the node's keepalived log without a failure; absent when it never has
+             */
+            lastHeard?: string;
+            /** @description The swarm node ID */
+            nodeId: string;
+            /** @description True when the node's proxy is enrolled, healthy and on the current bundle */
+            proxyReady: boolean;
+            /** @description The state of the node's newest keepalived task in the swarm, empty when it has none or the task list could not be read */
+            taskState: string;
+            /**
+             * @description The state the node's keepalived last reported; empty when it has not reported any
+             * @enum {string}
+             */
+            vrrpState: "MASTER" | "BACKUP" | "FAULT" | "STOP" | "";
+        };
+        IngressVIPDisablePreviewBody: {
+            /** @description The environment's virtual IP with the prefix length of its network */
+            address: string;
+            /** @description The steps the switch-off job runs, as their labels */
+            items: string[] | null;
+            /** @description The names of the swarm secrets that hold the virtual IP's key, never the key; when the swarm could not be read, the name the stored key's generation gives */
+            secrets: string[] | null;
+            /** @description The keepalived service's name; empty when the swarm was read and does not hold one of TierPlan's */
+            service: string;
+            /**
+             * Format: int64
+             * @description How many keepalived tasks run now; 0 when none do or the swarm could not be read
+             */
+            tasks: number;
+        };
+        IngressVIPEnsureBody: {
+            /**
+             * Format: date-time
+             * @description When the last pass ended; absent when none has run
+             */
+            at?: string;
+            /** @description The class of its failure; absent when it succeeded */
+            error?: string;
+        };
+        IngressVIPForeignRouterBody: {
+            /** @description True when any node reports another router using the router ID on the network */
+            detected: boolean;
+            /** @description The address that router sent from, when one was reported */
+            sender?: string;
+        };
+        IngressVIPHolderBody: {
+            /** @description The swarm node IDs of the nodes reporting MASTER, ordered by host name then ID; empty for none */
+            nodes: string[] | null;
+            /**
+             * @description none: no node reports MASTER. one: exactly one does, the healthy case. many: more than one does, which is a problem
+             * @enum {string}
+             */
+            state: "none" | "one" | "many";
+        };
+        IngressVIPManagerBody: {
+            /** @description The host name the swarm lists for the manager */
+            hostname: string;
+            /** @description True for a manager reached only through TierPlan's own Docker socket, which counts as allowing */
+            localSocket: boolean;
+            /** @description The manager's swarm node ID */
+            nodeId: string;
+            /**
+             * @description allows: the manager lets services run privileged. refuses: it does not, so keepalived cannot run on it. unknown: its agent did not answer
+             * @enum {string}
+             */
+            state: "allows" | "refuses" | "unknown";
+        };
+        IngressVIPMoveBody: {
+            /**
+             * Format: date-time
+             * @description When the move happened, as the new holder's log says
+             */
+            at: string;
+            /** @description The previous holder's host name; empty when the address had no holder before */
+            fromNode: string;
+            /** @description The swarm node ID of the previous holder; empty when the address had no holder before */
+            fromNodeId: string;
+            /**
+             * @description Why it moved. holder_failed: the previous holder went silent or its task is gone. probe_failing: its proxy was not ready. drain_handoff: TierPlan handed the address over before draining the node. disabled: the virtual IP was switched off. unknown: none of these explains it
+             * @enum {string}
+             */
+            reason: "holder_failed" | "probe_failing" | "drain_handoff" | "disabled" | "unknown";
+            /** @description The new holder's host name; empty when the address has no holder after */
+            toNode: string;
+            /** @description The swarm node ID of the new holder; empty when the address has no holder after */
+            toNodeId: string;
+        };
+        IngressVIPMovesBody: {
+            /** @description The moves of this page, newest first; never null */
+            items: components["schemas"]["IngressVIPMoveBody"][] | null;
+            /** @description Pass this as before to read the next, older page; absent on the last page */
+            next?: string;
+        };
+        IngressVIPPreviewBody: {
+            /** @description The address as parsed, with its prefix length; empty when it was refused as typed */
+            address: string;
+            /** @description True when the environment has a virtual IP already, so the preview is of a change; false for an enable */
+            change: boolean;
+            /** @description For a change, the address the environment has now, with its prefix length */
+            current?: string;
+            /**
+             * Format: int64
+             * @description For a change, the router ID the environment has now
+             */
+            currentRouterId?: number;
+            /**
+             * Format: int64
+             * @description The router ID the swarm's cluster ID gives, to show beside an override
+             */
+            derivedRouterId: number;
+            /** @description Everything the checks found, errors and warnings, in the order they ran. A finding of severity error refuses the enable or the change */
+            findings: components["schemas"]["IngressFindingBody"][] | null;
+            /** @description The steps the job would run, as their labels */
+            items: string[] | null;
+            /** @description The privileged-services opt-in of every manager; empty when it could not be read */
+            managers: components["schemas"]["IngressVIPPreviewManagerBody"][] | null;
+            /** @description For a change that is not refused, what it does to the address. Show it as sent */
+            notice?: string;
+            /** @description True when the router ID is the derived one, false when the request chose it */
+            routerDerived: boolean;
+            /**
+             * Format: int64
+             * @description The router ID the job would use; 0 when it was refused
+             */
+            routerId: number;
+            /**
+             * @description For a change that is not refused, how it is made: roll moves one node at a time, replace removes the service and creates it again, none touches no node
+             * @enum {string}
+             */
+            strategy?: "roll" | "replace" | "none";
+            /** @description The fixed privilege warning, always present and not only on a warning. Show it as sent */
+            warning: string;
+        };
+        IngressVIPPreviewManagerBody: {
+            /** @description The host name the swarm lists for the manager */
+            hostname: string;
+            /** @description True for a manager reached only through TierPlan's own Docker socket, which counts as allowing */
+            localSocket: boolean;
+            /** @description The manager's swarm node ID */
+            nodeId: string;
+            /** @description A sentence about this manager to show with it; set for a manager reached through TierPlan's own Docker socket, which counts as allowing */
+            note?: string;
+            /**
+             * @description allows: the manager lets services run privileged. refuses: it does not, so keepalived cannot run on it. unknown: its agent did not answer
+             * @enum {string}
+             */
+            state: "allows" | "refuses" | "unknown";
+        };
+        IngressVIPRequest: {
+            /** @description The virtual IP with the prefix length of its network, for example 192.168.1.50/24. The prefix is required and only IPv4 is accepted */
+            address: string;
+            /**
+             * Format: int64
+             * @description The VRRP router ID, 1 to 255. Leave it out to let TierPlan derive one from the swarm's cluster ID. A change takes the whole configuration: leaving it out derives it again
+             */
+            routerId?: number;
+        };
+        IngressVIPStartBody: {
+            /** @description The job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
+            jobId: string;
         };
         InstallBody: {
             /** @description The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request */
@@ -12129,6 +12441,10 @@ export interface components {
             /** @description The agent's version; empty when no agent is connected there and for the local socket's node */
             version: string;
         };
+        NodeAvailabilityBody: {
+            /** @description How the move of the virtual IP off the node went; present only for a drain of the node that held it */
+            vipHandoff?: components["schemas"]["VIPHandoffBody"];
+        };
         NodeAvailabilityRequest: {
             /**
              * @description What the node's spec should let the swarm do with it: active, pause (no new tasks) or drain (move its tasks away)
@@ -12242,7 +12558,7 @@ export interface components {
             hostname: string;
             /** @description The manager counts */
             managers: components["schemas"]["NodeImpactManagers"];
-            /** @description True when the node's name must be typed to make the change: a drain or demote of TierPlan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The server refuses the change without it */
+            /** @description True when the node's name must be typed to make the change: a drain or demote of TierPlan's node or of the only manager agent, a demote that puts quorum at risk, and a demote whose quorum facts could not be read. The virtual IP warnings never set it. The server refuses the change without it */
             needsConfirm: boolean;
             /** @description For drain and pause, the node's tasks whose desired state is running, by service then slot; empty otherwise */
             tasks: components["schemas"]["NodeImpactTask"][] | null;
@@ -12251,7 +12567,7 @@ export interface components {
              * @description The node's object version as read for this judgement: the version a change made on the strength of it must send back
              */
             version: number;
-            /** @description What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_tierplan (the node hosts TierPlan), only_manager_agent (it has the only manager agent connected to TierPlan), facts_unreadable (a manager's state is not known, so the first cannot be judged). Never null */
+            /** @description What to warn of: quorum_at_risk (a demote could leave no majority), even_count (a demote leaves an even number of managers), runs_tierplan (the node hosts TierPlan), only_manager_agent (it has the only manager agent connected to TierPlan), facts_unreadable (a manager's state is not known, so the first cannot be judged), holds_vip (a drain of the node that holds the virtual IP: the address is moved to another node first), holds_vip_alone (the same, but no other node is ready to take the address, so it is lost until one is). Never null */
             warnings: string[] | null;
         };
         NodeImpactManagers: {
@@ -17687,6 +18003,40 @@ export interface components {
             /** @description The lower-cased username */
             username: string;
         };
+        VIPHandoffBody: {
+            /** @description The host name of the node that took the address; present only when the outcome is moved */
+            holder?: string;
+            /**
+             * @description moved (another node reported MASTER, named by holder), no_candidate (no other node was ready to take the address, so nothing was stopped), agent_unreachable (the node's agent was not connected or the stop failed) or timeout (no other node reported MASTER within 10 seconds). The drain was made whatever the outcome
+             * @enum {string}
+             */
+            outcome: "moved" | "no_candidate" | "agent_unreachable" | "timeout";
+        };
+        VIPWarningBody: {
+            /** @description The virtual address with its prefix length, for example 192.168.1.250/24 */
+            address?: string;
+            /** @description For vip_moved: the host name of the node that held the address before its latest move, at most 64 characters; absent when no node did */
+            from?: string;
+            /**
+             * @description For vip_moved: why the latest move happened
+             * @enum {string}
+             */
+            moveReason?: "holder_failed" | "probe_failing" | "drain_handoff" | "unknown";
+            /**
+             * Format: int64
+             * @description For vip_foreign_router: the VRRP router ID the other router uses
+             */
+            routerId?: number;
+            /** @description For vip_foreign_router: the address the other router sends from, only when it is a valid IP address */
+            sender?: string;
+            /** @description For vip_moved: the host name of the node that holds the address after its latest move, at most 64 characters; absent when no node does */
+            to?: string;
+            /**
+             * Format: int64
+             * @description For vip_clock_skew: the time window of the virtual IP's authentication, in seconds
+             */
+            windowSeconds?: number;
+        };
         VerifySetupTokenInputBody: {
             /** @description The setup token printed in the container log */
             token: string;
@@ -21951,6 +22301,254 @@ export interface operations {
             };
         };
     };
+    getIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    changeIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressVIPRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    enableIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressVIPRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressVIPDisable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPDisablePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listIngressVIPMoves: {
+        parameters: {
+            query?: {
+                /** @description The next of the previous page; leave it out for the newest moves */
+                before?: string;
+                /** @description Moves per page, 1 to 100; 50 by default */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPMovesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressVIP: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressVIPRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressVIPPreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     getJanitorStatus: {
         parameters: {
             query?: never;
@@ -22926,21 +23524,21 @@ export interface operations {
             };
         };
         responses: {
-            /** @description No Content */
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeAvailabilityBody"];
+                };
+            };
+            /** @description No Content: the drain, pause or activate was made and no virtual IP handoff ran */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["ErrorModel"];
-                };
             };
         };
     };

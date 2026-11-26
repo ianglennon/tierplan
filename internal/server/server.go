@@ -294,7 +294,13 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterEnvironments(r, d.Environments)
 	api.RegisterAgents(r, d.Agents)
 	api.RegisterUnknownAgents(r, d.UnknownAgents)
-	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Repo: &stackops.Repo{Store: d.Stacks.Store, Vault: d.Stacks.Vault}, Agents: d.Agents, Updates: d.Updates.Updates, Log: d.Environments.Log})
+	// The virtual IP's bell items come from the ingress deployer; a nil one (a server built without it) lists none, and a nil
+	// pointer is never put inside the interface.
+	var vipFacts api.VIPFactsReader
+	if d.IngressDeploy.Service != nil {
+		vipFacts = d.IngressDeploy.Service
+	}
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Repo: &stackops.Repo{Store: d.Stacks.Store, Vault: d.Stacks.Vault}, Agents: d.Agents, Updates: d.Updates.Updates, VIP: vipFacts, Log: d.Environments.Log})
 	api.RegisterDashboard(r, d.Dashboard)
 	api.RegisterFleet(r, d.Fleet)
 	api.RegisterContainers(r, d.Containers)
@@ -317,6 +323,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterIngressCerts(r, d.IngressCerts)
 	api.RegisterIngressNodes(r, d.IngressNodes)
 	api.RegisterIngressDeploy(r, d.IngressDeploy)
+	api.RegisterIngressVIP(r, d.IngressDeploy)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
@@ -1362,7 +1369,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
-		Nodes:         api.NodesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Agents: agentSvc, Live: tunnelHub, SelfContainerID: selfID, Log: log},
+		Nodes:         api.NodesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Agents: agentSvc, Live: tunnelHub, SelfContainerID: selfID, VIP: ingressDeploy, Log: log},
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
@@ -1502,10 +1509,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { certMgr.Run(bg) })
 	// The ingress reconciler renders every environment's bundle and keeps it current until the server stops.
 	srv.background.Go(func() { ingressRecon.Run(bg) })
-	// The ensure loop keeps the switched-on ingress objects as this server wants them; a restored install is paused until an Admin resumes.
-	srv.background.Go(func() { ingressDeploy.Run(bg) })
-	// A node that was away when ingress was switched off has its certificate cache wiped as soon as its agent connects.
-	srv.background.Go(func() { ingressDeploy.RunWipes(bg) })
+	// The ensure loop keeps the switched-on ingress objects as this server wants them; a restored install is paused until an Admin
+	// resumes. A node that was away when ingress was switched off has its certificate cache wiped as soon as its agent connects.
+	// RunVIPReader, the last of them, reads each node's keepalived log through its agent every few seconds, so a move is seen and stored.
+	for _, loop := range ingressDeployLoops(ingressDeploy) {
+		srv.background.Go(func() { loop.Run(bg) })
+	}
 	// The ingress hub pushes each environment's changed bundle to its nodes until the server stops.
 	srv.background.Go(func() { ingressHub.Run(bg) })
 	// The header is decided once before anything is served, then again on every certificate install

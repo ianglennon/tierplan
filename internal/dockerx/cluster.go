@@ -51,11 +51,12 @@ func isAgentService(s swarm.Service) bool {
 	return s.Spec.Name == agentServiceName || s.Spec.Labels[agentServiceLabel] == agentServiceLabelValue
 }
 
-// isIngressService reports whether s is the TierPlan ingress proxy: the component label and the exact
-// reserved name, both (D-41). Unlike the agent rule, a label alone does not make a service the proxy,
-// because the label is user-controlled and this flag backs refusals.
+// isIngressService reports whether s is one of TierPlan's own ingress services, the proxy or the
+// virtual IP's keepalived: the component label and that component's exact reserved name, both (D-41,
+// D-14). Unlike the agent rule, a label alone does not make a service TierPlan's, because the label is
+// user-controlled and this flag backs refusals.
 func isIngressService(s swarm.Service) bool {
-	return ingress.OwnsService(s.Spec.Name, s.Spec.Labels)
+	return ingress.OwnsAnyService(s.Spec.Name, s.Spec.Labels)
 }
 
 // NodeRow is one swarm node as the cluster view shows it.
@@ -97,7 +98,7 @@ type ServiceRow struct {
 	Stack string
 	// Agent is true for a TierPlan agent service (see isAgentService).
 	Agent bool
-	// Ingress is true for the TierPlan ingress proxy service (see isIngressService).
+	// Ingress is true for the TierPlan ingress proxy and keepalived services (see isIngressService).
 	Ingress bool
 	// Ports are the ports the service publishes, sorted by published port, then target
 	// port, then protocol. Never nil.

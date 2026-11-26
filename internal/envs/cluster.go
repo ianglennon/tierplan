@@ -1219,3 +1219,107 @@ func (c *Clusters) ManagerPolicy(ctx context.Context, envID string) (ManagerPoli
 	}
 	return c.ManagerPolicyOf(in), nil
 }
+
+// The states of one manager's privileged-services opt-in (TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES).
+const (
+	// ManagerAllows is a manager whose connected agent reports the opt-in, or one reached through
+	// TierPlan's own Docker socket.
+	ManagerAllows = "allows"
+	// ManagerRefuses is a manager whose connected agent does not report the opt-in.
+	ManagerRefuses = "refuses"
+	// ManagerUnknown is a manager no connected agent speaks for. It never counts as allowing.
+	ManagerUnknown = "unknown"
+)
+
+// ErrNoManagerList is returned by ManagerPolicies when the swarm's managers cannot be listed: the
+// node list was never read, the quorum is lost, or the list does not name the manager that gave it.
+var ErrNoManagerList = errors.New("the swarm's manager list cannot be read")
+
+// ManagerPolicyRow is one manager of a swarm and where its privileged-services opt-in stands.
+type ManagerPolicyRow struct {
+	// NodeID is the manager's swarm node ID and Hostname the host name the swarm lists for it.
+	NodeID, Hostname string
+	// State is ManagerAllows, ManagerRefuses or ManagerUnknown.
+	State string
+	// LocalSocket is true for a manager reached only through TierPlan's own Docker socket, which
+	// counts as allowing.
+	LocalSocket bool
+}
+
+// ManagerPolicies is the privileged-services opt-in of every manager of the swarm of envID, one row
+// per manager, ordered by host name and then node ID so that the same swarm reads the same on
+// every call. Workers are never listed.
+//
+// Why every manager: a service the virtual IP runs has to survive a leader change, and the next
+// write may go to any manager, not to the one ManagerPolicyOf names for this one. The rows are read
+// from the swarm's own node list (refreshed when stale), never from the agents that happen to be
+// enrolled, so a manager with no agent shows as unknown instead of being missed.
+//
+// A manager is allows when its agent reports the opt-in, refuses when its agent does not, and
+// unknown when no connected, non-revoked agent runs on it. The one exception is a manager reached
+// through TierPlan's own Docker socket (the folded host, or the host of a Local environment):
+// whoever mounted that socket already gave TierPlan root there, so it is allows with LocalSocket
+// set. The agent stays the enforcement point: it refuses a spec its owner did not allow whatever
+// this table says, so a wrong row here cannot turn a refusal into an allowance.
+//
+// An unreadable manager list is an error (ErrNoManagerList), never an empty table.
+func (c *Clusters) ManagerPolicies(ctx context.Context, envID string) ([]ManagerPolicyRow, error) {
+	in, err := c.svc.Input(ctx, envID, c.now())
+	if err != nil {
+		return nil, err
+	}
+	nodes, _, ok := c.RefreshNodeList(ctx, envID, c.ttl)
+	if !ok && in.Kind == KindLocal {
+		// A read of the server's own socket names no agent as its answerer, so NodeList does not
+		// believe it. For the gate it is a manager's own list, believed when it holds this host.
+		if st, found := c.Cached(envID); found && st.Known() && st.Read.ListsAnswerer(in.Local.Probe.SwarmNodeID) {
+			nodes, ok = slices.Clone(st.Read.Nodes), true
+		}
+	}
+	if !ok {
+		return nil, ErrNoManagerList
+	}
+	return managerPolicyRows(in, nodes), nil
+}
+
+// managerPolicyRows is the join ManagerPolicies makes, with no I/O: the managers of nodes, each
+// matched by swarm node ID to the connected, non-revoked agents of in.
+func managerPolicyRows(in RollupInput, nodes []dockerx.NodeRow) []ManagerPolicyRow {
+	agents := connectedAgents(in)
+	var rows []ManagerPolicyRow
+	for _, n := range nodes {
+		if n.Role != roleManager {
+			continue
+		}
+		row := ManagerPolicyRow{NodeID: n.ID, Hostname: n.Hostname, State: ManagerUnknown}
+		if in.Kind == KindLocal && in.Local.Probe.Type == dockerx.TypeSwarmManager &&
+			in.Local.Probe.SwarmNodeID != "" && in.Local.Probe.SwarmNodeID == n.ID {
+			row.State, row.LocalSocket = ManagerAllows, true
+			rows = append(rows, row)
+			continue
+		}
+		for _, a := range agents {
+			if a.SwarmNodeID == "" || a.SwarmNodeID != n.ID {
+				continue
+			}
+			switch {
+			case a.Socket:
+				row.State, row.LocalSocket = ManagerAllows, true
+			case row.LocalSocket:
+				// The socket already settled this manager.
+			case !a.PrivilegedServices:
+				row.State = ManagerRefuses
+			case row.State == ManagerUnknown:
+				row.State = ManagerAllows
+			}
+		}
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Hostname != rows[j].Hostname {
+			return rows[i].Hostname < rows[j].Hostname
+		}
+		return rows[i].NodeID < rows[j].NodeID
+	})
+	return rows
+}

@@ -61,7 +61,7 @@ func s2Global(t *testing.T, sw *dockertest.Swarm, cli *client.Client, name strin
 	res, err := cli.ServiceCreate(ctx, client.ServiceCreateOptions{Spec: swarm.ServiceSpec{
 		Annotations: swarm.Annotations{Name: name},
 		TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
-			Image:           traefiktest.WhoamiImage,
+			Image:           dockertest.NodeImage(traefiktest.WhoamiImage),
 			Args:            []string{"--port", strconv.Itoa(int(port))},
 			StopGracePeriod: &grace,
 		}},
@@ -111,7 +111,7 @@ func TestS2HostModeKeepsClientAddress(t *testing.T) {
 	mesh, err := cli.ServiceCreate(ctx, client.ServiceCreateOptions{Spec: swarm.ServiceSpec{
 		Annotations: swarm.Annotations{Name: "s2-mesh"},
 		TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{
-			Image:           traefiktest.WhoamiImage,
+			Image:           dockertest.NodeImage(traefiktest.WhoamiImage),
 			StopGracePeriod: &grace,
 		}},
 		Mode: swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &one}},

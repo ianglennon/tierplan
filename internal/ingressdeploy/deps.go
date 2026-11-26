@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
@@ -140,6 +141,14 @@ type Registry interface {
 
 var _ Registry = (*registry.Resolver)(nil)
 
+// ManagerPolicies reads where the privileged-services opt-in stands on every manager of a swarm: *envs.Clusters has this
+// method. A nil one means the table is unread, so the gate refuses and the status says it could not read it.
+type ManagerPolicies interface {
+	ManagerPolicies(ctx context.Context, envID string) ([]envs.ManagerPolicyRow, error)
+}
+
+var _ ManagerPolicies = (*envs.Clusters)(nil)
+
 // Deps are what the deployer reads and writes. A nil Stacks lists no stacks; every other field is required
 // by the operation that uses it.
 type Deps struct {
@@ -150,6 +159,9 @@ type Deps struct {
 	Tokens Tokens
 	// Nodes lists the enrolled proxy nodes, for the status; nil reads none.
 	Nodes NodeLister
+	// Managers reads the managers' privileged-services opt-in for the virtual IP's status and gate; nil leaves the table
+	// unread.
+	Managers ManagerPolicies
 	// CurrentBundle is the environment's current ingress bundle ID and whether it has one, for the status; nil
 	// reads none, so no node counts as ready.
 	CurrentBundle func(envID string) (string, bool)
@@ -210,6 +222,13 @@ type Service struct {
 	// It holds a clear text, in memory only; outstandingMu guards it.
 	outstandingMu sync.Mutex
 	outstanding   map[string]StandaloneToken
+	// vip is what the virtual IP reader knows of every environment's keepalived helpers, from their logs (D-21).
+	vip *vipState
+	// vipHook, when set, is called after every round of the virtual IP reader. Only a test sets it (export_test.go).
+	vipHook func()
+	// vipNodeTimeout and vipPassTimeout bound one node's read and one environment's pass of the virtual IP reader. A test
+	// shortens them (export_test.go).
+	vipNodeTimeout, vipPassTimeout time.Duration
 }
 
 // New builds the deployer.
@@ -220,7 +239,10 @@ func New(d Deps) *Service {
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{d: d, wake: make(chan struct{}, 1)}
+	return &Service{
+		d: d, wake: make(chan struct{}, 1), vip: newVIPState(),
+		vipNodeTimeout: vipNodeReadTimeout, vipPassTimeout: vipPassReadTimeout,
+	}
 }
 
 func (s *Service) log() *slog.Logger { return s.d.Log }

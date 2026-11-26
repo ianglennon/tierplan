@@ -89,6 +89,12 @@ var SealedColumns = []SealedColumn{
 		Table: "ingress_acme_account", Column: "key_sealed", KeyColumns: []string{"directory_url"},
 		Context: func(keys []string) string { return ContextIngressACMEAccountKey + keys[0] },
 	},
+	// Phase 26 (VIP-01): the VRRP authentication key of an environment's virtual IP, sealed under the
+	// environment's ID (ContextIngressVIPKey, declared with the other contexts in vault.go).
+	{
+		Table: "ingress_vip", Column: "key_sealed", KeyColumns: []string{"env_id"},
+		Context: func(keys []string) string { return ContextIngressVIPKey + keys[0] },
+	},
 }
 
 // RewrapAll moves every sealed value in tx from the vault from to the vault to:

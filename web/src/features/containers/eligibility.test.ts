@@ -19,7 +19,7 @@ const STATES: State[] = [
 
 const subject = (
   state: State,
-  extra: { selfKind?: "" | "server" | "agent" | "ingress"; isSelf?: boolean } = {},
+  extra: { selfKind?: "" | "server" | "agent" | "ingress" | "ingress_vip"; isSelf?: boolean } = {},
 ) => ({
   state,
   selfKind: extra.selfKind ?? "",
@@ -76,8 +76,9 @@ describe("eligibleFor", () => {
     const server = subject("running", { selfKind: "server" });
     const agent = subject("running", { selfKind: "agent" });
     const ingress = subject("running", { selfKind: "ingress" });
+    const keepalived = subject("running", { selfKind: "ingress_vip" });
     const legacy = subject("running", { isSelf: true });
-    for (const own of [server, agent, ingress, legacy]) {
+    for (const own of [server, agent, ingress, keepalived, legacy]) {
       expect(eligibleFor("stop", own)).toBe(true);
       expect(eligibleFor("stop", own, { bulk: true })).toBe(false);
       expect(eligibleFor("remove", own, { bulk: true })).toBe(false);
@@ -91,6 +92,7 @@ describe("ownKind", () => {
     expect(ownKind({ selfKind: "agent", isSelf: false })).toBe("agent");
     expect(ownKind({ selfKind: "server", isSelf: false })).toBe("server");
     expect(ownKind({ selfKind: "ingress", isSelf: false })).toBe("ingress");
+    expect(ownKind({ selfKind: "ingress_vip", isSelf: false })).toBe("ingress_vip");
     expect(ownKind({ selfKind: "", isSelf: true })).toBe("server");
     expect(ownKind({ selfKind: "", isSelf: false })).toBe("");
   });

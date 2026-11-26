@@ -553,7 +553,10 @@ var phase18DetailKeys = map[string][]string{
 	audit.ActionIngressCertFailed:               {"hostname", "issuer", "reason"},
 	audit.ActionIngressNodeEnrolled:             {"node"},
 	audit.ActionIngressNodeRemoved:              {"node"},
-	audit.ActionIngressVIPChanged:               {"address"},
+	audit.ActionIngressVIPEnabled:               {"address", "router_id", "generation"},
+	audit.ActionIngressVIPChanged:               {"address", "router_id"},
+	audit.ActionIngressVIPDisabled:              {"address", "router_id", "generation"},
+	audit.ActionIngressVIPHandoff:               {"node", "holder", "outcome"},
 }
 
 func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -573,8 +576,8 @@ func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 			}
 		}
 	}
-	if len(phase18DetailKeys) != 14 {
-		t.Fatalf("phase18DetailKeys pins %d actions, want the 14 ingress actions", len(phase18DetailKeys))
+	if len(phase18DetailKeys) != 17 {
+		t.Fatalf("phase18DetailKeys pins %d actions, want the 17 ingress actions", len(phase18DetailKeys))
 	}
 	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase18DetailKeys) {
 		t.Fatalf("verify = %+v", got)
@@ -593,13 +596,56 @@ func TestEveryPhase18ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) 
 		"ingress.cert_failed":                audit.ActionIngressCertFailed,
 		"ingress.node_enrolled":              audit.ActionIngressNodeEnrolled,
 		"ingress.node_removed":               audit.ActionIngressNodeRemoved,
+		"ingress.vip_enabled":                audit.ActionIngressVIPEnabled,
 		"ingress.vip_changed":                audit.ActionIngressVIPChanged,
+		"ingress.vip_disabled":               audit.ActionIngressVIPDisabled,
+		"ingress.vip_handoff":                audit.ActionIngressVIPHandoff,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)
 		}
 		if strings.Count(constant, ".") != 1 {
 			t.Errorf("%q must have exactly one dot so the audit page finds its label", constant)
+		}
+	}
+}
+
+// The four virtual IP actions can never hold the VRRP key under any name (A-14, D-03, T-26-07): a detail key that is or
+// contains key, secret, token or password is refused by Record and nothing is written, while the documented keys
+// (address, router_id, generation, node, holder, outcome) record. The key generation is a number under "generation".
+func TestVIPActionsRefuseSecretDetailKeys(t *testing.T) {
+	vip := []string{
+		audit.ActionIngressVIPEnabled,
+		audit.ActionIngressVIPChanged,
+		audit.ActionIngressVIPDisabled,
+		audit.ActionIngressVIPHandoff,
+	}
+	refused := []string{
+		"key", "Key", "vrrp_key", "keyring", "auth_key", "secret", "client_secret", "token", "join_token", "password",
+		"Password", "key_generation_password",
+	}
+	for _, action := range vip {
+		f := newFixture(t)
+		for _, bad := range refused {
+			e := ent(action)
+			e.Details = map[string]string{"address": "x", bad: "value"}
+			if err := f.w.Record(context.Background(), e); !errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s with detail key %q: err = %v, want ErrSecretField", action, bad, err)
+			}
+		}
+		if n := f.count(t); n != 0 {
+			t.Fatalf("%s: a refused entry was written (%d rows)", action, n)
+		}
+		e := ent(action)
+		e.Details = map[string]string{}
+		for _, k := range phase18DetailKeys[action] {
+			e.Details[k] = "x"
+		}
+		if len(e.Details) == 0 {
+			t.Fatalf("%s has no documented detail keys in phase18DetailKeys", action)
+		}
+		if err := f.w.Record(context.Background(), e); err != nil {
+			t.Errorf("%s with its documented keys: %v", action, err)
 		}
 	}
 }

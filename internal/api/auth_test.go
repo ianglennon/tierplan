@@ -282,6 +282,8 @@ type authFixture struct {
 	// a real session.
 	agentSvc   *agents.Service
 	liveAgents api.AgentSessions
+	// nodeVIP, when set, is the virtual IP hook of the node routes.
+	nodeVIP api.VIPHandoffs
 	// clusters is the cluster reader of a swarm fixture; nil elsewhere.
 	clusters *envs.Clusters
 	// hostRouteFile is the route file mounted into TierPlan's own container, as the subnet check
@@ -297,6 +299,8 @@ type authFixture struct {
 	settingsAgents api.SettingsAgents
 	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
 	envWarningsNow func() time.Time
+	// envWarningsVIP reads the virtual IP facts of the same route; nil lists none.
+	envWarningsVIP api.VIPFactsReader
 	// inviteTTL is TIERPLAN_INVITE_TTL as the access service sees it; zero is the 72 hour
 	// default. inviteLimiter throttles the public invite routes per address and
 	// inviteAudit records their refusals; nil means a generous limiter and the writer
@@ -500,7 +504,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	if f.envSvc != nil {
 		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
-			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Updates: updateSvc, Now: f.envWarningsNow, Log: log,
+			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Repo: &stackops.Repo{Store: f.st, Vault: f.v}, Updates: updateSvc, Now: f.envWarningsNow, VIP: f.envWarningsVIP, Log: log,
 			Agents: api.AgentsDeps{
 				Agents: agentSvc, Live: f.liveAgents, Instance: f.inst, TLSPin: func() string { return f.tlsPin },
 				Updater: f.updater, ServerVersion: f.serverVersion,
@@ -595,7 +599,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterConfigs(r, api.ConfigsDeps{Aggregator: f.agg, Clusters: f.clusters, Resolver: rotateResolver, Audit: f.aud, Checker: checker, Store: f.st, Log: log})
 		api.RegisterNodes(r, api.NodesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, Agents: agentSvc, Live: f.liveAgents,
-			SelfContainerID: f.envSvc.SelfContainerID(), Log: log,
+			SelfContainerID: f.envSvc.SelfContainerID(), VIP: f.nodeVIP, Log: log,
 		})
 		api.RegisterVolumes(r, api.VolumesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SizesTimeout: f.volumeSizesTimeout, Log: log})
 		api.RegisterImages(r, api.ImagesDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
@@ -735,6 +739,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	api.RegisterIngressNodes(r, nodesDeps)
 	api.RegisterIngressDeploy(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
+	api.RegisterIngressVIP(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{
 		Repo: stackops.Repo{Store: f.st, Vault: f.v, Now: f.clk.now}, Sync: gitDeps.Sync, Access: f.access, Audit: f.aud, Log: log, Now: f.clk.now,

@@ -349,8 +349,9 @@ const (
 // The ingress actions (Phase 18, D-26). Every key has exactly one dot, so the audit page finds its label under
 // audit.actions.ingress, and every row is environment-scoped on that page. Phase 18 records the domain and host
 // families (domain_created, domain_credential_replaced, domain_deleted, host_reserved, host_unreserved) inside the
-// write transaction of the domain and reservation endpoints. enabled, disabled, claim_*, cert_*, node_* and vip_changed
-// are defined here so the audit page labels them from the start, and are recorded from Phases 20 to 26. The entries
+// write transaction of the domain and reservation endpoints. enabled, disabled, claim_*, cert_*, node_* and the
+// vip_* actions (vip_enabled, vip_changed, vip_disabled, vip_handoff) are defined here so the audit page labels them
+// from the start, and are recorded from Phases 20 to 26. The entries
 // never carry a DNS token: the state of the credential is recorded under the key "credential" ("set" or "replaced"),
 // which is why the replacement action is named after the credential and not the token.
 const (
@@ -389,6 +390,14 @@ const (
 	ActionIngressNodeEnrolled = "ingress.node_enrolled"
 	ActionIngressNodeRemoved  = "ingress.node_removed"
 	ActionIngressVIPChanged   = "ingress.vip_changed"
+	// The virtual IP (Phase 26, A-14). No detail of any of these names the VRRP key; the key generation, never the key,
+	// is recorded.
+	// vip_enabled: an admin turned the virtual address on (details address, router_id, generation).
+	ActionIngressVIPEnabled = "ingress.vip_enabled"
+	// vip_disabled: an admin turned the virtual address off (details address, router_id, generation).
+	ActionIngressVIPDisabled = "ingress.vip_disabled"
+	// vip_handoff: the address was moved off a node before that node was drained (details node, holder, outcome).
+	ActionIngressVIPHandoff = "ingress.vip_handoff"
 	// The node lifecycle and the ingress join token (Phase 22). A refused enrolment or connect is
 	// ingress.node_enrol_refused (D-35: one action for both, told apart by the "mode" detail, "enrol" or "connect"),
 	// written by an anonymous actor through a throttle and never with an environment, because the environment named in

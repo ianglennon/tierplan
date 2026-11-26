@@ -20,6 +20,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
@@ -56,8 +57,20 @@ type NodesDeps struct {
 	Live AgentSessions
 	// SelfContainerID is TierPlan's own container ID; empty when it cannot tell.
 	SelfContainerID string
+	// VIP is the virtual IP's drain hook and the read that warns of it. Nil means the environment has none: a drain runs
+	// no handoff and warns of none.
+	VIP VIPHandoffs
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+}
+
+// VIPHandoffs is what the node routes need of the virtual IP (D-25).
+type VIPHandoffs interface {
+	// HandoffVIP moves the address off the node before it is drained. It answers nil, nil when the node does not hold the
+	// address; every other failure is an outcome of the handoff, never an error.
+	HandoffVIP(ctx context.Context, envID, swarmNodeID string) (*ingressdeploy.VIPHandoff, error)
+	// VIPHolds says whether the node holds the address, and whether no other node is ready to take it.
+	VIPHolds(ctx context.Context, envID, swarmNodeID string) (holds, alone bool, err error)
 }
 
 // services is the part of the deps the shared swarm read helpers take.

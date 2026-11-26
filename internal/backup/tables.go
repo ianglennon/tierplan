@@ -118,6 +118,12 @@ var Tables = map[string]Class{
 	// only once the environment's ingress is resumed (paused is cleared).
 	"ingress_pending_wipes": Included,
 
+	// The virtual IP (Phase 26). The configuration travels; its key_sealed is sealed under the environment's
+	// ID and re-wrapped by RewrapAll, so a backup carries only the sealed form. The move history is bounded
+	// to 500 rows per environment and travels with the configuration.
+	"ingress_vip":       Included, // key_sealed is re-wrapped by RewrapAll
+	"ingress_vip_moves": Included, // the history travels with the configuration
+
 	// Instance settings, the audit log and the backup schedule.
 	"settings":        Included,
 	"audit_log":       Included, // re-signed under the restoring instance's key

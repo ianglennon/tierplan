@@ -78,7 +78,7 @@ func startNodeEnv(t *testing.T) *nodeEnv {
 	e.srv.Nodes.Set(e.env.ID, swarmNodeID)
 
 	e.sh(t, "docker network create "+network)
-	e.sh(t, "docker run -d --name web_whoami --network "+network+" "+traefiktest.WhoamiImage)
+	e.sh(t, "docker run -d --name web_whoami --network "+network+" "+dockertest.NodeImage(traefiktest.WhoamiImage))
 	// The token goes in a file the container's user can read, never on the container's command line or
 	// in its environment. WriteFile puts the content in an exec command, so its error text, which would
 	// repeat the command, is withheld.

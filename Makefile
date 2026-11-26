@@ -21,7 +21,7 @@ ifneq ($(SOURCE_URL),)
 LDFLAGS += -X $(PKG).SourceURL=$(SOURCE_URL)
 endif
 
-.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke ingress-image ingress-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
+.PHONY: web build gen gen-check tidy-check test test-go test-web test-stress test-summary test-int test-swarm smoke dev dev-go dev-web dev-cert dev-tls-check dev-swarm dev-swarm-down spdx licences web-sbom dco hooks test-scripts lint-config lint actionlint release-check image image-smoke agent-image agent-image-smoke ingress-image ingress-image-smoke keepalived-image keepalived-image-smoke edge-context e2e e2e-down e2e-image e2e-copy proxy-smoke upgrade-smoke restore-smoke ci-clean ci-preflight
 
 web:
 	pnpm -C web install --frozen-lockfile
@@ -159,26 +159,29 @@ test-summary:
 # dind (they need a network the in-process TierPlan is reachable on) and load the
 # agent image into it, so the image is built first. The ingress node tests run the
 # real tierplan-ingress image the same way (23-16), so that is built first too.
+# The virtual IP tests run the keepalived image (26-01), built first as well.
 #
 # Only the packages whose tests change under the tag run (D-05 shuffles them):
 # scripts/tagged-packages.sh derives the list, so a newly tagged package is never
 # missed, and an empty list fails the target. Every other internal package is the
 # unit suite, which `make test` already ran. $(shell) expands inside the recipe
 # only, so no other target pays for `go list`.
-test-int: agent-image ingress-image
+test-int: agent-image ingress-image keepalived-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh integration)"; \
 	if [ -z "$$pkgs" ]; then echo "test-int: no package has integration-tagged tests" >&2; exit 1; fi; \
 	echo "test-int: $$pkgs"; \
 	mkdir -p $(TEST_RESULTS); rm -f $(TEST_RESULTS)/integration.json; \
-	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/integration.json -- -tags=integration -race -count=1 -shuffle=on -timeout 30m $$pkgs
+	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/integration.json -- -tags=integration -race -count=1 -shuffle=on -timeout 60m $$pkgs
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
 # of 3 managers and 1 worker, for the engine TIERPLAN_TEST_ENGINE names (default
-# 29). Needs Docker it can reach, with buildx for the agent image. Only the
+# 29). Needs Docker it can reach, with buildx for the agent image; the virtual IP
+# case (Phase 26) also needs the ingress and keepalived images, so they are built
+# first and the case loads them into the nodes. Only the
 # swarm-tagged package (internal/agents) runs, derived like test-int's list. One
 # engine takes about 55 minutes on the dev host, so the 80 minute timeout (CI allows
 # 90 for the job, D-22) is a margin, not a target.
-test-swarm: agent-image
+test-swarm: agent-image ingress-image keepalived-image
 	@set -e; pkgs="$(shell scripts/tagged-packages.sh swarm)"; \
 	if [ -z "$$pkgs" ]; then echo "test-swarm: no package has swarm-tagged tests" >&2; exit 1; fi; \
 	echo "test-swarm: $$pkgs"; \
@@ -420,6 +423,36 @@ ingress-image:
 		-o $(abspath $(INGRESS_CTX))/linux/$(INGRESS_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
 	docker buildx build --platform linux/$(INGRESS_ARCH) -f ingress/Dockerfile -t $(INGRESS_TAG) --load $(INGRESS_CTX)
 
+# The keepalived image for this machine's architecture (D-26), tagged KEEPALIVED_TAG
+# (default tierplan-keepalived:dev) and loaded into the local engine. keepalived is
+# compiled in the build stage from the source tarball scripts/keepalived-source.sh
+# fetches and checks against the pinned sha256, so building needs the network once.
+# The context is laid out as goreleaser lays it out: $TARGETPLATFORM/tierplan-ingress
+# (the helper, the same plain build as ingress-image) and build/keepalived/ with the
+# tarball, plus keepalived/image (the SBOM template, the notice and the licence texts the Dockerfile
+# copies). KEEPALIVED_CTX is overridable (a relative path or an absolute one) so two
+# builds on one runner can use separate contexts. Needs Docker with buildx and curl.
+KEEPALIVED_ARCH ?= $(shell go env GOARCH)
+KEEPALIVED_CTX ?= .devdata/keepalived-image
+KEEPALIVED_TAG ?= tierplan-keepalived:dev
+keepalived-image:
+	scripts/keepalived-source.sh
+	rm -rf $(KEEPALIVED_CTX)
+	mkdir -p $(KEEPALIVED_CTX)/linux/$(KEEPALIVED_ARCH) $(KEEPALIVED_CTX)/build/keepalived
+	cp build/keepalived/keepalived-2.4.3.tar.gz $(KEEPALIVED_CTX)/build/keepalived/keepalived-2.4.3.tar.gz
+	mkdir -p $(KEEPALIVED_CTX)/keepalived
+	cp -R keepalived/image $(KEEPALIVED_CTX)/keepalived/image
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(KEEPALIVED_ARCH) go -C ingress build -trimpath -ldflags "-s -w" \
+		-o $(abspath $(KEEPALIVED_CTX))/linux/$(KEEPALIVED_ARCH)/tierplan-ingress ./cmd/tierplan-ingress
+	docker buildx build --platform linux/$(KEEPALIVED_ARCH) -f keepalived/Dockerfile -t $(KEEPALIVED_TAG) --load $(KEEPALIVED_CTX)
+
+# Checks the keepalived image (D-26, D-27): keepalived reports 2.4.3; the licence text,
+# the SBOM entry, the notice and the helper are in it with a size above zero; there is no
+# shell, busybox or package manager; the labels carry the tarball's URL and sha256. Reads
+# names and sizes from the archive docker cp makes, never contents. Needs Docker and tar.
+keepalived-image-smoke:
+	scripts/keepalived-image-smoke.sh
+
 # Runs tierplan-ingress:dev as a node runs it, with and without the hardening
 # flags: UID and GID 1000, no capability, no-new-privileges set by the binary, no
 # Docker socket, a new volume owned by 1000, and with no cache and no TierPlan an
@@ -428,16 +461,18 @@ ingress-image:
 ingress-image-smoke:
 	scripts/ingress-image-smoke.sh
 
-# The three build contexts for the :edge images: the binaries laid out as
-# $TARGETPLATFORM/tierplan (server), $TARGETPLATFORM/tierplan-agent (agent) and
-# $TARGETPLATFORM/tierplan-ingress (ingress) next to their Dockerfiles, as goreleaser
+# The four build contexts for the :edge images: the binaries laid out as
+# $TARGETPLATFORM/tierplan (server), $TARGETPLATFORM/tierplan-agent (agent),
+# $TARGETPLATFORM/tierplan-ingress (ingress) and $TARGETPLATFORM/tierplan-ingress again
+# (the keepalived image's helper, the same binary) next to their Dockerfiles, as goreleaser
 # does it, plus the web SBOM the server Dockerfile copies (build/sbom/, which
-# goreleaser's before hook has just written) and the ingress image's state and doc
-# directories. The ingress image gets no SBOM file (D-26). CI pushes them with buildx
-# from the main branch.
+# goreleaser's before hook has just written), the ingress image's state and doc
+# directories, and the keepalived image's keepalived/image and source tarball
+# (scripts/keepalived-source.sh, A-09). The ingress image gets no SBOM file (D-26). CI
+# pushes them with buildx from the main branch.
 edge-context:
 	$(GORELEASER) build --snapshot --clean
-	rm -rf dist/edge dist/edge-agent dist/edge-ingress
+	rm -rf dist/edge dist/edge-agent dist/edge-ingress dist/edge-keepalived
 	mkdir -p dist/edge/linux/amd64 dist/edge/linux/arm64
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/tierplan
 	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/tierplan
@@ -455,6 +490,13 @@ edge-context:
 	cp -R ingress/image/state dist/edge-ingress/ingress/image/state
 	cp -R ingress/image/doc dist/edge-ingress/ingress/image/doc
 	cp ingress/Dockerfile dist/edge-ingress/Dockerfile
+	scripts/keepalived-source.sh
+	mkdir -p dist/edge-keepalived/linux/amd64 dist/edge-keepalived/linux/arm64 dist/edge-keepalived/keepalived dist/edge-keepalived/build/keepalived
+	cp dist/edge-ingress/linux/amd64/tierplan-ingress dist/edge-keepalived/linux/amd64/tierplan-ingress
+	cp dist/edge-ingress/linux/arm64/tierplan-ingress dist/edge-keepalived/linux/arm64/tierplan-ingress
+	cp -R keepalived/image dist/edge-keepalived/keepalived/image
+	cp build/keepalived/keepalived-2.4.3.tar.gz dist/edge-keepalived/build/keepalived/keepalived-2.4.3.tar.gz
+	cp keepalived/Dockerfile dist/edge-keepalived/Dockerfile
 
 # --- End-to-end (D-80, D-59, RESEARCH Pattern 11) ---
 # The built image behind Caddy at https://127.0.0.1:8443/tierplan with a generated

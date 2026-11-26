@@ -103,7 +103,8 @@ func statusCounts(rows []envs.ContainerRow) StatusCountsBody {
 
 // selfKindOf says whether a container is TierPlan's own server ("server"), one of
 // its agents ("agent"), a task of its swarm ingress proxy or its standalone proxy
-// container ("ingress") or none of them (""). A label can be set by anyone, so this
+// container ("ingress"), a task of its virtual IP service ("ingress_vip") or none of
+// them (""). A label can be set by anyone, so this
 // only adds care in the UI; the action endpoint decides ownership again from a fresh
 // inspect (T-04-32).
 func selfKindOf(isSelf bool, labels map[string]string) string {
@@ -114,6 +115,8 @@ func selfKindOf(isSelf bool, labels map[string]string) string {
 		return "agent"
 	case isIngressTask(labels), isIngressStandalone(labels):
 		return "ingress"
+	case isKeepalivedTask(labels):
+		return "ingress_vip"
 	}
 	return ""
 }
@@ -131,7 +134,15 @@ func isIngressStandalone(labels map[string]string) bool {
 // component label and the swarm's service-name label with the reserved name (D-41). The component label alone
 // is user-controlled, so a container that sets only it is not taken for the proxy.
 func isIngressTask(labels map[string]string) bool {
-	return ingress.HasComponentLabel(labels) && labels[labelService] == ingress.ServiceName
+	return labels[ingress.LabelComponent] == ingress.ComponentIngress && labels[labelService] == ingress.ServiceName
+}
+
+// isKeepalivedTask says whether a container's labels are those of a task of TierPlan's virtual IP service: the
+// keepalived component label and the swarm's service-name label with the reserved name (D-14). The component
+// label alone is user-controlled, so a container that sets only it is not taken for the service, and a
+// container that carries the keepalived label on the proxy's service name is not taken for either.
+func isKeepalivedTask(labels map[string]string) bool {
+	return labels[ingress.LabelComponent] == ingress.ComponentKeepalived && labels[labelService] == ingress.ServiceNameKeepalived
 }
 
 // matchesQuery says whether q (already lower-cased) occurs in the name, the image,

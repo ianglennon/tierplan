@@ -55,7 +55,8 @@
       "self": {
         "server": "TierPlan (this instance)",
         "agent": "TierPlan agent",
-        "ingress": "TierPlan ingress"
+        "ingress": "TierPlan ingress",
+        "ingress_vip": "TierPlan ingress"
       },
       "ports": {
         "more": "+{{count}}"

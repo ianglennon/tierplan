@@ -71,6 +71,7 @@ var sharedSwarmCases = []struct {
 	{"StatsFromWorker", sharedStatsFromWorker},
 	{"SubnetOverlap", sharedSubnetOverlap},
 	{"UninstallOnRemove", sharedUninstallOnRemove},
+	{"VirtualIP", sharedVirtualIP},
 	{"Volumes", sharedVolumes},
 	{"WorkerShellAndLogs", sharedWorkerShellAndLogs},
 }

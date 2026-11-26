@@ -1,0 +1,26 @@
+VRRP Instance: TIERPLAN_VIP
+  Advertisements:
+    Received: 41
+    Sent: 0
+  Became master: 0
+  Released master: 0
+  Packet Errors:
+    Length: 0
+    TTL: 0
+    Invalid Type: 0
+    Advertisement Interval: 0
+    Address List: 0
+  Authentication Errors:
+    Invalid Type: 0
+    Type Mismatch: 0
+    Failure: 0
+  Authentication Extension Errors:
+    Missing: 0
+    Malformed: 0
+    Unknown Key: 0
+    Invalid HMAC: 0
+    Stale: 0
+    Replay: 0
+  Priority Zero:
+    Received: 0
+    Sent: 0

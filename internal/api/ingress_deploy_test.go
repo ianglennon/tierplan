@@ -393,7 +393,7 @@ func TestIngressEnableRefusedPreflight409(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
 		t.Fatalf("decode %s: %v", rec.Body, err)
 	}
-	if p.Type != "ingress_preflight_refused" || !strings.Contains(p.Detail, "Ports 80 and 443 must be free") {
+	if p.Type != "ingress_preflight_refused" || !strings.Contains(p.Detail, "Ports 80, 443 and 7483 must be free") {
 		t.Errorf("type %q detail %q", p.Type, p.Detail)
 	}
 	if len(p.Errors) != 1 || p.Errors[0].Location != ingressdeploy.CodePortInUse ||

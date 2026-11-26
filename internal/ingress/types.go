@@ -12,6 +12,9 @@ const (
 	LabelPrefix      = "tierplan.ingress."
 	LabelComponent   = "tierplan.component"
 	ComponentIngress = "ingress"
+	// ComponentKeepalived marks the virtual IP's keepalived service, its secret and its task containers
+	// (Phase 26). It is TierPlan's own, like the proxy, and is never declared by a stack.
+	ComponentKeepalived = "keepalived"
 )
 
 // ProviderCloudflare is the one DNS provider a domain can be validated through today.

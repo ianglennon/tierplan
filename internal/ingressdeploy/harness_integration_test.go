@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -46,6 +47,9 @@ const (
 	// devIngressImage is what `make ingress-image` builds; the harness loads it on every node under the name a
 	// development server's proxy service names.
 	devIngressImage = "tierplan-ingress:dev"
+	// devKeepalivedImage is what `make keepalived-image` builds; the harness loads it on every node under the name a
+	// development server's keepalived service names (the virtual IP, D-29).
+	devKeepalivedImage = "tierplan-keepalived:dev"
 	// testDomain is the one domain registered for the environment, and routeHost the hostname the stacks route.
 	testDomain = "test.local"
 	routeHost  = "app.test.local"
@@ -107,7 +111,11 @@ type swarmEnv struct {
 	registry string
 	webImage string
 
-	// deploy is the ingress deployer, and stopDeploy ends its two loops and waits for them.
+	// managers is the managers' privileged-services table the deployer's gate reads. The harness engine reaches the nodes
+	// directly, so every manager is reported as allowing (the agent's own policy is exercised by the API test, 26-32).
+	managers *fakeManagers
+
+	// deploy is the ingress deployer, and stopDeploy ends its three loops and waits for them.
 	deploy     *ingressdeploy.Service
 	stopDeploy func()
 	version    string
@@ -126,6 +134,8 @@ func startSwarmEnv(t *testing.T) *swarmEnv {
 	for _, n := range e.sw.Nodes() {
 		dockertest.LoadImage(t, devIngressImage, n)
 		e.sh(n, "docker tag "+devIngressImage+" "+ingressdeploy.ImageRepository+":edge")
+		dockertest.LoadImage(t, devKeepalivedImage, n)
+		e.sh(n, "docker tag "+devKeepalivedImage+" "+ingressdeploy.KeepalivedRepository+":edge")
 	}
 	e.clock = tunneltest.NewClock(time.Now())
 	e.notifier = ingress.NewNotifier()
@@ -198,6 +208,8 @@ func startSwarmEnv(t *testing.T) *swarmEnv {
 	}, nil); err != nil {
 		t.Fatalf("register the domain %s: %v", testDomain, err)
 	}
+	e.managers = &fakeManagers{}
+	e.managers.set([]envs.ManagerPolicyRow{{NodeID: e.swarmNodeID(e.mgr), Hostname: e.mgr.Hostname, State: envs.ManagerAllows}}, nil)
 	e.startDeploy("dev")
 	// Registered last, so it runs first, while the nodes still answer and the store is open.
 	e.dumpOnFailure()
@@ -344,7 +356,8 @@ func (e *swarmEnv) dropAgent(n *dockertest.Node) {
 	}
 }
 
-// startDeploy builds the ingress deployer for a server of the given version and runs its two loops.
+// startDeploy builds the ingress deployer for a server of the given version and runs its three loops: the ensure loop, the
+// wipe loop and the virtual IP reader.
 func (e *swarmEnv) startDeploy(version string) {
 	t := e.t
 	if e.stopDeploy != nil {
@@ -354,6 +367,7 @@ func (e *swarmEnv) startDeploy(version string) {
 	e.deploy = ingressdeploy.New(ingressdeploy.Deps{
 		Engine: swarmEngine{agg: e.agg, clusters: e.clus}, Envs: envReader{st: e.st, svc: e.esvc},
 		Store: e.istore, Notifier: e.notifier, Tokens: e.srv.Service, NodeRows: e.srv.Service, Nodes: e.srv.Service, Kicker: e.srv.Hub,
+		Managers: e.managers,
 		CurrentBundle: func(envID string) (string, bool) {
 			b, ok := e.recon.Current(envID)
 			return b.ID, ok
@@ -367,9 +381,10 @@ func (e *swarmEnv) startDeploy(version string) {
 	})
 	ctx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); e.deploy.Run(ctx) }()
 	go func() { defer wg.Done(); e.deploy.RunWipes(ctx) }()
+	go func() { defer wg.Done(); e.deploy.RunVIPReader(ctx) }()
 	var once sync.Once
 	e.stopDeploy = func() { once.Do(func() { stop(); wg.Wait() }) }
 	t.Cleanup(e.stopDeploy)
@@ -435,6 +450,62 @@ func (e *swarmEnv) awaitReady() ingressdeploy.Status {
 		return st.Nodes.Expected == 2 && st.Nodes.Enrolled == 2 && st.Nodes.Ready == 2, fmt.Sprintf("%+v", st.Nodes)
 	})
 	return last
+}
+
+// vipAddress is the virtual address the tests switch on: .250 of the network the nodes share, as a prefix of that network.
+// The harness hands the nodes .10 up on a /24 it chose, so .250 is no node's and no container's.
+func (e *swarmEnv) vipAddress() netip.Prefix {
+	e.t.Helper()
+	a, err := netip.ParseAddr(e.mgr.IP)
+	if err != nil || !a.Is4() {
+		e.t.Fatalf("the manager's address %q is not an IPv4 address: %v", e.mgr.IP, err)
+	}
+	b := a.As4()
+	b[3] = 250
+	return netip.PrefixFrom(netip.AddrFrom4(b), 24)
+}
+
+// enableVIP switches the virtual IP on at address and waits for the job.
+func (e *swarmEnv) enableVIP(address netip.Prefix) jobs.Job {
+	t := e.t
+	t.Helper()
+	id, err := e.deploy.EnableVIP(testsupport.Context(t), testActor, testOwner, e.envID, ingressdeploy.VIPRequest{Address: address.String()})
+	if err != nil {
+		t.Fatalf("EnableVIP: %v", err)
+	}
+	return e.waitJob(id)
+}
+
+// disableVIP switches the virtual IP off and waits for the job.
+func (e *swarmEnv) disableVIP() jobs.Job {
+	t := e.t
+	t.Helper()
+	id, err := e.deploy.DisableVIP(testsupport.Context(t), testActor, testOwner, e.envID)
+	if err != nil {
+		t.Fatalf("DisableVIP: %v", err)
+	}
+	return e.waitJob(id)
+}
+
+// vipStatus is the deployer's status of the environment's virtual IP.
+func (e *swarmEnv) vipStatus() (ingressdeploy.VIPStatus, error) {
+	return e.deploy.VIPStatus(testsupport.Context(e.t), e.envID)
+}
+
+// holderNodes is every node whose interfaces list the address, which is what holding it means on the wire.
+func (e *swarmEnv) holderNodes(address netip.Addr) []*dockertest.Node {
+	e.t.Helper()
+	var out []*dockertest.Node
+	for _, n := range e.sw.Nodes() {
+		listing, err := n.Exec(testsupport.Context(e.t), "ip", "-4", "-o", "addr", "show")
+		if err != nil {
+			e.t.Fatalf("list the addresses of %s: %v", n.Hostname, err)
+		}
+		if strings.Contains(listing, "inet "+address.String()+"/") {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // cluster is a manager's read of the swarm.

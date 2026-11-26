@@ -88,7 +88,7 @@ func (s *Service) enableStandalone(ctx context.Context, actor audit.Actor, owner
 		}
 		return f, err
 	}
-	return s.startEnable(ctx, owner, info, req, pre, standaloneSpecs(), func(jctx context.Context, r *jobs.Reporter, release func()) {
+	return s.startEnable(ctx, JobKindEnable, owner, info, req, pre, standaloneSpecs(), func(jctx context.Context, r *jobs.Reporter, release func()) {
 		s.runStandaloneEnable(jctx, r, release, actor, info, req)
 	})
 }

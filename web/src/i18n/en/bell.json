@@ -279,6 +279,49 @@
         "dns_rate_limited": "the DNS provider is limiting changes",
         "dns_unavailable": "the DNS provider couldn't be reached"
       }
+    },
+    "vip": {
+      "noHolder": {
+        "title": "No node holds the virtual IP on {{env}}",
+        "body": "No node holds {{address}}, so ingress doesn't answer on it. This began {{time}}. Check that a proxy is ready on at least one node."
+      },
+      "multipleHolders": {
+        "title": "More than one node holds the virtual IP on {{env}}",
+        "body_one": "{{count}} node reports holding {{address}}.",
+        "body_other": "{{count}} nodes all report holding {{address}}. The nodes probably can't hear each other. Check that multicast traffic passes between them on the network."
+      },
+      "holderUnheard": {
+        "title": "TierPlan can't hear the node that holds the virtual IP on {{env}}",
+        "body": "{{node}} was the last to hold {{address}}. TierPlan last heard from it {{time}}, and no other node has taken the address since. If {{node}} is down, ingress doesn't answer on {{address}}."
+      },
+      "moved": {
+        "title": "The virtual IP moved on {{env}}",
+        "titleMany_other": "The virtual IP moved {{count}} times on {{env}}",
+        "body": "It moved from {{from}} to {{to}} {{time}}. {{reason}}",
+        "bodyMany": "The latest move was from {{from}} to {{to}} {{time}}. {{reason}}",
+        "noNode": "no node",
+        "reason": {
+          "holder_failed": "The previous holder stopped answering.",
+          "probe_failing": "The previous holder's proxy stopped answering.",
+          "drain_handoff": "The previous holder was drained.",
+          "unknown": "TierPlan couldn't tell why."
+        }
+      },
+      "foreignRouter": {
+        "title": "Another router uses the virtual IP's router ID on {{env}}",
+        "body": "Something on the network sends virtual router adverts with router ID {{routerId}} that this swarm's key doesn't match. Change this swarm's router ID, or find the other router.",
+        "bodySender": "{{sender}} sends virtual router adverts with router ID {{routerId}} that this swarm's key doesn't match. Change this swarm's router ID, or find that device."
+      },
+      "clock": {
+        "title": "The clock is off on {{node}}, which the virtual IP needs",
+        "body": "{{node}} on {{env}} is {{offset}} out of step. The virtual IP rejects adverts more than {{window}} old, so the nodes may stop hearing each other. Fix the clock on that node.",
+        "bodyNoOffset": "{{node}} on {{env}} is rejecting adverts as too old, so its clock is out of step. The virtual IP can't stay up while that lasts. Fix the clock on that node."
+      },
+      "privilegedLost": {
+        "title": "The virtual IP can't be managed on {{env}}",
+        "body_one": "The agent on {{node}} no longer allows privileged services. The virtual IP keeps running, but TierPlan can't change or repair it until every manager's agent allows them again.",
+        "body_other": "{{count}} managers' agents no longer allow privileged services. The virtual IP keeps running, but TierPlan can't change or repair it until every manager's agent allows them again."
+      }
     }
   }
 }

@@ -9,6 +9,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -226,6 +227,11 @@ type consumerRow struct {
 }
 
 func consumerRows() []consumerRow {
+	return append(proxyConsumerRows(), keepalivedConsumerRows()...)
+}
+
+// proxyConsumerRows are the rows of the ingress proxy's objects (D-28).
+func proxyConsumerRows() []consumerRow {
 	return []consumerRow{
 		{name: "ClassifyContainer", covers: []string{"ClassifyContainer"}, run: func(t *testing.T, w consumerWorld) {
 			ctl, listed := janitor.ClassifyContainer(w.controlInput, consumersNow)
@@ -621,4 +627,147 @@ func checkEveryConsumerHasARow(t *testing.T) {
 
 // coveredByHand are the functions a row covers that the scan cannot select by their parameters (they take a
 // keep map, a plain value or an aggregate), kept so a stale row is still reported.
-var coveredByHand = map[string]bool{"IsKept": true, "ContainerWorkloads": true}
+var coveredByHand = map[string]bool{
+	"IsKept": true, "ContainerWorkloads": true,
+	// The ownership vocabulary of internal/ingress is not among the scanned sources: the consumers call it, and the
+	// keepalived rows below feed each of these the objects the virtual IP builds (D-14, A-13).
+	"KeepalivedLabels": true, "OwnsKeepalivedService": true, "OwnsKeepalivedSecret": true, "OwnsAnyService": true, "OwnsAnySecret": true,
+}
+
+// keepalivedWorld is the virtual IP's objects as the consumers see them: the service, its swarm task container
+// and the secret that carries the VRRP key, with the labels KeepalivedLabels gives them. Nothing builds the
+// service yet, so the labels are the ones every keepalived object is to carry (D-14); the control objects are
+// the same shape without them.
+type keepalivedWorld struct {
+	serviceName, secretName string
+	labels                  map[string]string
+	taskLabels              map[string]string
+}
+
+func newKeepalivedWorld(t *testing.T) keepalivedWorld {
+	t.Helper()
+	kw := keepalivedWorld{
+		serviceName: ingress.ServiceNameKeepalived,
+		secretName:  ingress.SecretPrefixKeepalived + "g1-env-abcd1234",
+		labels:      ingress.KeepalivedLabels(),
+	}
+	kw.taskLabels = swarmTaskLabels(kw.serviceName, proxyNode, "task3")
+	maps.Copy(kw.taskLabels, kw.labels)
+	if !ingress.HasComponentLabel(kw.labels) || kw.labels[stacks.LabelKeep] != "true" || kw.labels[stacks.LabelUpdates] != "ignore" {
+		t.Fatalf("the keepalived labels are %v: want the component label, %s=true and %s=ignore", kw.labels, stacks.LabelKeep, stacks.LabelUpdates)
+	}
+	return kw
+}
+
+// keepalivedConsumerRows is one row per consumer for the virtual IP's objects: each first shows the control is
+// acted on, then that the keepalived object is left alone (D-14, A-13, T-26-06).
+func keepalivedConsumerRows() []consumerRow {
+	return []consumerRow{
+		{name: "KeepalivedOwnership", covers: []string{"KeepalivedLabels", "OwnsKeepalivedService", "OwnsKeepalivedSecret", "OwnsAnyService", "OwnsAnySecret"}, run: func(t *testing.T, _ consumerWorld) {
+			kw := newKeepalivedWorld(t)
+			if !ingress.OwnsKeepalivedService(kw.serviceName, kw.labels) || !ingress.OwnsAnyService(kw.serviceName, kw.labels) {
+				t.Errorf("the keepalived service is not owned by the Owns functions")
+			}
+			if !ingress.OwnsKeepalivedSecret(kw.secretName, kw.labels) || !ingress.OwnsAnySecret(kw.secretName, kw.labels) {
+				t.Errorf("the keepalived secret is not owned by the Owns functions")
+			}
+			// Controls: the same names without the labels, and each component's label on the other's names.
+			if ingress.OwnsAnyService(kw.serviceName, nil) || ingress.OwnsAnySecret(kw.secretName, nil) {
+				t.Errorf("a keepalived name without the labels is owned")
+			}
+			if ingress.OwnsAnyService(kw.serviceName, ingress.ObjectLabels()) || ingress.OwnsAnySecret(kw.secretName, ingress.ObjectLabels()) ||
+				ingress.OwnsAnyService(ingress.ServiceName, kw.labels) || ingress.OwnsAnySecret(ingress.SecretPrefix+"g1", kw.labels) {
+				t.Errorf("a component's label on the other component's names is owned")
+			}
+		}},
+		{name: "KeepalivedJanitor", run: func(t *testing.T, w consumerWorld) {
+			kw := newKeepalivedWorld(t)
+			old := consumersNow.Add(-90 * 24 * time.Hour)
+			ka := janitor.Container{
+				ID: "ctr-ka", Name: "/" + kw.serviceName + "." + proxyNode + ".task3", NodeID: proxyNode, Node: "node-one",
+				State: "exited", ImageID: proxyImageID, Created: old, Labels: kw.taskLabels,
+			}
+			in := w.proxyInput
+			in.Container, in.Group = ka, kw.taskLabels["com.docker.swarm.service.id"]+"/node/"+proxyNode
+
+			if ctl, listed := janitor.ClassifyContainer(w.controlInput, consumersNow); !listed || ctl.Class != janitor.ClassRemovable {
+				t.Fatalf("control container: %+v listed %v, want removable: the fixture is not in scope of the classifier", ctl, listed)
+			}
+			item, listed := janitor.ClassifyContainer(in, consumersNow)
+			leftAlone(t, "the keepalived task container", item, listed)
+			if !listed {
+				t.Errorf("the keepalived exited container is not listed, want protected (kept_label) so the preview says why")
+			}
+
+			snap := w.snapshot
+			snap.Containers = []janitor.Container{ka, w.controlContainer}
+			ends := map[string]janitor.ContainerEnd{"ctr-ka": w.ends["ctr-proxy"], "ctr-control": w.ends["ctr-control"]}
+			plan := janitor.Build(janitor.Input{Snapshot: snap, Ends: ends}, w.policy, consumersNow)
+			if got := named(plan.Items, "ctr-ka"); len(got) != 0 {
+				t.Errorf("the plan would remove the keepalived container: %+v", got)
+			}
+			if len(named(plan.Items, "ctr-control")) != 1 {
+				t.Errorf("the control is not in the plan's removable items %+v: the fixture is not in scope of the planner", plan.Items)
+			}
+			for _, it := range named(plan.NotRemoved, "ctr-ka") {
+				if it.Class != janitor.ClassProtected || it.Reason.Code != janitor.ReasonKeptLabel {
+					t.Errorf("not-removed item %+v: want protected by the keep label", it)
+				}
+			}
+
+			refs := janitor.CandidatesFor(snap, w.policy, nil)
+			if len(refs) != 1 || refs[0].ID != "ctr-control" {
+				t.Errorf("candidates = %+v, want only the control container: the keepalived one is kept by its label", refs)
+			}
+			if code, held := janitor.HeldByStack([]janitor.StackFact{{ID: "stack-a", Name: "shop", Excluded: true}}, kw.taskLabels); held || code != "" {
+				t.Errorf("the keepalived task container is held by a stack (%q): it belongs to no stack", code)
+			}
+		}},
+		{name: "KeepalivedUpdates", run: func(t *testing.T, _ consumerWorld) {
+			kw := newKeepalivedWorld(t)
+			svc := dockerx.ServiceRow{
+				ID: "svc-ka", Name: kw.serviceName, Mode: "global", Running: 3, Desired: 3, Image: "registry.example.com/tierplan/keepalived:1",
+				Labels: kw.labels, Ingress: true,
+			}
+			control := dockerx.ServiceRow{
+				ID: "svc-web", Name: "web", Mode: "replicated", Running: 1, Desired: 1, Image: "registry.example.com/team/web:1",
+				Labels: map[string]string{"team": "core"},
+			}
+			if got := updates.ServiceWorkloads([]dockerx.ServiceRow{svc, control}); len(got) != 1 || got[0].Name != "web" {
+				t.Fatalf("service workloads = %+v, want only the control: the detector offers no update of keepalived", got)
+			}
+			svc.Ingress = false
+			if got := updates.ServiceWorkloads([]dockerx.ServiceRow{svc, control}); len(got) != 1 || got[0].Name != "web" {
+				t.Errorf("service workloads without the flag = %+v, want only the control: the label alone skips it", got)
+			}
+			svc.Ingress = true
+			if code := updates.NotUpdatableCode(svc); code != updates.NotUpdatableIngress {
+				t.Errorf("keepalived: refusal %q, want %q", code, updates.NotUpdatableIngress)
+			}
+			if code := updates.NotUpdatableCode(dockerx.ServiceRow{ID: "svc-web", Name: "web", Mode: "global"}); code != "" {
+				t.Errorf("control: refusal %q, want none: the fixture is not in scope of the rule", code)
+			}
+			row := func(id string, labels map[string]string) envs.ContainerRow {
+				return envs.ContainerRow{ContainerRow: dockerx.ContainerRow{ID: id, Name: "/" + id, State: "running", Image: "registry.example.com/team/" + id + ":1", Labels: labels}, NodeID: proxyNode, Node: "node-one"}
+			}
+			agg := envs.Aggregate{Containers: []envs.ContainerRow{row("keepalived", kw.taskLabels), row("plain", map[string]string{"team": "core"})}}
+			if ws := updates.ContainerWorkloads(agg, func(string) (string, bool) { return "", false }); len(ws) != 1 || ws[0].ID != "plain" {
+				t.Errorf("container workloads = %+v, want only the control", ws)
+			}
+		}},
+		{name: "KeepalivedDiscover", run: func(t *testing.T, _ consumerWorld) {
+			kw := newKeepalivedWorld(t)
+			svc := dockerx.ServiceRow{ID: "svc-ka", Name: kw.serviceName, Mode: "global", Running: 3, Desired: 3, Labels: kw.labels, Ingress: true}
+			controlRow := dockerx.ServiceRow{ID: "svc-web", Name: "shop_web", Mode: "replicated", Running: 1, Desired: 1, Stack: "shop", Labels: map[string]string{stacks.LabelSwarmNamespace: "shop"}}
+			got := stackops.Discover(stackops.Held{Services: []dockerx.ServiceRow{svc, controlRow}}, nil, stacks.TargetSwarm, stackops.SelfMarks{})
+			if len(got) != 1 || got[0].Name != "shop" {
+				t.Fatalf("discovered %+v, want only the shop stack", got)
+			}
+			for _, r := range got[0].Rows {
+				if r.Name == kw.serviceName {
+					t.Errorf("the keepalived service is listed in %s", got[0].Name)
+				}
+			}
+		}},
+	}
+}

@@ -213,6 +213,7 @@
       "server": "This is TierPlan's own container. {{gerund}} it cuts TierPlan off from this host, and you can't start it again from here.",
       "agent": "This is the TierPlan agent on {{node}}. {{gerund}} it cuts TierPlan off from {{node}}.",
       "ingress": "This is a TierPlan ingress proxy on {{node}}. {{gerund}} it stops HTTPS routing through {{node}} until Swarm replaces it.",
+      "ingress_vip": "This is the virtual IP service on {{node}}. {{gerund}} it takes {{node}} out of the virtual IP's candidates, and moves the address away if {{node}} holds it, until Swarm replaces it.",
       "gerund": {
         "stop": "Stopping",
         "kill": "Killing",
@@ -241,6 +242,13 @@
           "restart": "Restart proxy",
           "pause": "Pause proxy",
           "remove": "Remove proxy"
+        },
+        "ingress_vip": {
+          "stop": "Stop virtual IP service",
+          "kill": "Kill virtual IP service",
+          "restart": "Restart virtual IP service",
+          "pause": "Pause virtual IP service",
+          "remove": "Remove virtual IP service"
         }
       }
     },

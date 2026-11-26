@@ -346,7 +346,7 @@ func (f *disableFix) otherEnv() string {
 // wantDisableDone fails the test unless every item of the disable job ended done, in the order the job lists them.
 func wantDisableDone(t *testing.T, job jobs.Job) {
 	t.Helper()
-	want := []string{"switch_off", "service", "volumes", "network", "secret", "token", "nodes"}
+	want := []string{"virtual_ip", "switch_off", "service", "volumes", "network", "secret", "token", "nodes"}
 	var got []string
 	for _, it := range job.Items {
 		got = append(got, it.ID)
