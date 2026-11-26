@@ -645,6 +645,7 @@ export function StackEditorPage({
                       text={open.content}
                       target={stack.data.target === "standalone" ? "standalone" : "swarm"}
                       readOnly={!canEdit || open.origin === "repo" || fromGit}
+                      gitSource={open.origin === "repo" || fromGit}
                       onEdit={(content) => dispatch({ type: "edit", path: open.path, content })}
                       onClose={() => setExposeOpen(false)}
                     />

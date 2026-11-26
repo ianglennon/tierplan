@@ -139,7 +139,9 @@
         "standalone": "Routes are written to <mono>labels</mono> for this host stack."
       },
       "route": {
-        "group": "Route {{name}}"
+        "group": "Route {{name}}",
+        "remove": "Remove route",
+        "removeLabel": "Remove route {{name}}"
       },
       "host": {
         "label": "Hostname",
@@ -169,7 +171,44 @@
       "domains": {
         "add": "Add .{{suffix}}",
         "outside": "This name isn't under a domain registered for this environment. The check will refuse it."
-      }
+      },
+      "empty": "{{service}} isn't exposed.",
+      "noServices": "This file has no services.",
+      "add": "Add a route",
+      "cancel": "Cancel",
+      "name": {
+        "label": "Route name",
+        "helper": "A short name such as api or admin.",
+        "add": "Add route",
+        "invalid": "Use lowercase letters, digits and hyphens, up to 32, and not “default”.",
+        "duplicate": "This service already has a route called {{name}}."
+      },
+      "wrongPlace": {
+        "title": "These labels are in the wrong place",
+        "body": {
+          "swarm": "{{service}} has ingress labels in <mono>labels</mono>, but a swarm stack reads <mono>deploy.labels</mono>. TierPlan ignores them.",
+          "standalone": "{{service}} has ingress labels in <mono>deploy.labels</mono>, but a host stack reads <mono>labels</mono>. TierPlan ignores them."
+        },
+        "move": {
+          "swarm": "Move to <mono>deploy.labels</mono>",
+          "standalone": "Move to <mono>labels</mono>"
+        }
+      },
+      "bothPlaces": {
+        "title": "Two copies of the ingress labels",
+        "body": {
+          "swarm": "TierPlan reads only <mono>deploy.labels</mono> and ignores the same labels in <mono>labels</mono>.",
+          "standalone": "TierPlan reads only <mono>labels</mono> and ignores the same labels in <mono>deploy.labels</mono>."
+        },
+        "remove": "Remove the ignored copy"
+      },
+      "readOnly": {
+        "git": "This stack comes from a Git repository. Change the labels there.",
+        "needs": "Read-only. {{needs}}.",
+        "plain": "Read-only."
+      },
+      "locked": "Set by a variable or anchor. Change it in the file.",
+      "parseError": "The compose file has a YAML error, so the panel can't read it. Fix it in the editor first."
     }
   }
 }

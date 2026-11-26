@@ -293,3 +293,76 @@ describe("registered-domain suggestions (D-20)", () => {
     expect(onEdit).toHaveBeenCalledTimes(1);
   });
 });
+
+// Labels in the block the target does not read, or in both (plan 27-26, D-18, U-14).
+const WRONG_LIST =
+  "services:\n  web:\n    image: nginx\n    labels:\n      - tierplan.ingress.host=shop.apps.example.com\n      - tierplan.ingress.port=8080\n";
+const WRONG_MAP =
+  'services:\n  web:\n    image: nginx\n    labels:\n      tierplan.ingress.host: shop.apps.example.com\n      tierplan.ingress.port: "8080"\n';
+const BOTH =
+  'services:\n  web:\n    image: nginx\n    labels:\n      tierplan.ingress.host: old.apps.example.com\n      tierplan.ingress.port: "80"\n    deploy:\n      labels:\n        tierplan.ingress.host: shop.apps.example.com\n        tierplan.ingress.port: "8080"\n';
+
+describe("labels in the wrong place (D-18)", () => {
+  it("warns and moves them to deploy.labels in one click, keeping the list form", () => {
+    const onEdit = mount({ text: WRONG_LIST });
+    expect(screen.getByText("These labels are in the wrong place")).toBeTruthy();
+    expect(
+      screen.getByText(
+        (_, el) =>
+          el?.tagName === "SPAN" &&
+          el.textContent ===
+            "web has ingress labels in labels, but a swarm stack reads deploy.labels. TierPlan ignores them.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Move to deploy.labels" }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    const next = onEdit.mock.calls[0]?.[0] ?? "";
+    expect(next).toContain(
+      "deploy:\n      labels:\n        - tierplan.ingress.host=shop.apps.example.com",
+    );
+    expect(next).not.toMatch(/\n {4}labels:/);
+  });
+
+  it("clears the warning once the working copy holds the move", () => {
+    const onEdit = mount({ text: WRONG_MAP });
+    fireEvent.click(screen.getByRole("button", { name: "Move to deploy.labels" }));
+    cleanup();
+    mount({ text: onEdit.mock.calls[0]?.[0] ?? "" });
+    expect(screen.queryByText("These labels are in the wrong place")).toBeNull();
+    expect(host().value).toBe("shop.apps.example.com");
+  });
+
+  it("moves a host stack's labels from deploy.labels to labels", () => {
+    const onEdit = mount({
+      target: "standalone",
+      text: 'services:\n  web:\n    image: nginx\n    deploy:\n      labels:\n        tierplan.ingress.host: a.example.com\n        tierplan.ingress.port: "80"\n',
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Move to labels" }));
+    const next = onEdit.mock.calls[0]?.[0] ?? "";
+    expect(next).toContain("    labels:\n      tierplan.ingress.host: a.example.com");
+    expect(next).not.toContain("deploy");
+  });
+
+  it("offers no confirm: the move is made at once", () => {
+    const onEdit = mount({ text: WRONG_MAP });
+    fireEvent.click(screen.getByRole("button", { name: "Move to deploy.labels" }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("two copies of the ingress labels (D-18)", () => {
+  it("warns and removes the copy the target ignores", () => {
+    const onEdit = mount({ text: BOTH });
+    expect(screen.getByText("Two copies of the ingress labels")).toBeTruthy();
+    expect(screen.queryByText("These labels are in the wrong place")).toBeNull();
+    // The route shown is the one the target reads.
+    expect(host().value).toBe("shop.apps.example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Remove the ignored copy" }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    const next = onEdit.mock.calls[0]?.[0] ?? "";
+    expect(next).not.toContain("old.apps.example.com");
+    expect(next).toContain("shop.apps.example.com");
+  });
+});
