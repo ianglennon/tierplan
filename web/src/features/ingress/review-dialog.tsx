@@ -33,7 +33,7 @@ type StackJobItemBody = components["schemas"]["StackJobItemBody"];
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
 // How many stacks the redeploy list names before it says "and n more" (UI-SPEC S6).
-const REDEPLOY_SHOWN = 10;
+export const REDEPLOY_SHOWN = 10;
 
 // The switches the dialog is built for. Each has its own words under ingressPage.review.<kind>.
 export type ReviewKind = "enable" | "disable";
@@ -43,6 +43,8 @@ export interface ReviewDialogProps {
   kind: ReviewKind;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  // Told when a job this dialog started begins and stops running, so the card behind it can say so.
+  onRunning?: (running: boolean) => void;
   // The switch's preview, run when the dialog opens. It writes nothing.
   preview: UseMutationResult<ReviewPreview, Error, void>;
   // The switch itself: it answers with the job to follow.
@@ -59,6 +61,7 @@ export function ReviewDialog({
   kind,
   open,
   onOpenChange,
+  onRunning,
   preview,
   start,
 }: ReviewDialogProps) {
@@ -87,6 +90,7 @@ export function ReviewDialog({
             start={start}
             onRunning={(value) => {
               running.current = value;
+              onRunning?.(value);
             }}
             onClose={() => change(false)}
           />
