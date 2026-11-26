@@ -6,7 +6,8 @@
     },
     "tabs": {
       "label": "Ingress sections",
-      "routes": "Routes"
+      "routes": "Routes",
+      "certificates": "Certificates"
     },
     "routes": {
       "label": "Routes",
@@ -92,6 +93,33 @@
       "paused": "Ingress is paused after a restore. Nothing is written to the swarm until an Admin resumes it.",
       "resume": "Resume ingress",
       "resumeFailed": "Couldn't resume ingress. Nothing was changed."
+    },
+    "certs": {
+      "label": "Certificates",
+      "loading": "Loading certificates",
+      "error": "Couldn't read the certificates.",
+      "retry": "Retry reading certificates",
+      "columns": {
+        "hostname": "Hostname",
+        "state": "State",
+        "issued": "Issued",
+        "expires": "Expires",
+        "renewal": "Next renewal",
+        "error": "Last error",
+        "actions": "Actions"
+      },
+      "staging": "Staging",
+      "source": {
+        "production": "Let's Encrypt, production",
+        "staging": "Let's Encrypt, staging",
+        "upload": "Uploaded"
+      },
+      "notServed": "Not served yet.",
+      "stagingNeverServed": "Staging certificates are never served.",
+      "nextAttempt": "Next attempt <time/>",
+      "waitingUntil": "Waiting for the authority until <time/>",
+      "none": "—",
+      "renewBasis": "How the renewal time is chosen"
     }
   }
 }

@@ -57,6 +57,7 @@ import { Route as AppEnvEnvIdContainersContainerIdRouteImport } from './routes/_
 import { Route as AppEnvEnvIdGitStacksNewRouteImport } from './routes/_app/env/$envId/git-stacks.new'
 import { Route as AppEnvEnvIdImagesImageIdRouteImport } from './routes/_app/env/$envId/images_.$imageId'
 import { Route as AppEnvEnvIdIngressIndexRouteImport } from './routes/_app/env/$envId/ingress.index'
+import { Route as AppEnvEnvIdIngressCertificatesRouteImport } from './routes/_app/env/$envId/ingress.certificates'
 import { Route as AppEnvEnvIdNetworksNetworkIdRouteImport } from './routes/_app/env/$envId/networks_.$networkId'
 import { Route as AppEnvEnvIdNodesNodeIdRouteImport } from './routes/_app/env/$envId/nodes_.$nodeId'
 import { Route as AppEnvEnvIdSecretsSecretIdRouteImport } from './routes/_app/env/$envId/secrets_.$secretId'
@@ -368,6 +369,12 @@ const AppEnvEnvIdIngressIndexRoute = AppEnvEnvIdIngressIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppEnvEnvIdIngressRoute,
 } as any)
+const AppEnvEnvIdIngressCertificatesRoute =
+  AppEnvEnvIdIngressCertificatesRouteImport.update({
+    id: '/certificates',
+    path: '/certificates',
+    getParentRoute: () => AppEnvEnvIdIngressRoute,
+  } as any)
 const AppEnvEnvIdNetworksNetworkIdRoute =
   AppEnvEnvIdNetworksNetworkIdRouteImport.update({
     id: '/networks_/$networkId',
@@ -810,6 +817,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/env/$envId/images/$imageId': typeof AppEnvEnvIdImagesImageIdRouteWithChildren
+  '/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
   '/env/$envId/networks/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   '/env/$envId/nodes/$nodeId': typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
   '/env/$envId/secrets/$secretId': typeof AppEnvEnvIdSecretsSecretIdRouteWithChildren
@@ -917,6 +925,7 @@ export interface FileRoutesByTo {
   '/settings/access': typeof AppSettingsAccessIndexRoute
   '/env/$envId/address-space/guide': typeof AppEnvEnvIdAddressSpaceGuideRoute
   '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
+  '/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
   '/env/$envId/update-jobs/$jobId': typeof AppEnvEnvIdUpdateJobsJobIdRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
@@ -1027,6 +1036,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/containers_/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/_app/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/_app/env/$envId/images_/$imageId': typeof AppEnvEnvIdImagesImageIdRouteWithChildren
+  '/_app/env/$envId/ingress/certificates': typeof AppEnvEnvIdIngressCertificatesRoute
   '/_app/env/$envId/networks_/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   '/_app/env/$envId/nodes_/$nodeId': typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
   '/_app/env/$envId/secrets_/$secretId': typeof AppEnvEnvIdSecretsSecretIdRouteWithChildren
@@ -1144,6 +1154,7 @@ export interface FileRouteTypes {
     | '/env/$envId/containers/$containerId'
     | '/env/$envId/git-stacks/new'
     | '/env/$envId/images/$imageId'
+    | '/env/$envId/ingress/certificates'
     | '/env/$envId/networks/$networkId'
     | '/env/$envId/nodes/$nodeId'
     | '/env/$envId/secrets/$secretId'
@@ -1251,6 +1262,7 @@ export interface FileRouteTypes {
     | '/settings/access'
     | '/env/$envId/address-space/guide'
     | '/env/$envId/git-stacks/new'
+    | '/env/$envId/ingress/certificates'
     | '/env/$envId/services/new'
     | '/env/$envId/update-jobs/$jobId'
     | '/settings/access/teams/$teamId'
@@ -1360,6 +1372,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/containers_/$containerId'
     | '/_app/env/$envId/git-stacks/new'
     | '/_app/env/$envId/images_/$imageId'
+    | '/_app/env/$envId/ingress/certificates'
     | '/_app/env/$envId/networks_/$networkId'
     | '/_app/env/$envId/nodes_/$nodeId'
     | '/_app/env/$envId/secrets_/$secretId'
@@ -1777,6 +1790,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/env/$envId/ingress/'
       preLoaderRoute: typeof AppEnvEnvIdIngressIndexRouteImport
+      parentRoute: typeof AppEnvEnvIdIngressRoute
+    }
+    '/_app/env/$envId/ingress/certificates': {
+      id: '/_app/env/$envId/ingress/certificates'
+      path: '/certificates'
+      fullPath: '/env/$envId/ingress/certificates'
+      preLoaderRoute: typeof AppEnvEnvIdIngressCertificatesRouteImport
       parentRoute: typeof AppEnvEnvIdIngressRoute
     }
     '/_app/env/$envId/networks_/$networkId': {
@@ -2312,10 +2332,12 @@ const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
 )
 
 interface AppEnvEnvIdIngressRouteChildren {
+  AppEnvEnvIdIngressCertificatesRoute: typeof AppEnvEnvIdIngressCertificatesRoute
   AppEnvEnvIdIngressIndexRoute: typeof AppEnvEnvIdIngressIndexRoute
 }
 
 const AppEnvEnvIdIngressRouteChildren: AppEnvEnvIdIngressRouteChildren = {
+  AppEnvEnvIdIngressCertificatesRoute: AppEnvEnvIdIngressCertificatesRoute,
   AppEnvEnvIdIngressIndexRoute: AppEnvEnvIdIngressIndexRoute,
 }
 

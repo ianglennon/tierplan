@@ -92,6 +92,10 @@ beforeEach(() => {
           return Response.json(status);
         case `${BASE}/ingress/routes`:
           return Response.json({ enabled: true, routes });
+        case `${BASE}/ingress/certificates`:
+          return Response.json({ items: [] });
+        case `${BASE}/ingress/certificates/budget`:
+          return Response.json({ items: [] });
       }
       return Response.json({}, { status: 404 });
     }),
@@ -134,6 +138,18 @@ describe("the Ingress page frame", () => {
     expect(routes.getAttribute("href")).toBe(PAGE);
     await waitFor(() => expect(routes.getAttribute("data-active")).toBeTruthy());
     await waitFor(() => expect(document.title).toContain("Ingress"));
+  });
+
+  it("lists Certificates second in the tab bar and marks it active on its own route", async () => {
+    renderAt(`${PAGE}/certificates`);
+    const certificates = await screen.findByRole("tab", { name: "Certificates" });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Routes",
+      "Certificates",
+    ]);
+    expect(certificates.getAttribute("href")).toBe(`${PAGE}/certificates`);
+    await waitFor(() => expect(certificates.getAttribute("data-active")).toBeTruthy());
+    expect(screen.getByRole("tab", { name: "Routes" }).getAttribute("data-active")).toBeNull();
   });
 
   it("opens on the Routes tab, and its settling dot pulses only for a user who accepts motion", async () => {
