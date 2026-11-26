@@ -86,6 +86,12 @@
       "title": "Ingress is off",
       "body": "Ingress serves your stacks' hostnames over HTTPS, with a certificate for each name. It is off for this environment, so no route is served.",
       "reader": "Ask an Admin to turn it on."
+    },
+    "alerts": {
+      "unreachable": "TierPlan can't reach this environment just now. What you see may be out of date.",
+      "paused": "Ingress is paused after a restore. Nothing is written to the swarm until an Admin resumes it.",
+      "resume": "Resume ingress",
+      "resumeFailed": "Couldn't resume ingress. Nothing was changed."
     }
   }
 }

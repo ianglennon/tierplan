@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
@@ -115,5 +115,38 @@ export function ingressDomainsQuery(envId: string) {
     },
     retry: false,
     refetchInterval: () => ingressRefetchInterval(false, visible()),
+  });
+}
+
+// IngressActionError is a refused or failed write to the Ingress page, with the status and the server's own words
+// for what is wrong, as sent.
+export class IngressActionError extends Error {
+  readonly status: number;
+  readonly detail?: string;
+  constructor(status: number, detail?: string) {
+    super(`ingress request failed (${status})`);
+    this.name = "IngressActionError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+// useResumeIngress resumes the ingress of an environment a restore paused (D-07: it has no preview). It needs
+// ingress.manage, which the server checks; the page only decides what to show. A resume that worked, or one that
+// found nothing paused, refreshes everything on the page.
+export function useResumeIngress(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error, response } = await api.POST("/api/env/{envId}/ingress/resume", {
+        params: { path: { envId } },
+      });
+      if (!data) {
+        const problem = readProblem(error, response);
+        throw new IngressActionError(problem.status, problem.detail);
+      }
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ingressKey(envId) }),
   });
 }

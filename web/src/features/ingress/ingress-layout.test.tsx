@@ -23,11 +23,13 @@ const BASE = `/api/env/${ENV}`;
 
 let me: ReturnType<typeof makeMe>;
 let routes: Record<string, unknown>[];
+let status: Record<string, unknown>;
 const defaults = queryClient.getDefaultOptions();
 
 beforeEach(() => {
   me = makeMe({ envs: { [ENV]: "viewer" } });
   routes = [];
+  status = { objectsKnown: true, paused: false, lastEnsure: { at: "", class: "" } };
   queryClient.setDefaultOptions({ queries: { retry: false, refetchOnWindowFocus: false } });
   setCsrfToken(null);
   FakeEventSource.reset();
@@ -86,6 +88,8 @@ beforeEach(() => {
             isWorker: false,
             fetchedAt: "2026-10-01T10:00:00Z",
           });
+        case `${BASE}/ingress/status`:
+          return Response.json(status);
         case `${BASE}/ingress/routes`:
           return Response.json({ enabled: true, routes });
       }
@@ -174,5 +178,35 @@ describe("the Ingress page frame", () => {
     renderAt();
     expect(await screen.findByText("You don't have permission to view this page")).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Routes" })).toBeNull();
+  });
+
+  it("draws the paused alert once, between the tab bar and the tab, and not inside the tab", async () => {
+    status = { objectsKnown: true, paused: true, lastEnsure: { at: "", class: "" } };
+    routes = [
+      {
+        kind: "route",
+        hostname: "app.example.com",
+        path: "/",
+        ownerKind: "stack",
+        port: 8080,
+        reason: "",
+        scheme: "http",
+        service: "web",
+        stackId: "s1",
+        stackName: "shop",
+        state: "serving",
+        stopped: false,
+        strip: false,
+        conditions: [],
+      },
+    ];
+    renderAt();
+    const text = await screen.findByText(/^Ingress is paused after a restore/);
+    const table = await screen.findByRole("table", { name: "Routes" });
+    expect(screen.getAllByText(/^Ingress is paused after a restore/)).toHaveLength(1);
+    const tabs = screen.getByRole("tablist", { name: "Ingress sections" });
+    expect(tabs.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(text.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(table.contains(text)).toBe(false);
   });
 });

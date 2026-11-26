@@ -4,6 +4,7 @@
 import { Link, Outlet } from "@tanstack/react-router";
 
 import { Tabs, TabsList, TabsScroller, TabsTrigger } from "@/components/ui/tabs";
+import { IngressPageAlerts } from "@/features/ingress/page-alerts";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -67,6 +68,7 @@ export function IngressLayout({ envId }: { envId: string }) {
           </TabsList>
         </TabsScroller>
       </Tabs>
+      <IngressPageAlerts envId={envId} />
       <Outlet />
     </div>
   );
