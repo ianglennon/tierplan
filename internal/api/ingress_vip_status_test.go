@@ -274,8 +274,8 @@ func TestGetIngressVIP(t *testing.T) {
 		t.Errorf("lastEnsure = %+v", st.LastEnsure)
 	}
 
-	if rec := v.credCall(t, v.operatorA, http.MethodGet, path, ""); rec.Code != http.StatusForbidden {
-		t.Errorf("an Operator reading the status: %d, want 403", rec.Code)
+	if rec := v.credCall(t, v.operatorA, http.MethodGet, path, ""); rec.Code != http.StatusOK {
+		t.Errorf("an Operator reading the status: %d, want 200 (ingress.read)", rec.Code)
 	}
 }
 
@@ -426,7 +426,62 @@ func TestListIngressVIPMoves(t *testing.T) {
 			t.Errorf("GET %s: %d %s, want 200", q, rec.Code, rec.Body)
 		}
 	}
-	if rec := v.credCall(t, v.operatorA, http.MethodGet, path, ""); rec.Code != http.StatusForbidden {
-		t.Errorf("an Operator reading the history: %d, want 403", rec.Code)
+	if rec := v.credCall(t, v.operatorA, http.MethodGet, path, ""); rec.Code != http.StatusOK {
+		t.Errorf("an Operator reading the history: %d, want 200 (ingress.read)", rec.Code)
+	}
+	if rec := v.credCall(t, v.adminB, http.MethodGet, path, ""); rec.Code != http.StatusForbidden && rec.Code != http.StatusNotFound {
+		t.Errorf("an Admin of another environment reading the history: %d, want 403 or 404", rec.Code)
+	}
+}
+
+// TestIngressVIPReadsReadableByViewers pins D-06 and D-14: the status and the move history are ingress.read routes, so a Viewer and
+// an Operator of the swarm read the address, its holder and candidates and page the moves newest first, no answer carries the
+// key, and a swarm with no virtual IP still answers a Viewer 404 vip_not_enabled.
+func TestIngressVIPReadsReadableByViewers(t *testing.T) {
+	t.Parallel()
+	v := newVIPFix(t, false, "running", "running")
+	viewer := v.asRoleOn(t, "vip-viewer-a", v.envA, "viewer")
+	v.play(t, vipState(1, ingressbundle.VIPStateMaster))
+	for _, m := range []ingressstore.VIPMove{
+		{EnvID: v.envA, At: vipNow.Add(-time.Hour), ToNodeID: vipNodeA, ToNodeName: "manager-1", Reason: ingressdeploy.VIPMoveUnknown},
+		{EnvID: v.envA, At: vipNow.Add(-time.Minute), FromNodeID: vipNodeA, FromNodeName: "manager-1", ToNodeID: vipNodeB, ToNodeName: "manager-2", Reason: ingressdeploy.VIPMoveHolderFailed},
+	} {
+		if err := v.ingressStore.InsertVIPMove(testsupport.Context(t), m); err != nil {
+			t.Fatalf("InsertVIPMove: %v", err)
+		}
+	}
+	base := "/api/env/" + v.envA + "/ingress/vip"
+
+	for name, u := range map[string]credentialUser{"a viewer": viewer, "an operator": v.operatorA} {
+		rec := v.credCall(t, u, http.MethodGet, base, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s reads the status: %d %s, want 200", name, rec.Code, rec.Body)
+		}
+		st := decodeBody[vipStatusResp](t, rec)
+		if st.Address != "192.168.10.250/24" || st.Holder.State != "one" || len(st.Holder.Nodes) != 1 || st.Holder.Nodes[0] != vipNodeA || len(st.Candidates) != 2 {
+			t.Errorf("%s sees status %+v, want the address, node A as holder and two candidates", name, st)
+		}
+		if strings.Contains(rec.Body.String(), vipKeySentinel) || strings.Contains(strings.ToLower(rec.Body.String()), "sealed") {
+			t.Errorf("%s: the status carries the key: %s", name, rec.Body)
+		}
+
+		rec = v.credCall(t, u, http.MethodGet, base+"/moves", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s reads the moves: %d %s, want 200", name, rec.Code, rec.Body)
+		}
+		moves := decodeBody[vipMovesResp](t, rec)
+		if len(moves.Items) != 2 || moves.Items[0].Reason != ingressdeploy.VIPMoveHolderFailed || moves.Items[1].Reason != ingressdeploy.VIPMoveUnknown {
+			t.Errorf("%s sees moves %+v, want two, newest first", name, moves.Items)
+		}
+		if strings.Contains(rec.Body.String(), vipKeySentinel) || strings.Contains(strings.ToLower(rec.Body.String()), "sealed") {
+			t.Errorf("%s: the moves carry the key: %s", name, rec.Body)
+		}
+	}
+
+	none := newVIPFix(t, true, "running", "running")
+	noneViewer := none.asRoleOn(t, "vip-viewer-none", none.envA, "viewer")
+	rec := none.credCall(t, noneViewer, http.MethodGet, "/api/env/"+none.envA+"/ingress/vip", "")
+	if typ, _ := deployProblem(t, rec.Body.Bytes()); rec.Code != http.StatusNotFound || typ != "vip_not_enabled" {
+		t.Errorf("a viewer on a swarm with no virtual IP: %d %s, want 404 vip_not_enabled", rec.Code, rec.Body)
 	}
 }
