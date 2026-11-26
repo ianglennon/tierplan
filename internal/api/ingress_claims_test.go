@@ -160,11 +160,14 @@ func TestIngressClaimsOnManualDeploy(t *testing.T) {
 		if got := claimsOf(t, f, e.ID, st.ID); !slices.Equal(got, []string{"manual.apps.example.com"}) {
 			t.Errorf("claims = %v, want the host of the deployed revision", got)
 		}
-		if n := claimAudits(t, f, "ingress.claim_replaced"); n != 1 {
-			t.Errorf("ingress.claim_replaced rows = %d, want 1", n)
+		if n := claimAudits(t, f, "ingress.claimed"); n != 1 {
+			t.Errorf("ingress.claimed rows = %d, want 1", n)
+		}
+		if n := claimAudits(t, f, "ingress.claim_replaced"); n != 0 {
+			t.Errorf("ingress.claim_replaced rows = %d, want none for a first claim", n)
 		}
 		// The row names the person by their display name as well as their ID.
-		wantNamedActor(t, f, "ingress.claim_replaced", "envadmin-1")
+		wantNamedActor(t, f, "ingress.claimed", "envadmin-1")
 		creates := f.fake.ServiceCreates()
 		if len(creates) == 0 {
 			t.Fatal("no service was created")
