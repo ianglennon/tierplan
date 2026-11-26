@@ -381,6 +381,21 @@
         "replaceToken": "Replace token…",
         "changeIssuer": "Change issuer…",
         "delete": "Delete domain…"
+      },
+      "add": {
+        "button": "Add domain",
+        "title": "Add domain",
+        "domain": "Domain",
+        "domainHelper": "A suffix such as apps.example.com. Hostnames must be below it.",
+        "issuer": "Certificates from",
+        "production": "Let's Encrypt production",
+        "staging": "Let's Encrypt staging",
+        "stagingHelper": "Staging certificates aren't trusted by browsers and TierPlan never serves them.",
+        "token": "DNS token",
+        "tokenHelper": "TierPlan tests the token before it saves the domain. It is stored sealed and never shown again.",
+        "submit": "Test and add domain",
+        "discard": "Discard domain",
+        "done": "Added {{suffix}}."
       }
     }
   }

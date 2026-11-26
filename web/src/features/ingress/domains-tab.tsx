@@ -24,7 +24,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,6 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { AddDomainDialog } from "@/features/ingress/add-domain-dialog";
 import { type Needs, useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -57,6 +64,7 @@ export function DomainsTab({ envId }: { envId: string }) {
   const query = useQuery(ingressDomainsQuery(envId));
   const status = useQuery(ingressStatusQuery(envId));
   const needs = useNeeds("ingress.manage", envId);
+  const [adding, setAdding] = useState(false);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
 
   if (query.isPending) return <Loading />;
@@ -102,82 +110,105 @@ export function DomainsTab({ envId }: { envId: string }) {
             </EmptyTitle>
             <EmptyDescription>{t("ingressPage.domains.empty.body")}</EmptyDescription>
           </EmptyHeader>
+          {needs.allowed ? (
+            <EmptyContent>
+              <Button type="button" className="max-md:h-11" onClick={() => setAdding(true)}>
+                {t("ingressPage.domains.add.button")}
+              </Button>
+            </EmptyContent>
+          ) : null}
         </Empty>
       ) : (
-        <Table aria-label={t("ingressPage.domains.label")}>
-          <TableHeader>
-            <TableRow>
-              <TableHead scope="col">{t("ingressPage.domains.columns.domain")}</TableHead>
-              <TableHead scope="col">{t("ingressPage.domains.columns.issuer")}</TableHead>
-              <TableHead scope="col">{t("ingressPage.domains.columns.provider")}</TableHead>
-              <TableHead scope="col">{t("ingressPage.domains.columns.token")}</TableHead>
-              <TableHead scope="col">{t("ingressPage.domains.columns.certificates")}</TableHead>
-              <TableHead scope="col">{t("ingressPage.domains.columns.actions")}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {domains.map((d) => {
-              const expanded = open.has(d.id);
-              const panel = `ingress-reserved-${d.id}`;
-              return (
-                <Fragment key={d.id}>
-                  <TableRow>
-                    <TableCell className="align-top whitespace-normal">
-                      <div className="flex items-start gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          className="-ms-1 shrink-0 max-md:size-11 md:h-8"
-                          aria-expanded={expanded}
-                          aria-controls={expanded ? panel : undefined}
-                          aria-label={t("ingressPage.domains.show", { suffix: d.suffix })}
-                          onClick={() => toggle(d.id)}
-                        >
-                          <ChevronDown
-                            aria-hidden="true"
-                            className={cn(
-                              "motion-safe:transition-transform",
-                              expanded ? "rotate-180" : "-rotate-90",
-                            )}
-                          />
-                        </Button>
-                        <span className="min-w-0 pt-1 font-mono text-xs break-all">{d.suffix}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="align-top text-sm whitespace-normal">
-                      <IssuerCell issuer={d.issuer} />
-                    </TableCell>
-                    <TableCell className="align-top text-sm whitespace-normal">
-                      {providerName(d.dnsProvider, t)}
-                    </TableCell>
-                    <TableCell className="align-top whitespace-normal">
-                      <TokenCell domain={d} />
-                    </TableCell>
-                    <TableCell className="align-top text-sm whitespace-normal">
-                      {d.certificates}
-                    </TableCell>
-                    <TableCell className="align-top">
-                      <DomainActions domain={d} needs={needs} />
-                    </TableCell>
-                  </TableRow>
-                  {expanded ? (
-                    <TableRow className="hover:bg-transparent">
-                      <TableCell
-                        colSpan={6}
-                        id={panel}
-                        className="bg-muted/50 p-4 whitespace-normal"
-                      >
-                        <ReservedNames envId={envId} domain={d} needs={needs} />
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <NeedsTooltip reason={needs.reason}>
+              <Button
+                type="button"
+                className="max-md:h-11 md:ms-auto"
+                onClick={() => setAdding(true)}
+              >
+                {t("ingressPage.domains.add.button")}
+              </Button>
+            </NeedsTooltip>
+          </div>
+          <Table aria-label={t("ingressPage.domains.label")}>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">{t("ingressPage.domains.columns.domain")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.domains.columns.issuer")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.domains.columns.provider")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.domains.columns.token")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.domains.columns.certificates")}</TableHead>
+                <TableHead scope="col">{t("ingressPage.domains.columns.actions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {domains.map((d) => {
+                const expanded = open.has(d.id);
+                const panel = `ingress-reserved-${d.id}`;
+                return (
+                  <Fragment key={d.id}>
+                    <TableRow>
+                      <TableCell className="align-top whitespace-normal">
+                        <div className="flex items-start gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="-ms-1 shrink-0 max-md:size-11 md:h-8"
+                            aria-expanded={expanded}
+                            aria-controls={expanded ? panel : undefined}
+                            aria-label={t("ingressPage.domains.show", { suffix: d.suffix })}
+                            onClick={() => toggle(d.id)}
+                          >
+                            <ChevronDown
+                              aria-hidden="true"
+                              className={cn(
+                                "motion-safe:transition-transform",
+                                expanded ? "rotate-180" : "-rotate-90",
+                              )}
+                            />
+                          </Button>
+                          <span className="min-w-0 pt-1 font-mono text-xs break-all">
+                            {d.suffix}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="align-top text-sm whitespace-normal">
+                        <IssuerCell issuer={d.issuer} />
+                      </TableCell>
+                      <TableCell className="align-top text-sm whitespace-normal">
+                        {providerName(d.dnsProvider, t)}
+                      </TableCell>
+                      <TableCell className="align-top whitespace-normal">
+                        <TokenCell domain={d} />
+                      </TableCell>
+                      <TableCell className="align-top text-sm whitespace-normal">
+                        {d.certificates}
+                      </TableCell>
+                      <TableCell className="align-top">
+                        <DomainActions domain={d} needs={needs} />
                       </TableCell>
                     </TableRow>
-                  ) : null}
-                </Fragment>
-              );
-            })}
-          </TableBody>
-        </Table>
+                    {expanded ? (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell
+                          colSpan={6}
+                          id={panel}
+                          className="bg-muted/50 p-4 whitespace-normal"
+                        >
+                          <ReservedNames envId={envId} domain={d} needs={needs} />
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </>
       )}
+      <AddDomainDialog envId={envId} open={adding} onOpenChange={setAdding} />
     </div>
   );
 }
