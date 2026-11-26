@@ -126,6 +126,26 @@
       },
       "addOverlay": "Add overlay file",
       "noOverlays": "No overlay files. Add one for a secret or config file that isn't in the repository."
+    },
+    "expose": {
+      "toggle": "Expose routes",
+      "title": "Expose",
+      "close": "Close Expose panel",
+      "service": {
+        "label": "Service"
+      },
+      "target": {
+        "swarm": "Routes are written to <mono>deploy.labels</mono> for this swarm stack.",
+        "standalone": "Routes are written to <mono>labels</mono> for this host stack."
+      },
+      "route": {
+        "group": "Route {{name}}"
+      },
+      "host": {
+        "label": "Hostname",
+        "helper": "The name people type to reach this service.",
+        "required": "Hostname is required."
+      }
     }
   }
 }
