@@ -162,7 +162,7 @@ describe("revoking an ingress node", () => {
     );
     fireEvent.click(within(dialog).getByRole("button", { name: "Revoke node" }));
     await screen.findByText("Revoked edge-1");
-    expect(posts[0].body).toEqual({ allowReenrol: true });
+    expect(posts[0]?.body).toEqual({ allowReenrol: true });
   });
 
   it("leaves out the hostnames paragraph when the node held none", async () => {

@@ -209,4 +209,68 @@ describe("the Ingress page's Nodes tab", () => {
     expect(await screen.findByText("Ingress is off")).toBeTruthy();
     await waitFor(() => expect(screen.queryByText("No nodes enrolled yet")).toBeNull());
   });
+  const revokedNode = () =>
+    node({
+      id: "n9",
+      name: "gone-1",
+      status: "revoked",
+      connected: false,
+      sync: "unknown",
+      revokedAt: "2026-11-21T10:00:00Z",
+      revokeReason: "decommissioned",
+    });
+
+  it("shows a revoked node's reason and the token warning to an Admin only", async () => {
+    me = makeMe({ envs: { [ENV]: "admin" } });
+    serve([revokedNode()]);
+    const admin = mount();
+    const t = await table();
+    const row = rowOf(t, "gone-1");
+    expect(within(row).getByText("decommissioned")).toBeTruthy();
+    expect(within(row).getByText("The join token it held may still be mounted.")).toBeTruthy();
+    admin.unmount();
+    client.clear();
+
+    // The server blanks the reason for a reader, and the row draws no label for it.
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    serve([{ ...revokedNode(), revokeReason: "", heldHostnames: null, revokedBy: "" }]);
+    mount();
+    const viewerRow = rowOf(await table(), "gone-1");
+    expect(within(viewerRow).queryByText("decommissioned")).toBeNull();
+    expect(within(viewerRow).queryByText(/may still be mounted/)).toBeNull();
+    expect(within(viewerRow).getAllByText("Revoked")).toHaveLength(2);
+    expect(viewerRow.textContent).not.toMatch(/Reason|Revoked by/);
+  });
+
+  it("says an incompatible node can't apply this server's settings and shows a refused bundle", async () => {
+    serve([
+      node({
+        incompatible: true,
+        sync: "incompatible",
+        rejectedBundleId: "0a1b2c3d4e5f6071",
+        rejectedReason: "schema_unsupported",
+      }),
+    ]);
+    mount();
+    const row = rowOf(await table(), "edge-1");
+    expect(within(row).getByText("Can't apply this server's settings")).toBeTruthy();
+    expect(within(row).getByText("Can't apply")).toBeTruthy();
+    expect(within(row).getByText("Refused 0a1b2c3d: schema_unsupported")).toBeTruthy();
+  });
+
+  it("draws a loading status while the nodes are read", async () => {
+    nodes = () => new Response(null, { status: 500 });
+    mount();
+    expect(screen.getByRole("status").textContent).toBe("Loading nodes");
+    await screen.findByText("Couldn't read the nodes.");
+  });
+
+  it("reads the nodes again when Retry is pressed", async () => {
+    nodes = () => Response.json({ title: "boom" }, { status: 500 });
+    mount();
+    const retry = await screen.findByRole("button", { name: "Retry reading nodes" });
+    serve([node()]);
+    retry.click();
+    expect(await table()).toBeTruthy();
+  });
 });
