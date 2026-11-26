@@ -308,6 +308,13 @@ func (v *vipRemoval) done(item string, result map[string]string) {
 // failed ends the item with vip_remove_failed and the sentence of the item, and the engine's own words when detail is set.
 func (v *vipRemoval) failed(item, detail string) {
 	v.record(item, CodeVIPRemoveFailed)
+	v.finishFailed(item, detail)
+}
+
+// finishFailed ends the item as failed without telling onFail: a failure that does not end the run, such as a wait that ran
+// out, is not audited when it happens. The job writes one audit row at most, for the item that ends it (A-01), so the run
+// records the wait's failure itself if it is the one that ends the job.
+func (v *vipRemoval) finishFailed(item, detail string) {
 	if v.r == nil {
 		return
 	}
@@ -338,7 +345,8 @@ func (v *vipRemoval) skip(from int, state, code string) {
 //
 // r reports each step as the items of the VIP switch-off; it may be nil. release frees the operation lock the caller holds
 // before the job's last item ends; it may be nil. A step that fails ends its item with vip_remove_failed and leaves the row with
-// enabled 0, which a later call finishes. A wait that ran out is not the end: the secret is still tried, and the row is kept.
+// enabled 0, which a later call finishes. A wait that ran out is not the end: the secret is still tried, and the row is kept; the job's one audit row is then the secret's
+// failure if that fails, or else the wait's.
 // An environment with no virtual IP is ErrVIPNotEnabled. The caller holds the environment's operation lock.
 func (s *Service) removeVIP(ctx context.Context, actor audit.Actor, envID string, r *jobs.Reporter, release func()) error {
 	return s.removeVIPAudited(ctx, actor, envID, r, release, nil)
@@ -420,10 +428,10 @@ func (s *Service) removeVIPAudited(ctx context.Context, actor audit.Actor, envID
 		return stop(1, err, "")
 	case err != nil:
 		waitErr = err
-		v.failed(ItemVIPWaitTasks, "The swarm's tasks could not be read, so it is not known that every node released the address.")
+		v.finishFailed(ItemVIPWaitTasks, "The swarm's tasks could not be read, so it is not known that every node released the address.")
 	case left > 0:
 		waitErr = errors.New("keepalived tasks remain")
-		v.failed(ItemVIPWaitTasks, strconv.Itoa(left)+" keepalived task(s) were still running after "+VIPDisableTaskDeadline.String()+".")
+		v.finishFailed(ItemVIPWaitTasks, strconv.Itoa(left)+" keepalived task(s) were still running after "+VIPDisableTaskDeadline.String()+".")
 	default:
 		v.done(ItemVIPWaitTasks, nil)
 	}
@@ -455,7 +463,9 @@ func (s *Service) removeVIPAudited(ctx context.Context, actor audit.Actor, envID
 	}
 	v.done(ItemVIPRemoveSecret, map[string]string{"removed": strconv.Itoa(gone)})
 	if waitErr != nil {
-		// A holder may still hold the address: the row stays, switched off, for the next try.
+		// A holder may still hold the address: the row stays, switched off, for the next try. The wait is the item that ends the
+		// job, so its failure is the job's one audit row.
+		v.record(ItemVIPWaitTasks, CodeVIPRemoveFailed)
 		v.freeLock()
 		v.skip(3, jobs.ItemSkipped, CodeNotRun)
 		return waitErr

@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/vault"
 	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/moby/moby/api/types/swarm"
 )
 
 // vipKeyHex is the stored VRRP key of the environment in hex, as the key secret carries it, for AssertNoSecrets.
@@ -189,6 +190,43 @@ func TestAuditProofVIPDisabledFailure(t *testing.T) {
 		t.Errorf("%d ingress.vip_disabled rows, want only the failure: %+v", len(rows), rows)
 	}
 	audittest.AssertNoSecrets(t, rows, switchCanary, keyHex)
+}
+
+// TestAuditProofVIPDisabledWaitRunsOut: a switch-off whose keepalived tasks never stop does not end at the wait, since the key
+// secret is still tried; whichever item then ends the job is the one it logs, so one job writes one ingress.vip_disabled failure
+// row and never one for the wait and another for the secret.
+func TestAuditProofVIPDisabledWaitRunsOut(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		secretFail bool
+		step       string
+	}{
+		{"the secret goes, so the wait ends the job", false, ingressdeploy.ItemVIPWaitTasks},
+		{"the secret fails too, so it ends the job", true, ingressdeploy.ItemVIPRemoveSecret},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newVIPDisableFix(t, vipDisableOpts{})
+			f.enabled()
+			keyHex := f.vipKeyHex()
+			cfg := f.base
+			cfg.Tasks = []swarm.Task{vipKeepalivedTask()}
+			if tc.secretFail {
+				cfg.RemoveErrors = map[string]string{ingressdeploy.KeepalivedSecretName(f.envID, 1): "boom " + switchCanary}
+			}
+			f.fake.Reconfigure(cfg)
+
+			job := f.disableVIP()
+			if job.State == jobs.JobDone {
+				t.Fatalf("the switch-off ended done: %+v", job.Items)
+			}
+			rows := audittest.Rows(t, f.st, audit.ActionIngressVIPDisabled)
+			wantFailureRow(t, rows, f.envID, audit.ActionIngressVIPDisabled, tc.step, ingressdeploy.CodeVIPRemoveFailed)
+			if len(rows) != 1 {
+				t.Errorf("%d ingress.vip_disabled rows, want only the one failure: %+v", len(rows), rows)
+			}
+			audittest.AssertNoSecrets(t, rows, switchCanary, keyHex)
+		})
+	}
 }
 
 // TestAuditProofVIPDisabled: a successful switch-off has one success row, with the address, router ID and generation, and no
