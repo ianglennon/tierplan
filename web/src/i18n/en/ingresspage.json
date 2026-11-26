@@ -8,7 +8,8 @@
       "label": "Ingress sections",
       "routes": "Routes",
       "certificates": "Certificates",
-      "nodes": "Nodes"
+      "nodes": "Nodes",
+      "domains": "Domains"
     },
     "routes": {
       "label": "Routes",
@@ -335,6 +336,47 @@
           "disabled": "The virtual IP was turned off.",
           "unknown": "TierPlan couldn't tell why."
         }
+      }
+    },
+    "domains": {
+      "label": "Domains",
+      "loading": "Loading domains",
+      "error": "Couldn't read the domains.",
+      "retry": "Retry reading domains",
+      "offLine": "Domains can be registered before ingress is on.",
+      "columns": {
+        "domain": "Domain",
+        "issuer": "Issuer",
+        "provider": "DNS provider",
+        "token": "Token",
+        "certificates": "Certificates",
+        "actions": "Actions"
+      },
+      "issuer": {
+        "production": "Production",
+        "staging": "Staging"
+      },
+      "provider": {
+        "cloudflare": "Cloudflare"
+      },
+      "token": {
+        "saved": "Saved",
+        "none": "No token saved"
+      },
+      "show": "Show reserved names for {{suffix}}",
+      "reserved": {
+        "title": "Reserved names",
+        "none": "Nothing is reserved."
+      },
+      "empty": {
+        "title": "No domains yet",
+        "body": "Register a domain to let stacks in this environment serve hostnames under it. TierPlan needs a DNS token to prove it owns the name."
+      },
+      "menu": {
+        "actionsFor": "Actions for {{suffix}}",
+        "replaceToken": "Replace token…",
+        "changeIssuer": "Change issuer…",
+        "delete": "Delete domain…"
       }
     }
   }

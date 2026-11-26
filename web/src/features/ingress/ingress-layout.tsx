@@ -11,14 +11,18 @@ import { useT } from "@/i18n/use-t";
 export interface IngressTab {
   id: string;
   // The route the tab links to: the page's own address for Routes, a child of it for every other tab.
-  to: "/env/$envId/ingress" | "/env/$envId/ingress/certificates" | "/env/$envId/ingress/nodes";
+  to:
+    | "/env/$envId/ingress"
+    | "/env/$envId/ingress/certificates"
+    | "/env/$envId/ingress/nodes"
+    | "/env/$envId/ingress/domains";
   // The i18n key of the tab's label.
   labelKey: string;
   // True when only the tab's own path is the tab, as for Routes, whose path starts every other tab's.
   exact: boolean;
 }
 
-// The tabs of the Ingress page in the UI-SPEC D-02 order. Later plans append Domains and Settings here, each a
+// The tabs of the Ingress page in the UI-SPEC D-02 order. Later plans append Settings here, each a
 // child route of the page.
 export const INGRESS_TABS = [
   {
@@ -37,6 +41,12 @@ export const INGRESS_TABS = [
     id: "nodes",
     to: "/env/$envId/ingress/nodes",
     labelKey: "ingressPage.tabs.nodes",
+    exact: false,
+  },
+  {
+    id: "domains",
+    to: "/env/$envId/ingress/domains",
+    labelKey: "ingressPage.tabs.domains",
     exact: false,
   },
 ] as const satisfies readonly IngressTab[];

@@ -140,16 +140,20 @@ describe("the Ingress page frame", () => {
     await waitFor(() => expect(document.title).toContain("Ingress"));
   });
 
-  it("lists Certificates second and Nodes third in the tab bar and marks Certificates active on its own route", async () => {
+  it("lists Certificates second, Nodes third and Domains fourth in the tab bar and marks Certificates active on its own route", async () => {
     renderAt(`${PAGE}/certificates`);
     const certificates = await screen.findByRole("tab", { name: "Certificates" });
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Routes",
       "Certificates",
       "Nodes",
+      "Domains",
     ]);
     expect(certificates.getAttribute("href")).toBe(`${PAGE}/certificates`);
     expect(screen.getByRole("tab", { name: "Nodes" }).getAttribute("href")).toBe(`${PAGE}/nodes`);
+    expect(screen.getByRole("tab", { name: "Domains" }).getAttribute("href")).toBe(
+      `${PAGE}/domains`,
+    );
     await waitFor(() => expect(certificates.getAttribute("data-active")).toBeTruthy());
     expect(screen.getByRole("tab", { name: "Routes" }).getAttribute("data-active")).toBeNull();
   });
