@@ -4,9 +4,14 @@
 package audit_test
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/audit/audittest"
 )
 
 // ingressRow is one line of the ingress audit table (Phase 27, D-23, A-01): an ingress.* action, the verb of success
@@ -290,6 +295,90 @@ func TestIngressActionTable(t *testing.T) {
 				t.Errorf("%s has two rows", r.Action)
 			}
 			seen[r.Action] = true
+		}
+	})
+
+	// Success criterion 5 names these verbs; each one has at least one action.
+	t.Run("verbs", func(t *testing.T) {
+		for _, verb := range []string{"claim", "release", "issuance", "renewal", "upload", "enrolment", "revocation", "switch", "vip_move"} {
+			if !slices.ContainsFunc(ingressActions, func(r ingressRow) bool { return r.Verb == verb }) {
+				t.Errorf("no row for the verb %q", verb)
+			}
+		}
+	})
+
+	// A failed attempt is told by a failure proof, by the action it is the failure of, or by the reason it writes no row.
+	t.Run("classes", func(t *testing.T) {
+		actions := map[string]bool{}
+		for _, r := range ingressActions {
+			actions[r.Action] = true
+		}
+		for _, r := range ingressActions {
+			if r.Actor == "" || r.Verb == "" || len(r.Proofs) == 0 {
+				t.Errorf("%s: a row names its verb, its actor and at least one proof", r.Action)
+			}
+			switch r.Class {
+			case "F", "P":
+				if r.Failure == "" && len(r.FailureOf) == 0 {
+					t.Errorf("%s (class %s): names neither a failure proof nor the action it is the failure of", r.Action, r.Class)
+				}
+				for _, of := range r.FailureOf {
+					if !actions[of] {
+						t.Errorf("%s: is the failure of %q, which has no row", r.Action, of)
+					}
+				}
+				if r.Reason != "" {
+					t.Errorf("%s (class %s): a reason for writing no row belongs to class A", r.Action, r.Class)
+				}
+			case "A":
+				if strings.TrimSpace(r.Reason) == "" {
+					t.Errorf("%s (class A): names no reason a failed attempt writes no row", r.Action)
+				}
+				if r.Failure != "" || len(r.FailureOf) > 0 {
+					t.Errorf("%s (class A): an atomic action has no failure row", r.Action)
+				}
+			default:
+				t.Errorf("%s: class %q is not F, P or A", r.Action, r.Class)
+			}
+		}
+	})
+
+	// Every key of every row, success and failure, is recorded through a real Writer: a key holding a secret word is
+	// refused by it, so a row that names one fails here.
+	t.Run("detail_keys", func(t *testing.T) {
+		f := newFixture(t)
+		recorded := 0
+		for _, r := range ingressActions {
+			sets := [][]string{r.DetailKeys}
+			if r.FailureKeys != nil {
+				sets = append(sets, r.FailureKeys)
+			}
+			for _, keys := range sets {
+				details := make(map[string]string, len(keys))
+				for _, k := range keys {
+					lower := strings.ToLower(k)
+					for _, w := range audittest.SecretWords() {
+						if strings.Contains(lower, w) {
+							t.Errorf("%s: detail key %q contains the secret word %q", r.Action, k, w)
+						}
+					}
+					details[k] = "x"
+				}
+				e := ent(r.Action)
+				e.Details = details
+				if err := f.w.Record(context.Background(), e); err != nil {
+					if errors.Is(err, audit.ErrSecretField) {
+						t.Errorf("%s: a documented detail key trips the secret-word filter: %v", r.Action, err)
+					} else {
+						t.Errorf("%s: Record: %v", r.Action, err)
+					}
+					continue
+				}
+				recorded++
+			}
+		}
+		if got := f.verify(t); got.Broken != nil || got.Entries != recorded {
+			t.Fatalf("verify = %+v, want %d entries and an intact chain", got, recorded)
 		}
 	})
 }
