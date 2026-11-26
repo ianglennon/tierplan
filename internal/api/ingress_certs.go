@@ -26,8 +26,8 @@ import (
 
 // The per-hostname certificate routes (Phase 20, CRT-03, CRT-05, CRT-06): an Admin lists the certificates of an
 // environment, asks for one ahead of any claim, asks for another attempt now, and reads the weekly budget the
-// queue waits on. Every route needs ingress.manage on the environment (its Admin), no route ever returns a private
-// key or a sealed value, and every answer is no-store.
+// queue waits on. The list and the budget need ingress.read on the environment (Viewer); the request and the retry need
+// ingress.manage (its Admin). No route ever returns a private key or a sealed value, and every answer is no-store.
 
 const (
 	problemIngressCertNotFound = "ingress_cert_not_found"
@@ -229,8 +229,8 @@ func ingressCertBlocked(e *ingresscert.BlockedError, now time.Time) error {
 }
 
 // RegisterIngressCerts registers the per-hostname certificate routes: list, request ahead, retry now and the budget.
-// Every one needs ingress.manage on the environment (its Admin) and every certificate id is looked up inside that
-// environment, so an id of another environment is a 404, exactly like one that does not exist. The routes are always
+// The list and the budget need ingress.read on the environment (Viewer), the request and the retry ingress.manage (its
+// Admin), and every certificate id is looked up inside that environment, so an id of another environment is a 404, exactly like one that does not exist. The routes are always
 // registered; without a manager they answer 503 ingress_unavailable.
 func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 	if d.Log == nil {
@@ -266,9 +266,9 @@ func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 		Description: "Every per-hostname certificate of the environment, live and retired, by hostname: its issuer (staging flagged), source, state and the state in words, whether it is ready to serve, " +
 			"when it was issued and expires, when it renews next and on what basis, its last failure (class, a fixed hint, the capped detail and the time), the failures in a row, when the next attempt is, " +
 			"how long the certificate authority asked TierPlan to wait, why a queued certificate waits (a code, one sentence, the figures and the next slot), who asked for it and when, since when nothing " +
-			"refers to it, and why a retired one was retired. No private key and no sealed value is ever returned. Needs ingress.manage on the environment (its Admin).",
+			"refers to it, and why a retired one was retired. No private key and no sealed value is ever returned. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *ListIngressCertsInput) (*IngressCertsOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *ListIngressCertsInput) (*IngressCertsOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}
@@ -378,9 +378,9 @@ func RegisterIngressCerts(r *httpx.Router, d IngressCertDeps) {
 		Summary:     "Read the weekly new-certificate budget",
 		Description: "One row per registered domain and issuer the environment's domains use: the new certificates used in the last 7 days (orders in flight and TierPlan's own certificate included), where " +
 			"TierPlan stops (cap), the certificate authority's own limit, the headroom, when the next slot opens, the environment's own domains under it, and whether the budget is shared with another " +
-			"domain or TierPlan's own address, which is never named. The counts are install-wide. Needs ingress.manage on the environment (its Admin).",
+			"domain or TierPlan's own address, which is never named. The counts are install-wide. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressCertBudgetInput) (*IngressCertBudgetOutput, error) {
+	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *IngressCertBudgetInput) (*IngressCertBudgetOutput, error) {
 		if httpx.PrincipalFrom(ctx) == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
 		}

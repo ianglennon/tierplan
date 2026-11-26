@@ -390,8 +390,9 @@ func TestIngressCertRequestAheadRefusals(t *testing.T) {
 	}
 }
 
-// T-20-34, D-33: every route needs ingress.manage on the environment, so an Operator gets 403 on all four, the Admin of
-// another environment gets 403 on this one's, and every answer is no-store.
+// T-20-34, D-33, D-14: the request and the retry need ingress.manage on the environment, so an Operator gets 403 on them;
+// the list and the budget need ingress.read, so an Operator reads them; the Admin of another environment cannot see this
+// one at all, and every answer is no-store.
 func TestIngressCertRoutesNeedTheAdminOfTheEnvironment(t *testing.T) {
 	t.Parallel()
 	f := newIngressFix(t)
@@ -400,17 +401,24 @@ func TestIngressCertRoutesNeedTheAdminOfTheEnvironment(t *testing.T) {
 	routes := []struct {
 		name, method, path, body string
 		ok                       int
+		read                     bool
 	}{
-		{"list", http.MethodGet, certsPath(f.envA), "", http.StatusOK},
-		{"request", http.MethodPost, certsPath(f.envA), certRequestBody("api.apps.example.com"), http.StatusCreated},
-		{"retry", http.MethodPost, certsPath(f.envA, "/", c.ID, "/retry"), "", http.StatusAccepted},
-		{"budget", http.MethodGet, certsPath(f.envA, "/budget"), "", http.StatusOK},
+		{"list", http.MethodGet, certsPath(f.envA), "", http.StatusOK, true},
+		{"request", http.MethodPost, certsPath(f.envA), certRequestBody("api.apps.example.com"), http.StatusCreated, false},
+		{"retry", http.MethodPost, certsPath(f.envA, "/", c.ID, "/retry"), "", http.StatusAccepted, false},
+		{"budget", http.MethodGet, certsPath(f.envA, "/budget"), "", http.StatusOK, true},
 	}
 	for _, r := range routes {
 		for who, u := range map[string]credentialUser{"an Operator of A": f.operatorA, "the Admin of B": f.adminB} {
 			rec := f.credCall(t, u, r.method, r.path, r.body)
-			// The Operator sees the environment and is refused (403); the Admin of B cannot see it at all (404).
-			if rec.Code != http.StatusForbidden && (who == "an Operator of A" || rec.Code != http.StatusNotFound) {
+			// The Operator sees the environment: the two reads (ingress.read) answer, the writes are refused (403); the
+			// Admin of B cannot see it at all (404).
+			switch {
+			case who == "an Operator of A" && r.read:
+				if rec.Code != http.StatusOK {
+					t.Errorf("%s as %s: %d %s, want 200 (a read on ingress.read)", r.name, who, rec.Code, rec.Body)
+				}
+			case rec.Code != http.StatusForbidden && (who == "an Operator of A" || rec.Code != http.StatusNotFound):
 				t.Errorf("%s as %s: %d %s, want 403 (404 for an environment the caller cannot see)", r.name, who, rec.Code, rec.Body)
 			}
 		}
@@ -424,5 +432,41 @@ func TestIngressCertRoutesNeedTheAdminOfTheEnvironment(t *testing.T) {
 	}
 	if rows := f.ingressAudit(t, audit.ActionIngressCertRequested); len(rows) != 2 {
 		t.Errorf("request audit rows = %d, want 2: refused callers write none", len(rows))
+	}
+}
+
+// D-14 tracer: the certificate list and the weekly budget are readable from Viewer up; the Admin of another environment
+// still cannot see this one, and an anonymous caller is 401.
+func TestIngressCertificatesReadableByViewers(t *testing.T) {
+	t.Parallel()
+	f := newIngressFix(t)
+	f.register(t, f.adminA, f.envA, "apps.example.com")
+	f.requestCert(t, f.adminA, f.envA, "web.apps.example.com")
+	viewer := f.asRoleOn(t, "ing-viewer-a", f.envA, "viewer")
+
+	for _, path := range []string{certsPath(f.envA), certsPath(f.envA, "/budget")} {
+		for who, u := range map[string]credentialUser{"a Viewer of A": viewer, "an Operator of A": f.operatorA} {
+			rec := f.credCall(t, u, http.MethodGet, path, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s as %s: %d %s, want 200", path, who, rec.Code, rec.Body)
+			}
+			if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+				t.Errorf("GET %s as %s: Cache-Control = %q, want no-store", path, who, cc)
+			}
+			var l struct {
+				Items []json.RawMessage `json:"items"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &l); err != nil || len(l.Items) != 1 {
+				t.Errorf("GET %s as %s: items = %d (%v), want 1: %s", path, who, len(l.Items), err, rec.Body)
+			}
+		}
+		if rec := f.credCall(t, f.adminB, http.MethodGet, path, ""); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s as the Admin of B: %d %s, want 404 (an environment the caller cannot see)", path, rec.Code, rec.Body)
+		}
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("GET %s anonymous: %d %s, want 401", path, rec.Code, rec.Body)
+		}
 	}
 }
