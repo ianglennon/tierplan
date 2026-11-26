@@ -21,6 +21,7 @@ import {
   Server,
   Settings,
   SquareStack,
+  Waypoints,
   X,
 } from "lucide-react";
 import { useEffect } from "react";
@@ -72,7 +73,11 @@ const RESOURCE_ITEMS = [
   { key: "networks", perm: "networks.read", to: "/env/$envId/networks", icon: Network },
   // Address space (Phase 10, D-01): below Networks, on swarm and standalone environments alike.
   { key: "addressSpace", perm: "networks.read", to: "/env/$envId/address-space", icon: Gauge },
-  // Janitor (Phase 11, D-13): directly below Address space and above Events, on swarm and standalone
+  // Ingress (Phase 27, D-01, D-14, D-17): directly after Address space, on swarm and standalone environments
+  // alike, for a user who may read it. The page and the server check ingress.read too; hiding it here only
+  // spares a user a 403.
+  { key: "ingress", perm: "ingress.read", to: "/env/$envId/ingress", icon: Waypoints },
+  // Janitor (Phase 11, D-13): directly below Ingress and above Events, on swarm and standalone
   // environments alike. The page reads and previews with environments.read; the buttons that act
   // are disabled with a reason for a user below Env Admin, and the server enforces them.
   { key: "janitor", perm: "environments.read", to: "/env/$envId/janitor", icon: BrushCleaning },
