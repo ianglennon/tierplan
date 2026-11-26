@@ -54,14 +54,14 @@ type ingressRoutesAnswer struct {
 
 // swarmRoutesRig is a swarm environment whose engine holds the ingress network and the given services, with one swarm
 // stack named shop that claims host to its service web, and ingress switched on.
-func swarmRoutesRig(t *testing.T, host string, services ...dockertest.FakeService) (*envFix, envBody, *roleCaller, *routeSourcesFake, string) {
+func swarmRoutesRig(t *testing.T, host string, services ...dockertest.FakeService) (*envFix, envBody, *roleCaller, *routeSourcesFake, ingressWorldSeed) {
 	t.Helper()
 	src := &routeSourcesFake{}
 	f, e := stackEnvCfg(t, func(c *dockertest.FakeConfig) {
 		c.Networks = append(c.Networks, dockertest.FakeNetwork{ID: "ing-net", Name: ingress.NetworkName, Driver: "overlay", Scope: "swarm"})
 		c.ServiceRows = append(c.ServiceRows, services...)
 	}, func(f *envFix) { f.stackIngressRoutes = src })
-	seedIngressWorld(t, f, e)
+	seed := seedIngressWorld(t, f, e)
 	if _, err := f.st.Write.Exec(
 		`INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES (?, ?, ?, 'swarm', 'tester', 1)`,
 		"stack-shop", e.ID, "shop"); err != nil {
@@ -74,7 +74,7 @@ func swarmRoutesRig(t *testing.T, host string, services ...dockertest.FakeServic
 	if _, err := f.stackDeps.Ingress.SetEnabled(context.Background(), e.ID, true, "admin", nil); err != nil {
 		t.Fatal(err)
 	}
-	return f, e, f.caller(t, e, "viewer-1", "viewer"), src, "stack-shop"
+	return f, e, f.caller(t, e, "viewer-1", "viewer"), src, seed
 }
 
 func shopService(running uint64, networks ...string) dockertest.FakeService {
