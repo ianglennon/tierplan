@@ -345,6 +345,7 @@ func (s *Service) runEnable(ctx context.Context, r *jobs.Reporter, release func(
 		if ctx.Err() != nil {
 			run.stop(steps[i].item, jobs.ItemCancelled, jobs.CodeCancelled, "")
 			run.skipFrom(i+1, jobs.ItemCancelled, jobs.CodeCancelled)
+			s.auditJobFailed(ctx, actor, audit.ActionIngressEnabled, envID, steps[i].item, jobs.CodeCancelled)
 			return
 		}
 		r.Update(st.item, func(it *jobs.Item) { it.State = jobs.ItemRunning })
@@ -359,6 +360,7 @@ func (s *Service) runEnable(ctx context.Context, r *jobs.Reporter, release func(
 			r.Output("Ingress is still off. Switch it on again to carry on from what was made, or switch it off to remove it.")
 			run.stop(st.item, jobs.ItemFailed, code, detail)
 			run.skipFrom(i+1, jobs.ItemSkipped, CodeNotRun)
+			s.auditJobFailed(ctx, actor, audit.ActionIngressEnabled, envID, st.item, code)
 			return
 		}
 	}
