@@ -160,7 +160,10 @@ describe("turning ingress on", () => {
         release = resolve;
       });
     const dialog = await open("Turn on ingress", "Turn on ingress?");
-    expect(screen.getByText("Off")).toBeTruthy();
+    // The Settings tab has a status line on every card, so the Ingress card's own is read in its own section (the
+    // open dialog hides the page from the accessibility tree, so it is found by its heading).
+    const card = screen.getByText("Ingress", { selector: "h3" }).closest("section") as HTMLElement;
+    expect(within(card).getByText("Off")).toBeTruthy();
     // The preview has not answered: the dialog says so and the confirm waits.
     expect(within(dialog).getByText("Checking…")).toBeTruthy();
     expect(confirmOf(dialog, "Turn on ingress").disabled).toBe(true);

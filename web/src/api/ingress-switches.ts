@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { queryOptions, useMutation } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
-import { IngressActionError, IngressLoadError } from "@/api/ingress";
+import { IngressActionError, IngressLoadError, ingressKey } from "@/api/ingress";
 import { readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 
 export type IngressJob = components["schemas"]["IngressJobBody"];
 export type IngressFinding = components["schemas"]["IngressFindingBody"];
 export type IngressRedeploy = components["schemas"]["IngressRedeployBody"];
+export type IngressJoinTokenStatus = components["schemas"]["IngressJoinTokenStatusBody"];
 export type IngressVIPPreviewManager = components["schemas"]["IngressVIPPreviewManagerBody"];
 
 // How often a running job is read (UI-SPEC S6, D-24): no stream, a read every 2 seconds.
@@ -245,5 +246,79 @@ export function ingressJobQuery(envId: string, jobId: string) {
       }
       return INGRESS_JOB_REFETCH_MS;
     },
+  });
+}
+
+// useSetAccessLogs switches the proxy's access log on or off at once (U-10): the API has no preview for it, so it is
+// the one switch that commits as it is moved. The page reads the status again when it has been stored. A refusal throws
+// IngressActionError with the server's own sentence, for the caller to show.
+export function useSetAccessLogs(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (enabled: boolean): Promise<void> => {
+      const { data, error, response } = await api.PUT("/api/env/{envId}/ingress/access-logs", {
+        params: { path: { envId } },
+        body: { enabled },
+      });
+      if (!data) throw refused(error, response);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ingressKey(envId) }),
+  });
+}
+
+// ingressJoinTokenQuery reads which join token the environment's ingress proxies enrol with: whether there is one,
+// when it was made, whether it is disabled, and who made it, which the server leaves blank for anyone without
+// ingress.manage (A-04). Never the token, which the server keeps only as a hash. A failed read is not retried: the card
+// has its own Retry and a 403 must answer at once.
+export function ingressJoinTokenQuery(envId: string) {
+  return queryOptions({
+    queryKey: [...ingressKey(envId), "join-token"] as const,
+    queryFn: async (): Promise<IngressJoinTokenStatus> => {
+      const res = await api.GET("/api/env/{envId}/ingress/join-token", {
+        params: { path: { envId } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new IngressLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: false,
+  });
+}
+
+// useIssueIngressJoinToken makes the environment's ingress join token, or rotates it: the old one stops enrolling nodes
+// at once. The answer carries the clear token once and the server cannot show it again, so the mutation is dropped as
+// soon as nobody watches it (gcTime 0) and the caller resets it when the dialog that shows the token closes.
+export function useIssueIngressJoinToken(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<{ token: string; rotated: boolean }> => {
+      const { data, error, response } = await api.POST("/api/env/{envId}/ingress/join-token", {
+        params: { path: { envId } },
+      });
+      if (!data) throw refused(error, response);
+      return { token: data.token, rotated: data.rotated };
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ingressJoinTokenQuery(envId).queryKey }),
+  });
+}
+
+// useDisableIngressJoinToken stops the join token enrolling any further node. Nodes already enrolled keep working.
+export function useDisableIngressJoinToken(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<void> => {
+      const { error, response } = await api.DELETE("/api/env/{envId}/ingress/join-token", {
+        params: { path: { envId } },
+      });
+      if (!response.ok) throw refused(error, response);
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ingressJoinTokenQuery(envId).queryKey }),
   });
 }

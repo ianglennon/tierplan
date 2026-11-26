@@ -39,8 +39,8 @@ const SHOWN = 10;
 
 // The swarm service that runs the proxy, and the container of the standalone host's proxy: its compose project
 // tierplan-ingress, service proxy, first replica (internal/ingress/objects.go, disable_standalone.go).
-const PROXY_SERVICE = "tierplan-ingress";
-const PROXY_CONTAINER = "tierplan-ingress-proxy-1";
+export const PROXY_SERVICE = "tierplan-ingress";
+export const PROXY_CONTAINER = "tierplan-ingress-proxy-1";
 
 // routeText is the hostname and the path joined, as a person types it; a route for the whole host is the hostname
 // alone.

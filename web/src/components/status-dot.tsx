@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import type { ReactNode } from "react";
+
 import type { EnvironmentStatus, HealthState } from "@/api/environments";
 import { useT } from "@/i18n/use-t";
 import { formatClock } from "@/lib/format";
@@ -39,8 +41,8 @@ interface StatusDotProps {
   state: HealthState;
   // The visible text. When it is left out (a compact place such as the
   // switcher trigger) the dot itself carries the state as its accessible name,
-  // so the state is never colour alone.
-  label?: string;
+  // so the state is never colour alone. It may hold markup, such as a time.
+  label?: ReactNode;
   className?: string;
 }
 

@@ -472,6 +472,49 @@
           "routerId": "Router ID",
           "routerIdHelper": "Leave empty and TierPlan chooses one. Change it if another router on the network uses the same ID."
         }
+      },
+      "accessLog": {
+        "title": "Proxy access log",
+        "on": "On",
+        "off": "Off",
+        "switch": "Write the proxy's access log",
+        "helper": "Records each request, including the client's address and the path asked for. Read it in the proxy's logs.",
+        "toastOn": "Access log on.",
+        "toastOff": "Access log off."
+      },
+      "joinToken": {
+        "title": "Join token",
+        "active": "Active, made <time/>",
+        "activeBy": "Active, made <time/> by {{user}}",
+        "disabled": "Disabled",
+        "none": "No token has been made yet",
+        "error": "Couldn't read the join token.",
+        "retry": "Retry reading the join token",
+        "label": "the join token",
+        "once": "Copy it now. It isn't shown again.",
+        "rotate": {
+          "button": "Rotate token",
+          "title": "Rotate the join token?",
+          "body": "Nodes that are enrolled keep working. A node that enrols later needs the new token. The old one stops working at once.",
+          "confirm": "Rotate token",
+          "dismiss": "Keep current token",
+          "doneTitle": "The join token is rotated"
+        },
+        "disable": {
+          "button": "Disable token",
+          "title": "Disable the join token?",
+          "body": "No further node can enrol until you make a new one. Enrolled nodes keep working.",
+          "confirm": "Disable token",
+          "dismiss": "Keep token active"
+        },
+        "make": {
+          "button": "Make a new token",
+          "title": "Make a new join token?",
+          "body": "A node that enrols later needs this token. Enrolled nodes keep working.",
+          "confirm": "Make a new token",
+          "dismiss": "Keep token disabled",
+          "doneTitle": "The join token is made"
+        }
       }
     },
     "review": {
