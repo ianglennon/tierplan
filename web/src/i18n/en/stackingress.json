@@ -87,6 +87,9 @@
         "ingress_off": {
           "label": "Ingress is off",
           "detail": "It serves once ingress is switched on and the stack is redeployed."
+        },
+        "unknown": {
+          "label": "Unknown"
         }
       },
       "stopped": "This stack is stopped. Its hostnames stay reserved for it.",
