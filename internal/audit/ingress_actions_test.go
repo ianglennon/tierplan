@@ -419,7 +419,7 @@ func checkProofs(t *testing.T, root string, wanted map[string][]string) []string
 		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		src, err := os.ReadFile(path)
+		src, err := os.ReadFile(path) //nolint:gosec // G304: a _test.go file found by WalkDir under the repository
 		if err != nil {
 			return err
 		}
