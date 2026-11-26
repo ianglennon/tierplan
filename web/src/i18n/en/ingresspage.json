@@ -91,7 +91,8 @@
     "off": {
       "title": "Ingress is off",
       "body": "Ingress serves your stacks' hostnames over HTTPS, with a certificate for each name. It is off for this environment, so no route is served.",
-      "reader": "Ask an Admin to turn it on."
+      "reader": "Ask an Admin to turn it on.",
+      "turnOn": "Turn on ingress"
     },
     "alerts": {
       "unreachable": "TierPlan can't reach this environment just now. What you see may be out of date.",
@@ -262,6 +263,7 @@
         "confirm": "Revoke node",
         "pending": "Revoking…",
         "doneTitle": "Revoked {{name}}",
+        "joinToken": "Go to the join token",
         "doneBody": "Rotate the join token. It is still mounted in that node's container.",
         "held": "This node may still hold the keys for: <names/>. Request new certificates for them.",
         "close": "Close details"
@@ -272,6 +274,7 @@
         "error": "Couldn't read the virtual IP.",
         "retry": "Retry reading the virtual IP",
         "off": "The virtual IP is off. Turn it on in Settings.",
+        "offLinked": "The virtual IP is off. Turn it on in <settings>Settings</settings>.",
         "holder": {
           "one": "Held by {{node}}",
           "none": "No node holds the address",

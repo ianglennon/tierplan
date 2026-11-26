@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
+import { Link } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { Trans } from "react-i18next";
 
@@ -105,6 +106,13 @@ export function RevokeNodeDialog({
                 <AlertDescription>{t("ingressPage.nodes.revoke.doneBody")}</AlertDescription>
               </AlertDialogDescription>
             </Alert>
+            <div>
+              <Button asChild type="button" variant="outline" className={TOUCH_HEIGHT}>
+                <Link to="/env/$envId/ingress/settings" params={{ envId }} hash="join-token">
+                  {t("ingressPage.nodes.revoke.joinToken")}
+                </Link>
+              </Button>
+            </div>
             {held.length > 0 ? (
               <p className="text-xs break-words">
                 <Trans

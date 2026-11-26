@@ -160,7 +160,25 @@ export function NodesTab({ envId }: { envId: string }) {
   return (
     <div className="flex flex-col gap-4">
       {swarm && vipQuery.isSuccess && vip === null ? (
-        <p className="text-sm text-muted-foreground">{t("ingressPage.nodes.vip.off")}</p>
+        <p className="text-sm text-muted-foreground">
+          {manage ? (
+            <Trans
+              i18nKey="ingressPage.nodes.vip.offLinked"
+              ns="ingressPage"
+              components={{
+                settings: (
+                  <Link
+                    to="/env/$envId/ingress/settings"
+                    params={{ envId }}
+                    className="rounded-sm text-accent-ink hover:underline"
+                  />
+                ),
+              }}
+            />
+          ) : (
+            t("ingressPage.nodes.vip.off")
+          )}
+        </p>
       ) : null}
       {vip ? <VIPStatusCard vip={vip} /> : null}
       <Table aria-label={t("ingressPage.nodes.label")}>
