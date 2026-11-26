@@ -34,6 +34,13 @@ let job: Json;
 let me: ReturnType<typeof makeMe>;
 let client: QueryClient;
 
+function problem(status: number, type: string, detail: string): Response {
+  return Response.json(
+    { title: "Problem", status, type, detail },
+    { status, headers: { "Content-Type": "application/problem+json" } },
+  );
+}
+
 function statusBody(over: Json = {}): Json {
   return {
     enabled: false,
@@ -287,5 +294,158 @@ describe("turning ingress on", () => {
     fireEvent.click(confirm);
     await advance(50);
     expect(writes).toHaveLength(0);
+  });
+
+  it("shows the sentence of a refused preview in the dialog, naming who holds the environment, and no toast", async () => {
+    const sentence = "ana is deploying a stack to this environment.";
+    previewAnswer = () => problem(409, "operation_locked", sentence);
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    await waitUnderFakeClock(() => expect(within(dialog).getByText(sentence)).toBeTruthy());
+    expect(confirmOf(dialog, "Turn on ingress").disabled).toBe(true);
+    expect(screen.getAllByText(sentence)).toHaveLength(1);
+  });
+
+  it("shows the server's sentence when the confirm finds the environment locked, with no toast", async () => {
+    const sentence = "ana is deploying a stack to this environment.";
+    startAnswer = () => problem(409, "operation_locked", sentence);
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    await waitUnderFakeClock(() =>
+      expect(confirmOf(dialog, "Turn on ingress").disabled).toBe(false),
+    );
+    fireEvent.click(confirmOf(dialog, "Turn on ingress"));
+    await waitUnderFakeClock(() => expect(within(dialog).getByText(sentence)).toBeTruthy());
+    expect(screen.getAllByText(sentence)).toHaveLength(1);
+    // Still on the preview: nothing was started, so there is no job to read.
+    expect(screen.getByRole("dialog", { name: "Turn on ingress?" })).toBeTruthy();
+    expect(jobReads).toBe(0);
+  });
+
+  it("names 10 stacks to redeploy and counts the rest", async () => {
+    previewAnswer = () =>
+      Response.json(
+        enablePreview({
+          redeploy: Array.from({ length: 12 }, (_, i) => ({
+            stackId: `s${i}`,
+            stackName: `stack-${i}`,
+            holdsClaims: true,
+          })),
+        }),
+      );
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    await waitUnderFakeClock(() => expect(within(dialog).getByText("stack-0")).toBeTruthy());
+    expect(within(dialog).getByText("stack-9")).toBeTruthy();
+    expect(within(dialog).queryByText("stack-10")).toBeNull();
+    expect(within(dialog).getByText("and 2 more")).toBeTruthy();
+  });
+
+  it("says so, in the job's own sentence, when the job failed, and offers Close", async () => {
+    job = jobBody({
+      state: "failed",
+      finishedAt: "2026-11-26T10:00:05Z",
+      items: [
+        step("token", "Make the join token", "done"),
+        step("network", "Make the network", "failed", {
+          message: "The network could not be made: no free address block.",
+        }),
+      ],
+    });
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    await waitUnderFakeClock(() =>
+      expect(confirmOf(dialog, "Turn on ingress").disabled).toBe(false),
+    );
+    fireEvent.click(confirmOf(dialog, "Turn on ingress"));
+    await waitUnderFakeClock(() =>
+      expect(
+        screen.getByText("The network could not be made: no free address block."),
+      ).toBeTruthy(),
+    );
+    expect(
+      screen.getByText(
+        "Nothing is lost. Turn it on again to carry on, or off to remove what was made.",
+      ),
+    ).toBeTruthy();
+    const close = screen.getByRole("button", { name: "Close" }) as HTMLButtonElement;
+    expect(close.disabled).toBe(false);
+    fireEvent.click(close);
+    await waitUnderFakeClock(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+});
+
+describe("turning ingress off", () => {
+  beforeEach(() => {
+    status = statusBody({ enabled: true });
+    previewAnswer = () => Response.json({ findings: [], removes: {}, unreachable: ["node-3"] });
+    job = jobBody({ kind: "ingress_disable" });
+  });
+
+  it("previews first, confirms with the destructive button and starts one job", async () => {
+    const dialog = await open("Turn off ingress", "Turn off ingress?");
+    expect(
+      within(dialog).getByText(
+        "Routes stop being served on this environment. Stacks and their labels are not changed.",
+      ),
+    ).toBeTruthy();
+    expect(requests).toContain(`POST ${BASE}/disable/preview`);
+    expect(requests).not.toContain(`POST ${BASE}/enable/preview`);
+    await waitUnderFakeClock(() => expect(within(dialog).getByText(/node-3/)).toBeTruthy());
+    expect(writes).toHaveLength(0);
+    const confirm = confirmOf(dialog, "Turn off ingress");
+    expect(confirm.className).toContain("destructive");
+    fireEvent.click(confirm);
+    await waitUnderFakeClock(() =>
+      expect(screen.getByRole("dialog", { name: "Turning ingress off…" })).toBeTruthy(),
+    );
+    expect(writes).toEqual([{ method: "POST", path: `${BASE}/disable` }]);
+
+    job = jobBody({ kind: "ingress_disable", state: "done", finishedAt: "2026-11-26T10:00:05Z" });
+    await advance(2000);
+    await waitUnderFakeClock(() => expect(screen.getByText("Ingress is off.")).toBeTruthy());
+  });
+
+  it("sends nothing when the person keeps ingress on", async () => {
+    const dialog = await open("Turn off ingress", "Turn off ingress?");
+    await waitUnderFakeClock(() => expect(within(dialog).getByText(/node-3/)).toBeTruthy());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep ingress on" }));
+    await waitUnderFakeClock(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(writes).toHaveLength(0);
+    expect(jobReads).toBe(0);
+  });
+
+  it("refuses the switch-off while routes are live", async () => {
+    previewAnswer = () =>
+      Response.json({
+        findings: [
+          {
+            code: "ingress_routes_live",
+            severity: "error",
+            message: "Routes are still live: app.example.com (shop).",
+            items: ["app.example.com"],
+          },
+        ],
+        removes: {},
+        unreachable: [],
+      });
+    const dialog = await open("Turn off ingress", "Turn off ingress?");
+    await waitUnderFakeClock(() => expect(screen.getByText("This can't go ahead")).toBeTruthy());
+    expect(confirmOf(dialog, "Turn off ingress").disabled).toBe(true);
+  });
+});
+
+describe("a reader", () => {
+  it("sees the status and a button disabled with its reason, and never requests a job", async () => {
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    status = statusBody({ enabled: true });
+    mount();
+    const button = await waitUnderFakeClock(() =>
+      screen.getByRole("button", { name: "Turn off ingress" }),
+    );
+    expect(screen.getByText("On")).toBeTruthy();
+    expect(screen.getByText("2 of 3 proxy nodes are ready.")).toBeTruthy();
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(button);
+    await advance(50);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getAllByText("Needs Admin").length).toBeGreaterThan(0);
+    expect(requests.filter((r) => r.includes("/jobs/") || r.startsWith("POST"))).toEqual([]);
   });
 });
