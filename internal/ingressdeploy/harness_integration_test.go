@@ -122,12 +122,16 @@ type swarmEnv struct {
 
 	ops  *stackOps
 	deps stackops.Deps
+
+	// depOpts add to the deployer's dependencies each time startDeploy builds it (TierPlan's own container, Phase 28).
+	depOpts []func(*swarmEnv, *ingressdeploy.Deps)
 }
 
-// startSwarmEnv starts the swarm and everything around it. It does not enable ingress.
-func startSwarmEnv(t *testing.T) *swarmEnv {
+// startSwarmEnv starts the swarm and everything around it. It does not enable ingress. Each opt adds to the deployer's
+// dependencies before it is built, after the agents are connected.
+func startSwarmEnv(t *testing.T, opts ...func(*swarmEnv, *ingressdeploy.Deps)) *swarmEnv {
 	t.Helper()
-	e := &swarmEnv{t: t, agents: map[*dockertest.Node]*agentConn{}, version: "dev", log: slog.New(slog.DiscardHandler), ca: traefiktest.NewCA(t)}
+	e := &swarmEnv{t: t, agents: map[*dockertest.Node]*agentConn{}, version: "dev", log: slog.New(slog.DiscardHandler), ca: traefiktest.NewCA(t), depOpts: opts}
 
 	e.sw = dockertest.StartSwarm(t, "", 1, 1)
 	e.mgr, e.wrk = e.sw.Managers[0], e.sw.Workers[0]
@@ -364,7 +368,7 @@ func (e *swarmEnv) startDeploy(version string) {
 		e.stopDeploy()
 	}
 	e.version = version
-	e.deploy = ingressdeploy.New(ingressdeploy.Deps{
+	d := ingressdeploy.Deps{
 		Engine: swarmEngine{agg: e.agg, clusters: e.clus}, Envs: envReader{st: e.st, svc: e.esvc},
 		Store: e.istore, Notifier: e.notifier, Tokens: e.srv.Service, NodeRows: e.srv.Service, Nodes: e.srv.Service, Kicker: e.srv.Hub,
 		Managers: e.managers,
@@ -378,7 +382,11 @@ func (e *swarmEnv) startDeploy(version string) {
 		},
 		Jobs: e.jobs, Locks: e.locks, Audit: e.aud, AddressSpaces: e.addr,
 		ServerVersion: version, URL: e.srv.URL, Pins: func() []string { return []string{e.srv.Pin()} }, Log: e.log,
-	})
+	}
+	for _, opt := range e.depOpts {
+		opt(e, &d)
+	}
+	e.deploy = ingressdeploy.New(d)
 	ctx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(3)
