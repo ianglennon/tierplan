@@ -322,6 +322,13 @@ URL is set (`self_route_no_url`) and while the install already has its route (`s
 `self_check`, `self_claim` and `self_network`. It ends done when the route is stored, even if the route then waits in
 `self_not_attached` or `waiting_certificate`.
 
+Switching the route on or off restarts the proxies, because they join or leave `tierplan-self`. On a swarm the proxy service
+is updated one node at a time, each proxy stopped before its replacement starts, so every route, not only TierPlan's, misses
+requests on that node for a moment. With a [virtual IP](#virtual-ip) the address moves each time its holder's proxy is
+replaced, which costs every route about one to two seconds of failed requests at the address each time; on three nodes it
+moved twice per switch (see [How fast it moves](#how-fast-it-moves)). On a standalone host the proxy container is made
+again. Switch at a quiet time.
+
 **On a swarm**, TierPlan does not change its own service: an update would stop the task that sent it, and your next
 `docker stack deploy` would drop a network TierPlan had added. You add the network instead, **after** switching the route on,
 because TierPlan makes `tierplan-self` then, and a stack deploy that names an external network that does not exist fails. Until
@@ -813,6 +820,11 @@ advert interval at one second, and once on a real switch.
 - **A node that comes back** does not take the address back (`nopreempt`), on the bridge and on the switch.
 - **A change.** An address change leaves the address without a holder for about a second at a time, and a router ID change for a
   few seconds (see [Changing it](#changing-it)).
+- **A proxy roll.** Anything that replaces the proxies one node at a time moves the address each time the holder's proxy is
+  replaced: switching [TierPlan's own route](#turning-it-on) on or off, a new proxy image after a TierPlan upgrade, or a
+  `docker service update --force tierplan-ingress`. Each move costs every route about one to two seconds of failed requests at
+  the address. In the release UAT on three nodes every switch of the route moved it twice: 2 misses in 20 probes at one
+  switch-on, 3 in 150 one-second probes at another.
 
 ### The router ID, and other routers on the segment
 
