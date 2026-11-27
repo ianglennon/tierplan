@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -36,7 +37,8 @@ type selfSnapshot struct {
 	Claimed bool
 	EnvID   string
 	Host    string
-	// Origins are the extra origins a mutation may come from: the route host's, while the claim exists (D-07).
+	// Origins are the extra origins the claim gives a mutation: the route host's, while the claim exists (D-07). ExtraOrigins
+	// adds the direct address to them when the public URL is the route host.
 	Origins []string
 	// Obs is the latest observation of TierPlan's own environment, HasObs whether there is one.
 	Obs    ingressdeploy.SelfObservation
@@ -192,9 +194,28 @@ func (h *selfRoute) TrustedPrefixes() []netip.Prefix {
 }
 
 // ExtraOrigins is the route host's origin while the system claim exists, else none (httpx.Options.ExtraOrigins and the
-// shell WebSocket's origin patterns). It comes from the stored claim only.
+// shell WebSocket's origin patterns). While the claim exists and the public URL's host is the route host, the agent URL's
+// origin is added too: the direct address Settings require then (D-10), which stays in the set so that a browser on it can
+// still make changes, the route's switch-off included (D-07). It comes from the stored claim and the stored URLs only, read
+// on every call, never from a request.
 func (h *selfRoute) ExtraOrigins() []string {
-	return slices.Clone(h.snap.Load().Origins)
+	s := h.snap.Load()
+	out := slices.Clone(s.Origins)
+	if len(out) == 0 || s.Host == "" {
+		return out
+	}
+	in := h.in.Load()
+	if in == nil || in.urls == nil {
+		return out
+	}
+	urls := in.urls()
+	if ingress.NormalizeHost(hostOf(urls.PublicURL)) != s.Host {
+		return out
+	}
+	if o := httpx.OriginOf(urls.AgentURL); o != "" && !slices.Contains(out, o) {
+		out = append(out, o)
+	}
+	return out
 }
 
 // Ready is whether the trusted set can be believed complete (A-08): the claim was read and, when it exists, the first

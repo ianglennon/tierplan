@@ -521,7 +521,8 @@ func (r *Router) originSet(want string) []string {
 }
 
 // originOK applies D-36 and D-07: a mutation must come from an origin in the set, which is
-// the public origin plus the route host's while TierPlan's own route is on. When the browser
+// the public origin plus ExtraOrigins (the route host's, and the direct address's while the public
+// URL is the route host, while TierPlan's own route is on). When the browser
 // sent Origin it must be a member exactly; when it did not, Sec-Fetch-Site must not say the
 // request is cross-site. want stays the public origin, for the log line.
 func (r *Router) originOK(req *http.Request) (ok bool, got, want string) {

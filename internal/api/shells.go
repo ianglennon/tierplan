@@ -91,9 +91,10 @@ type ShellsDeps struct {
 	// and the per-person cap.
 	Instance ShellInstance
 	// ExtraOrigins returns the further origins a shell WebSocket may be opened from, read on
-	// every upgrade (D-07): the route host's origin while TierPlan's own route is on, the same
-	// set the mutation guard reads (httpx.Options.ExtraOrigins). The server derives it from the
-	// stored claim, never from a request. Nil or empty is none.
+	// every upgrade (D-07): the route host's origin while TierPlan's own route is on, plus the
+	// agent URL's while the public URL is the route host, the same set the mutation guard reads
+	// (httpx.Options.ExtraOrigins). The server derives it from the stored claim and the stored
+	// URLs, never from a request. Nil or empty is none.
 	ExtraOrigins func() []string
 	// Store keeps each user's last shell choice per image (D-26). Without one nothing is
 	// remembered and the preference route answers 503.

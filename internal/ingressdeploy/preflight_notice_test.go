@@ -66,7 +66,7 @@ func TestIngressPreviewsCarryTheSelfNotices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PreviewDisable: %v", err)
 		}
-		want := "TierPlan's own route on tp.apps.example.org is released first. Direct access on https://tierplan.internal:7480 keeps working."
+		want := "TierPlan's own route on tp.apps.example.org is released first. Direct access on https://tierplan.example.org:7480 keeps working."
 		if pv.Notice != want {
 			t.Errorf("notice = %q, want %q", pv.Notice, want)
 		}

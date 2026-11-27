@@ -81,8 +81,9 @@ type Options struct {
 	// origin", which is the state before setup stores a public URL (D-04).
 	PublicOrigin func() string
 	// ExtraOrigins returns the origins a mutation may also come from, read on every request
-	// (D-07): the route host's origin while TierPlan's own route is on, which the server derives
-	// from the stored claim. It is never derived from a request, so no header can widen the set.
+	// (D-07): the route host's origin while TierPlan's own route is on, plus the agent URL's while
+	// the public URL is the route host, which the server derives from the stored claim and the
+	// stored URLs. It is never derived from a request, so no header can widen the set.
 	// Each entry is compared in canonical form (lower case, default port dropped); an entry that
 	// is not an absolute http(s) URL is ignored. Nil or empty is none, so the public origin alone
 	// is accepted, as before.

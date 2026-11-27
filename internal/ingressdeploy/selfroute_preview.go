@@ -274,16 +274,15 @@ func urlOrigin(raw string) string {
 	return u.Scheme + "://" + u.Host
 }
 
-// directAddress is the address that keeps reaching TierPlan whatever the route does (UI-SPEC A-03, A6): the agent URL's
-// origin when it is set, else the public URL's when its host is not the route's, else "" (the page's own origin).
+// directAddress is the address that keeps reaching TierPlan whatever the route does (UI-SPEC A-03, A6), and one TierPlan
+// accepts changes from (D-07): the public URL's origin when its host is not the route's; else the agent URL's, which the
+// origin set holds while the public URL is the route host and which Settings require then (D-10), and which with no public
+// URL is reached as the page's own origin; else "" (the page's own origin).
 func directAddress(urls SelfURLs, host string) string {
-	if o := urlOrigin(urls.AgentURL); o != "" {
-		return o
-	}
-	if h := urlHost(urls.PublicURL); h != "" && h != host {
+	if h := urlHost(urls.PublicURL); h != "" && h != ingress.NormalizeHost(host) {
 		return urlOrigin(urls.PublicURL)
 	}
-	return ""
+	return urlOrigin(urls.AgentURL)
 }
 
 // agentDialHost is the host agents and proxies dial: the agent URL's, else the public URL's (D-10).
