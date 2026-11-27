@@ -49,6 +49,8 @@ expect() {
     echo "SCRIPT TEST FAIL: ${name} (expected 0, got ${rc})"
     echo "${out}" | sed 's/^/    /'
     failures=$((failures + 1))
+  else
+    echo "ok ${name}"
   fi
   LAST_OUT="$out"
 }
@@ -298,6 +300,25 @@ rm -f "${nofix}/e2e/specs/seeded.spec.ts"
 printf 'dockerd --insecure-registry 127.0.0.1:5000\ncurl --cacert x --insecure-registry-note\n' >"${nofix}/scripts/registry.sh"
 expect pass "tls-gate-nongo-insecure-registry" scripts/insecure-tls-check.sh "${nofix}"
 rm -f "${nofix}/scripts/registry.sh"
+
+# The renderer's goldens: TierPlan's own route (t-self) never skips verification (Phase 28 D-14). The
+# stack-route transport t-user-https does on purpose (Phase 24 D-13) and does not trip the rule.
+tsfix="${scratch}/tls-tself-fixture"
+mkdir -p "${tsfix}/internal/ingressrender/testdata/golden/x"
+tself_yml() { # tself_yml <extra line under t-self, or empty>
+  {
+    printf 'http:\n  serversTransports:\n'
+    printf '    t-self:\n      serverName: tierplan.example.org\n'
+    [ -n "$1" ] && printf '      %s\n' "$1"
+    printf '      rootCAs:\n        - /var/lib/tierplan-ingress/certs/a.crt\n'
+    printf '    t-user-https:\n      insecure''SkipVerify: true\n      disableHTTP2: true\n'
+  } >"${tsfix}/internal/ingressrender/testdata/golden/x/tierplan.yml"
+}
+tself_yml "insecure""SkipVerify: true"
+expect fail "tls-gate-tself-skip" scripts/insecure-tls-check.sh "${tsfix}"
+expect_out "tls-gate-tself-skip names the file" "INSECURE TLS: internal/ingressrender/testdata/golden/x/tierplan.yml t-self carries"
+tself_yml ""
+expect pass "tls-gate-tself-clean" scripts/insecure-tls-check.sh "${tsfix}"
 # Dependencies under e2e and web are not scanned.
 printf 'o = { ignoreHTTPS''Errors: true, reject''Unauthorized: false }\n' >"${nofix}/e2e/node_modules/p/x.js"
 printf 'o = { secure: fal''se }\n' >"${nofix}/web/node_modules/p/vite.config.ts"
