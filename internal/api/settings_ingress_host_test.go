@@ -92,3 +92,58 @@ func TestAgentURLMayNotBeAnIngressHost(t *testing.T) {
 		t.Fatalf("agent URL = %q", f.inst.AgentURL())
 	}
 }
+
+func TestPublicURLMayBeTheRouteHostOnlyWithAFreeAgentURL(t *testing.T) {
+	t.Parallel()
+	hosts := map[string]ingress.ClaimInfo{
+		"tp.apps.example.org":  systemClaim("tp.apps.example.org"),
+		"app.apps.example.org": stackClaim("app.apps.example.org"),
+	}
+	publicRefused := map[string]string{"body.publicUrl": "public_url_is_ingress_host"}
+
+	f, cookie, csrf := ingressHostsFixture(t, hosts)
+	audited := len(f.audits(t, "settings.updated"))
+
+	// No agent URL stored or sent: agents would dial the route.
+	assertFieldProblems(t, f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://tp.apps.example.org"}), publicRefused)
+	// A stack's host is refused the same way.
+	assertFieldProblems(t, f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://app.apps.example.org/tierplan"}), publicRefused)
+	// An agent URL that is itself claimed: both fields are reported.
+	assertFieldProblems(t, f.patchSettings(t, cookie, csrf, map[string]string{
+		"publicUrl": "https://tp.apps.example.org", "agentUrl": "https://app.apps.example.org:7480",
+	}), map[string]string{"body.publicUrl": "public_url_is_ingress_host", "body.agentUrl": "agent_url_is_ingress_host"})
+	if f.inst.PublicURL() != "" || f.inst.AgentURL() != "" {
+		t.Fatalf("a refused save stored public %q agent %q", f.inst.PublicURL(), f.inst.AgentURL())
+	}
+	if n := len(f.audits(t, "settings.updated")); n != audited {
+		t.Fatalf("%d settings.updated entries, want %d: a refusal writes nothing", n, audited)
+	}
+
+	// A free agent URL in the same save: both are saved.
+	rec := f.patchSettings(t, cookie, csrf, map[string]string{
+		"publicUrl": "https://tp.apps.example.org", "agentUrl": "https://tierplan.internal:7480",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("route host with a free agent URL: %d %s", rec.Code, rec.Body)
+	}
+	if f.inst.PublicURL() != "https://tp.apps.example.org" || f.inst.AgentURL() != "https://tierplan.internal:7480" {
+		t.Fatalf("public %q agent %q, want both saved", f.inst.PublicURL(), f.inst.AgentURL())
+	}
+	// Clearing the free agent URL would leave agents dialling the route.
+	assertFieldProblems(t, f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": ""}), publicRefused)
+	if f.inst.AgentURL() != "https://tierplan.internal:7480" {
+		t.Fatalf("a refused clear changed the agent URL to %q", f.inst.AgentURL())
+	}
+
+	// With the free agent URL already stored, the public URL alone saves.
+	g, gcookie, gcsrf := ingressHostsFixture(t, hosts)
+	if rec := g.patchSettings(t, gcookie, gcsrf, map[string]string{"agentUrl": "https://tierplan.internal:7480"}); rec.Code != http.StatusOK {
+		t.Fatalf("seed agent URL: %d %s", rec.Code, rec.Body)
+	}
+	if rec := g.patchSettings(t, gcookie, gcsrf, map[string]string{"publicUrl": "https://TP.apps.example.org/"}); rec.Code != http.StatusOK {
+		t.Fatalf("route host with a stored free agent URL: %d %s", rec.Code, rec.Body)
+	}
+	if g.inst.PublicURL() != "https://tp.apps.example.org" {
+		t.Fatalf("public URL = %q", g.inst.PublicURL())
+	}
+}
