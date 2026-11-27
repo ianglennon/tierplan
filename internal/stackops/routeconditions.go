@@ -150,3 +150,77 @@ func appliedCondition(in RouteStateInput, key RouteKey) Condition {
 		return ready(CondApplied)
 	}
 }
+
+// The reasons only TierPlan's own route (a system route) gives. Its backend is TierPlan itself, reached over the tierplan-self
+// network, so what its network and backend conditions say comes from whether TierPlan is on that network, not from a stack's
+// services.
+const (
+	// ReasonSelfNotAttached: TierPlan is not on the tierplan-self network, so the proxy cannot reach it. It is spelled as the
+	// renderer's skipped reason for the route (ingressrender.SkipSelfNotAttached).
+	ReasonSelfNotAttached = "self_not_attached"
+	// ReasonNotObserved: no pass has read whether TierPlan is on the tierplan-self network since it started.
+	ReasonNotObserved = "not_observed"
+)
+
+// RouteUnknown is the state of a route whose conditions could not all be read, so whether it serves is not known.
+const RouteUnknown = "unknown"
+
+// SystemRouteConditions derives the five conditions of TierPlan's own route, in the order every route's come in (Phase 28
+// A-07). The claim is held, since the row exists only under the system claim. The network is attached when TierPlan is on
+// the tierplan-self network; attachedKnown false (no observation yet) leaves it unknown, never ready. The backend is TierPlan
+// itself, healthy once the proxy can reach it. The certificate and applied conditions read the same input a stack route's
+// do, so the two never disagree about the bundle.
+func SystemRouteConditions(in RouteStateInput, r ingress.Route, attached, attachedKnown bool) []Condition {
+	key := RouteKey{Hostname: r.Hostname, Path: routePath(r.PathPrefix)}
+	claim := ready(CondClaimHeld)
+	if !in.Enabled {
+		return []Condition{
+			claim,
+			unknown(CondNetworkAttached, ReasonIngressOff),
+			unknown(CondBackendHealthy, ReasonIngressOff),
+			unknown(CondCertificateReady, ReasonIngressOff),
+			withCounts(unknown(CondApplied, ReasonIngressOff), in),
+		}
+	}
+	var network, backend Condition
+	switch {
+	case !attachedKnown:
+		network, backend = unknown(CondNetworkAttached, ReasonNotObserved), unknown(CondBackendHealthy, ReasonNotObserved)
+	case !attached:
+		// The proxy cannot reach TierPlan, so whether TierPlan answers it is not known.
+		network, backend = notReady(CondNetworkAttached, ReasonSelfNotAttached), unknown(CondBackendHealthy, ReasonSelfNotAttached)
+	default:
+		network, backend = ready(CondNetworkAttached), ready(CondBackendHealthy)
+	}
+	return []Condition{claim, network, backend, certificateCondition(in, key), withCounts(appliedCondition(in, key), in)}
+}
+
+// SystemRouteState is the state and reason of a system route from its conditions, with RouteStates' precedence: ingress off,
+// then the backend not running, then not attached (reason self_not_attached), then unknown when the network or the backend
+// could not be read, then waiting for a certificate (reason the certificate's), then pending, and serving last. A condition
+// list that is not the five of SystemRouteConditions is unknown.
+func SystemRouteState(conds []Condition) (state, reason string) {
+	by := map[string]Condition{}
+	for _, c := range conds {
+		by[c.Code] = c
+	}
+	network, backend, cert, applied := by[CondNetworkAttached], by[CondBackendHealthy], by[CondCertificateReady], by[CondApplied]
+	if len(by) != 5 || by[CondClaimHeld].State != CondReady {
+		return RouteUnknown, ""
+	}
+	switch {
+	case network.Reason == ReasonIngressOff:
+		return RouteIngressOff, ""
+	case backend.State == CondNotReady:
+		return RouteBackendNotRunning, ""
+	case network.State == CondNotReady:
+		return RouteNotAttached, network.Reason
+	case network.State == CondUnknown || backend.State == CondUnknown:
+		return RouteUnknown, ""
+	case cert.State == CondNotReady:
+		return RouteWaitingCertificate, cert.Reason
+	case cert.State != CondReady || applied.State != CondReady:
+		return RoutePending, ""
+	}
+	return RouteServing, ""
+}

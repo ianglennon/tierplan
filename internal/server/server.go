@@ -1362,6 +1362,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	})
 	// Every observation of a self network reaches the holder, which keeps only TierPlan's own environment's.
 	ingressDeploy.OnSelfObserved(selfRt.Observe)
+	// The environment's route list derives TierPlan's own route's row from the deployer's facts (A-07).
+	stacksDeps.SelfRoute = ingressDeploy
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
 	router := NewRouter(RouterDeps{

@@ -1877,7 +1877,7 @@ export interface paths {
         };
         /**
          * List the routes of an environment and what each is doing now
-         * @description Answers every route the environment's stacks hold, each with its hostname, path, owner, backend and the state the stack page reads, and the five conditions behind it: claim held, network attached, backend healthy, certificate ready and applied. The state and the conditions are worked out when asked, by the same call as the stack page's routes, from the stored claims, the engine, the proxy's current bundle and what each active node applied; nothing is stored. When the engine cannot be read the state is unknown and the conditions it decides are unknown. The answer never carries a certificate, a key or a token, and never another environment's names. Needs ingress.read on the environment (Viewer).
+         * @description Answers every route the environment's stacks hold, and TierPlan's own route when it is on there (ownerKind system), each with its hostname, path, owner, backend and the state the stack page reads, and the five conditions behind it: claim held, network attached, backend healthy, certificate ready and applied. The state and the conditions are worked out when asked, by the same call as the stack page's routes, from the stored claims, the engine, the proxy's current bundle and what each active node applied; nothing is stored. When the engine cannot be read the state is unknown and the conditions it decides are unknown. The answer never carries a certificate, a key or a token, and never another environment's names. Needs ingress.read on the environment (Viewer).
          */
         get: operations["listIngressRoutes"];
         put?: never;
@@ -11078,7 +11078,7 @@ export interface components {
             resumed: boolean;
         };
         IngressRouteBody: {
-            /** @description The route's five conditions in their fixed order; empty for a claim, a reserved name and a system route */
+            /** @description The route's five conditions in their fixed order, TierPlan's own route's included; empty for a claim and a reserved name */
             conditions: components["schemas"]["RouteConditionBody"][] | null;
             /** @description The row's hostname */
             hostname: string;
@@ -11099,7 +11099,7 @@ export interface components {
              * @description The port the proxy sends the route's requests to; 0 for a claim or a reserved name
              */
             port: number;
-            /** @description For waiting_certificate, why the certificate is not served: no_certificate or certificate_not_ready. Empty for every other state */
+            /** @description For waiting_certificate, why the certificate is not served: no_certificate or certificate_not_ready. For not_attached on TierPlan's own route, self_not_attached. Empty for every other state */
             reason: string;
             /**
              * @description The scheme the proxy speaks to the backend; empty for a claim or a reserved name
@@ -11113,7 +11113,7 @@ export interface components {
             /** @description The name of that stack; empty when stackId is */
             stackName: string;
             /**
-             * @description What the route is doing now, the same state the stack page reads: serving, pending, waiting_certificate, backend_not_running, not_attached or ingress_off. unknown: the engine could not be read, so what runs is not known. Empty for a claim, a reserved name and a system route. Derived when read, stored nowhere
+             * @description What the route is doing now, the same state the stack page reads: serving, pending, waiting_certificate, backend_not_running, not_attached or ingress_off. unknown: the engine could not be read, so what runs is not known; for TierPlan's own route, whether TierPlan is on the tierplan-self network is not known yet. TierPlan's own route (ownerKind system) is derived the same way, and reads not_attached while TierPlan is not on the tierplan-self network. Empty for a claim and a reserved name. Derived when read, stored nowhere
              * @enum {string}
              */
             state: "serving" | "pending" | "waiting_certificate" | "backend_not_running" | "not_attached" | "ingress_off" | "unknown" | "";
@@ -14014,13 +14014,13 @@ export interface components {
             /** @description How many active ingress nodes applied the bundle; present on the applied condition only */
             applied?: components["schemas"]["RouteAppliedBody"];
             /**
-             * @description Which condition this is. claim_held: the stack holds the claim the route sits under. network_attached: the service is on the ingress network. backend_healthy: the service runs at least one replica. certificate_ready: the hostname has a certificate the bundle can carry. applied: every active ingress node applied a bundle that holds the route. A route's conditions always come in this order
+             * @description Which condition this is. claim_held: the stack holds the claim the route sits under. network_attached: the service is on the ingress network (for TierPlan's own route, TierPlan is on the tierplan-self network). backend_healthy: the service runs at least one replica (for TierPlan's own route, the proxy can reach TierPlan). certificate_ready: the hostname has a certificate the bundle can carry. applied: every active ingress node applied a bundle that holds the route. A route's conditions always come in this order
              * @enum {string}
              */
             code: "claim_held" | "network_attached" | "backend_healthy" | "certificate_ready" | "applied";
             /** @description A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the certificate's own failure hint */
             message: string;
-            /** @description Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle */
+            /** @description Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network) or not_observed (no check has read that since TierPlan started) */
             reason: string;
             /**
              * @description ready: the condition holds. not_ready: it was read and does not hold. unknown: what it depends on was not read, for example the engine could not be reached or ingress is off; it is never reported ready

@@ -204,6 +204,9 @@ type authFixture struct {
 	ingressNotifier *ingress.Notifier
 	// stackIngressRoutes is what the stack routes' state is read from besides the store and the engine (plan 24-25).
 	stackIngressRoutes api.RouteSources
+	// stackSelfRoute, when set, is what the routes list and the ingress status read TierPlan's own route's facts from in
+	// place of the deployer (plan 28-34).
+	stackSelfRoute api.SelfRouteReader
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
 	stackReadEnv func(context.Context, string) error
 	// stackClock is the clock the waits of a stack deploy run on; nil is the wall clock (plan 12-23).
@@ -648,6 +651,13 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		stackDeps.Locks, stackDeps.Envs = f.stackLocks, f.envSvc
 		if f.stackBeforeLock != nil {
 			stackDeps.Locks = beforeLock{Locks: f.stackLocks, before: f.stackBeforeLock}
+		}
+		// TierPlan's own route's facts come from the deployer, as on a server, unless the test gives its own reader.
+		switch {
+		case f.stackSelfRoute != nil:
+			stackDeps.SelfRoute = f.stackSelfRoute
+		case f.ingressDeploy != nil:
+			stackDeps.SelfRoute = f.ingressDeploy
 		}
 		stackDeps = stackDeps.WithDeployCancels() // as the server does, before the deps are copied
 		f.stackDeps = stackDeps
