@@ -371,8 +371,8 @@ describe("turning ingress on", () => {
             },
             {
               code: "ingress_http01_unknown",
-              severity: "error",
-              message: "TierPlan can't tell where it runs.",
+              severity: "warning",
+              message: "TierPlan couldn't tell whether this conflict applies.",
               items: [],
             },
             {
@@ -394,7 +394,7 @@ describe("turning ingress on", () => {
       .closest("li") as HTMLElement;
     expect(within(conflict).getByRole("link", { name: "Open HTTPS settings" })).toBeTruthy();
     const unknown = within(dialog)
-      .getByText("TierPlan can't tell where it runs.")
+      .getByText("TierPlan couldn't tell whether this conflict applies.")
       .closest("li") as HTMLElement;
     expect(within(unknown).getByRole("link", { name: "Open HTTPS settings" })).toBeTruthy();
     const other = within(dialog)

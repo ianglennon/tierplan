@@ -86,6 +86,8 @@ export function useIngressEnablePreview(envId: string) {
         findings: data.findings ?? [],
         redeploy: data.redeploy ?? [],
         unreachable: [],
+        // The HTTP-01 carve-out note (UI-SPEC S4): neutral, nothing is wrong.
+        notice: data.notice,
       };
     },
   });
@@ -120,6 +122,8 @@ export function useIngressDisablePreview(envId: string) {
         findings: data.findings ?? [],
         redeploy: [],
         unreachable: data.unreachable ?? [],
+        // TierPlan's own route is released first (UI-SPEC S4): neutral, the direct address keeps working.
+        notice: data.notice,
       };
     },
   });

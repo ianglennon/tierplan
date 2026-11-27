@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { type UseMutationResult, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { HealthState } from "@/api/environments";
@@ -87,6 +88,9 @@ export interface ReviewDialogProps {
   // A warning the card knows and the server cannot, drawn above the preview's list: the page is being used through the
   // route the switch takes away (UI-SPEC S1c, D-11). It never disables the confirm.
   caution?: string;
+  // A second sentence for the Done alert, read from the job that ended (UI-SPEC S1b: the self route is on but TierPlan's
+  // service is not on the tierplan-self network yet). Undefined or an empty answer adds nothing.
+  doneNote?: (job: IngressJob) => string | undefined;
 }
 
 // ReviewDialog is the house pattern for every ingress switch (D-07, UI-SPEC S6): one dialog with three states in place,
@@ -105,6 +109,7 @@ export function ReviewDialog({
   form,
   bodyValues,
   caution,
+  doneNote,
 }: ReviewDialogProps) {
   const queryClient = useQueryClient();
   // A job that is running holds the dialog open: it has one button and that button waits for the end.
@@ -132,6 +137,7 @@ export function ReviewDialog({
             form={form}
             bodyValues={bodyValues}
             caution={caution}
+            doneNote={doneNote}
             onRunning={(value) => {
               running.current = value;
               onRunning?.(value);
@@ -166,6 +172,7 @@ interface ReviewBodyProps {
   form?: ReviewForm;
   bodyValues?: Record<string, unknown>;
   caution?: string;
+  doneNote?: (job: IngressJob) => string | undefined;
   onRunning: (running: boolean) => void;
   onClose: () => void;
 }
@@ -178,6 +185,7 @@ function ReviewBody({
   form,
   bodyValues,
   caution,
+  doneNote,
   onRunning,
   onClose,
 }: ReviewBodyProps) {
@@ -234,6 +242,7 @@ function ReviewBody({
         unreadable={unreadable}
         ended={ended}
         bodyValues={bodyValues}
+        doneNote={doneNote}
         onClose={onClose}
       />
     );
@@ -530,8 +539,18 @@ function PreviewManagers({ managers }: { managers: NonNullable<ReviewPreview["ma
   );
 }
 
+// HTTPS_FIX are the findings fixed on Settings > HTTPS (UI-SPEC S4): TierPlan's own certificate uses the HTTP-01
+// challenge, which needs the port 80 the ingress takes, so the fix is to switch it to DNS-01 there.
+// ingress_http01_conflict: TierPlan runs here and is not on the tierplan-self network.
+// ingress_http01_unknown (a warning): TierPlan couldn't tell whether that conflict applies.
+const HTTPS_FIX: ReadonlySet<string> = new Set([
+  "ingress_http01_conflict",
+  "ingress_http01_unknown",
+]);
+
 // Findings draws the server's sentences as sent, each with the things it names (a port, a stack, a hostname) in mono.
 function Findings({ findings }: { findings: ReviewPreview["findings"] }) {
+  const t = useT();
   return (
     <ul className="flex flex-col gap-2">
       {findings.map((finding, i) => (
@@ -539,6 +558,14 @@ function Findings({ findings }: { findings: ReviewPreview["findings"] }) {
         // biome-ignore lint/suspicious/noArrayIndexKey: findings are static for as long as the preview shows.
         <li key={`${finding.code}-${i}`} className="flex flex-col gap-1">
           <span className="break-words">{finding.message}</span>
+          {HTTPS_FIX.has(finding.code) ? (
+            <Link
+              to="/settings/https"
+              className="self-start rounded-sm text-accent-ink hover:underline"
+            >
+              {t("ingressPage.review.openHttps")}
+            </Link>
+          ) : null}
           {(finding.items ?? []).length > 0 ? (
             <ul className="flex flex-col gap-0.5">
               {(finding.items ?? []).map((item) => (
@@ -577,17 +604,19 @@ interface ProgressProps {
   ended: boolean;
   // The values of the placeholders in the failure hint (the direct address of the self route).
   bodyValues?: Record<string, unknown>;
+  doneNote?: (job: IngressJob) => string | undefined;
   onClose: () => void;
 }
 
 // Progress is the dialog once the switch is confirmed: the step list and the job's output while it runs, the outcome
 // when it ended, and one button that waits for the end.
-function Progress({ kind, job, unreadable, ended, bodyValues, onClose }: ProgressProps) {
+function Progress({ kind, job, unreadable, ended, bodyValues, doneNote, onClose }: ProgressProps) {
   const t = useT();
   const steps = (job?.items ?? []).filter((item) => item.kind !== "group" && item.kind !== "task");
   const output = job?.output ?? [];
   const succeeded = job?.state === "done";
   const failed = ended && job !== undefined && !succeeded;
+  const note = succeeded && job ? doneNote?.(job) : undefined;
   return (
     <div className="flex flex-col gap-4">
       <DialogHeader>
@@ -622,7 +651,10 @@ function Progress({ kind, job, unreadable, ended, bodyValues, onClose }: Progres
       </div>
       {succeeded ? (
         <Alert>
-          <AlertDescription>{t(`ingressPage.review.${kind}.done`)}</AlertDescription>
+          <AlertDescription className="flex flex-col gap-1 break-words">
+            <span>{t(`ingressPage.review.${kind}.done`)}</span>
+            {note ? <span>{note}</span> : null}
+          </AlertDescription>
         </Alert>
       ) : null}
       {failed ? (

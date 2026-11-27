@@ -567,6 +567,7 @@
     "review": {
       "checking": "Checking…",
       "blocked": "This can't go ahead",
+      "openHttps": "Open HTTPS settings",
       "redeploy": {
         "title": "Stacks to redeploy",
         "more": "and {{n}} more",
@@ -666,6 +667,7 @@
         "check": "Check hostname",
         "progress": "Turning own route on…",
         "done": "TierPlan's own route is on.",
+        "doneNotAttached": "Add the lines on the card to your stack file to start serving.",
         "failedHint": "Nothing is lost. Turn it on again to carry on, or off to remove what was made. Direct access on {{direct}} still works."
       },
       "selfDisable": {

@@ -15,6 +15,7 @@ import {
   useSelfRouteOffPreview,
   useSelfRoutePreview,
 } from "@/api/ingress-self";
+import type { IngressJob } from "@/api/ingress-switches";
 import { CopyableCode } from "@/components/copyable-code";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { StatusDot } from "@/components/status-dot";
@@ -73,11 +74,19 @@ function pageVisible(): boolean {
 
 // usingRoute says whether this page was loaded through the route's own hostname, the one case where turning it off
 // may cut the page off (D-11).
-function usingRoute(host: string): boolean {
+export function usingRoute(host: string): boolean {
   return host !== "" && window.location.host.toLowerCase() === host.toLowerCase();
 }
 
 const mono = <span className="font-mono break-all" />;
+
+// selfNetworkLeftOff says whether a switch-on job ended with TierPlan still off the tierplan-self network: its
+// self_network step reports attached false (a timeout reports no step result, which is not this).
+function selfNetworkLeftOff(job: IngressJob): boolean {
+  return (job.items ?? []).some(
+    (item) => item.id === "self_network" && item.result?.attached === "false",
+  );
+}
 
 // SelfRouteCard is the Settings tab's "TierPlan's own route" (D-16, UI-SPEC S1): TierPlan itself served on a hostname
 // through this environment's ingress. It is drawn only where the ingress status carries selfRoute, which the server sends
@@ -362,6 +371,16 @@ export function SelfRouteCard({ envId }: { envId: string }) {
         preview={shown === "selfDisable" ? offPreview : preview}
         start={shown === "selfDisable" ? disable : enable}
         bodyValues={{ direct, host: leaving }}
+        // On a swarm TierPlan cannot add itself to the network, so a switch-on that left it off says where the lines are
+        // (UI-SPEC S1b). A standalone host connects it on the next check.
+        doneNote={
+          shown === "selfEnable" && !standalone
+            ? (ended) =>
+                selfNetworkLeftOff(ended)
+                  ? t("ingressPage.review.selfEnable.doneNotAttached")
+                  : undefined
+            : undefined
+        }
         caution={
           shown === "selfDisable" && usingRoute(leaving)
             ? t("ingressPage.settings.selfRoute.offUsingRoute", { direct })

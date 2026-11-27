@@ -322,6 +322,65 @@ describe("turning the route on", () => {
   });
 });
 
+describe("the switch-on's Done alert when TierPlan is left off the network (UI-SPEC S1b)", () => {
+  function leftOff(attached: string): Json {
+    return {
+      ...job("j1", "ingress_self_route_enable"),
+      items: [
+        {
+          id: "self_network",
+          label: "Self network",
+          state: "done",
+          kind: "step",
+          parent: "",
+          code: "",
+          message: "",
+          detail: "",
+          result: { network: "tierplan-self", attached },
+        },
+      ],
+    };
+  }
+
+  async function turnOn(): Promise<HTMLElement> {
+    mountCard();
+    fireEvent.click(await button("Turn on own route"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Turn on TierPlan's own route?" }),
+    );
+    fireEvent.change(within(dialog).getByLabelText("Hostname"), { target: { value: HOST } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Check hostname" }));
+    await waitUnderFakeClock(() => expect(dialog.querySelector("ol")).toBeTruthy());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Turn on own route" }));
+    await waitUnderFakeClock(() =>
+      expect(within(dialog).getByText("TierPlan's own route is on.")).toBeTruthy(),
+    );
+    return dialog;
+  }
+
+  const note = "Add the lines on the card to your stack file to start serving.";
+
+  it("adds where the lines are on a swarm when the job left TierPlan off tierplan-self", async () => {
+    enableJob = leftOff("false");
+    const dialog = await turnOn();
+    expect(within(dialog).getByText(note)).toBeTruthy();
+  });
+
+  it("adds nothing once TierPlan is on the network", async () => {
+    enableJob = leftOff("true");
+    const dialog = await turnOn();
+    expect(within(dialog).queryByText(note)).toBeNull();
+  });
+
+  it("adds nothing on a standalone host, which connects TierPlan itself", async () => {
+    selfRoute = route({ kind: "standalone" });
+    envType = "standalone";
+    enableJob = leftOff("false");
+    const dialog = await turnOn();
+    expect(within(dialog).queryByText(note)).toBeNull();
+  });
+});
+
 const STACK_LINES =
   "services:\n  tierplan:\n    networks:\n      - tierplan-self\nnetworks:\n  tierplan-self:\n    external: true\n";
 const COMMAND = "docker service update --network-add tierplan-self tierplan_tierplan";
