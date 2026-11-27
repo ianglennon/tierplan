@@ -499,9 +499,31 @@ func hostOf(origin string) string {
 	return host
 }
 
-// originOK applies D-36: a mutation must come from the public origin. When the
-// browser sent Origin it must match exactly; when it did not, Sec-Fetch-Site
-// must not say the request is cross-site.
+// originSet is the set of origins a mutation may come from (D-36, D-07): the expected origin
+// first, then each of ExtraOrigins, all in canonical form, with no empty member and no
+// duplicate. Only membership matters: the order and repeats of what ExtraOrigins returns change
+// no answer. Nothing in it comes from the request except through expectedOrigin's fallback to
+// the request's own origin before a public URL is set (D-04).
+func (r *Router) originSet(want string) []string {
+	set := make([]string, 0, 2)
+	if want != "" {
+		set = append(set, want)
+	}
+	if r.opts.ExtraOrigins == nil {
+		return set
+	}
+	for _, raw := range r.opts.ExtraOrigins() {
+		if o := OriginOf(raw); o != "" && !slices.Contains(set, o) {
+			set = append(set, o)
+		}
+	}
+	return set
+}
+
+// originOK applies D-36 and D-07: a mutation must come from an origin in the set, which is
+// the public origin plus the route host's while TierPlan's own route is on. When the browser
+// sent Origin it must be a member exactly; when it did not, Sec-Fetch-Site must not say the
+// request is cross-site. want stays the public origin, for the log line.
 func (r *Router) originOK(req *http.Request) (ok bool, got, want string) {
 	want = r.expectedOrigin(req)
 	if origin := req.Header.Get("Origin"); origin != "" {
@@ -510,7 +532,8 @@ func (r *Router) originOK(req *http.Request) (ok bool, got, want string) {
 		if err != nil || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.User != nil {
 			return false, got, want
 		}
-		return canonicalOrigin(u.Scheme, u.Host) == want && want != "", got, want
+		o := canonicalOrigin(u.Scheme, u.Host)
+		return o != "" && slices.Contains(r.originSet(want), o), got, want
 	}
 	switch req.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
