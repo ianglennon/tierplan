@@ -454,6 +454,50 @@
         "error": "Couldn't read the ingress status.",
         "retry": "Retry reading the ingress status"
       },
+      "selfRoute": {
+        "title": "TierPlan's own route",
+        "state": {
+          "off": "Off"
+        },
+        "detail": {
+          "pending": "The proxies are still picking up the route.",
+          "waitingCertificate": "Nothing is served on {{host}} until it is ready. {{direct}} keeps working.",
+          "notAttachedSwarm": "TierPlan's own service isn't on the tierplan-self network yet. Nothing is served on {{host}} until it is. Add the lines below to your stack file and deploy it again.",
+          "notAttachedStandalone": "TierPlan's container isn't on the tierplan-self network yet. TierPlan connects it itself on the next check.",
+          "unknown": "TierPlan couldn't read this just now."
+        },
+        "offBody": "Serve TierPlan itself on a hostname through ingress, with a certificate. It uses its own network, so the other routes can't reach TierPlan.",
+        "facts": {
+          "hostname": "Hostname",
+          "direct": "Direct address",
+          "directHelp": "Keeps working. You can always reach TierPlan here, and turn the route off from here.",
+          "network": "Network",
+          "attached": "Attached",
+          "notAttached": "Not attached"
+        },
+        "snippet": {
+          "stack_file": "TierPlan can't change its own service: an update would stop the task that sent it. Add these lines to your TierPlan stack file and deploy it again.",
+          "service_update": "TierPlan's service wasn't deployed from a stack file, so add the network with this command on a manager."
+        },
+        "refusal": {
+          "self_route_needs_service": "TierPlan runs as a plain container on a swarm node, and the route needs it to run as a swarm service. See <mono>install-in-swarm.md</mono>.",
+          "self_route_not_here": "TierPlan can't tell whether it runs in this environment, so it won't switch its route on here. Direct access on <mono>{{direct}}</mono> isn't affected."
+        },
+        "usingRoute": "You're using TierPlan through this route. If you turn it off, this page may stop answering. Open <mono>{{direct}}</mono> to carry on.",
+        "signIn": "You sign in on each address separately. Single sign-on still returns to the public URL.",
+        "showProgress": "Show progress",
+        "turnOn": "Turn on own route",
+        "turnOff": "Turn off own route",
+        "helper": "Turning this on changes which origins and proxy addresses TierPlan trusts, so it needs an instance admin.",
+        "needsIngress": "Turn ingress on first. The route is served by the proxies.",
+        "error": "Couldn't read the route status.",
+        "retry": "Retry reading the route status",
+        "form": {
+          "hostname": "Hostname",
+          "hostnameHelper": "A name under a domain registered on the <domains>Domains tab</domains>. It can't be the host of the agent URL, or of the public URL when no agent URL is set."
+        },
+        "offUsingRoute": "You're using TierPlan through this route. This page may stop answering as the route goes. The change still goes through. Open {{direct}} to see the result."
+      },
       "vip": {
         "title": "Virtual IP",
         "on": "On",

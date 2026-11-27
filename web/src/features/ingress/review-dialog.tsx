@@ -84,6 +84,9 @@ export interface ReviewDialogProps {
   form?: ReviewForm;
   // Values for the placeholders of the dialog's body.
   bodyValues?: Record<string, unknown>;
+  // A warning the card knows and the server cannot, drawn above the preview's list: the page is being used through the
+  // route the switch takes away (UI-SPEC S1c, D-11). It never disables the confirm.
+  caution?: string;
 }
 
 // ReviewDialog is the house pattern for every ingress switch (D-07, UI-SPEC S6): one dialog with three states in place,
@@ -101,6 +104,7 @@ export function ReviewDialog({
   start,
   form,
   bodyValues,
+  caution,
 }: ReviewDialogProps) {
   const queryClient = useQueryClient();
   // A job that is running holds the dialog open: it has one button and that button waits for the end.
@@ -127,6 +131,7 @@ export function ReviewDialog({
             start={start}
             form={form}
             bodyValues={bodyValues}
+            caution={caution}
             onRunning={(value) => {
               running.current = value;
               onRunning?.(value);
@@ -160,6 +165,7 @@ interface ReviewBodyProps {
   start: UseMutationResult<IngressStarted, Error, void>;
   form?: ReviewForm;
   bodyValues?: Record<string, unknown>;
+  caution?: string;
   onRunning: (running: boolean) => void;
   onClose: () => void;
 }
@@ -171,6 +177,7 @@ function ReviewBody({
   start,
   form,
   bodyValues,
+  caution,
   onRunning,
   onClose,
 }: ReviewBodyProps) {
@@ -314,6 +321,11 @@ function ReviewBody({
         </Alert>
       ) : null}
       {blockedByItem ? <BlockedAlert /> : null}
+      {caution ? (
+        <Alert variant="warning">
+          <AlertDescription className="break-words">{caution}</AlertDescription>
+        </Alert>
+      ) : null}
       {items.length > 0 ? <ReviewItems items={items} bodyValues={bodyValues} /> : null}
       {data?.warning !== undefined ? (
         // The virtual IP is never switched on without this in front of the person, so a preview that came without the
