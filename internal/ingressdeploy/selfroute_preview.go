@@ -318,9 +318,9 @@ func selfURLHosts(urls SelfURLs) []string {
 var ErrSelfRouteNotEnabled = errors.New("ingressdeploy: TierPlan's own route is not on in this environment")
 
 // PreviewSelfRouteOff says what switching TierPlan's own route off in envID would do, and writes nothing (D-11, UI-SPEC
-// S1c): the origin that is no longer accepted, then whether the self network stays for the port-80 carve-out or goes. It
-// never refuses: no state of the route, the engine or the environment stops a release. With no route on in envID it is
-// ErrSelfRouteNotEnabled.
+// S1c): the origin that is no longer accepted, then whether the self network stays for the port-80 carve-out, stays while
+// TierPlan's own swarm service is on it, or goes. It never refuses: no state of the route, the engine or the environment
+// stops a release. With no route on in envID it is ErrSelfRouteNotEnabled.
 func (s *Service) PreviewSelfRouteOff(ctx context.Context, envID string) (SelfRoutePreview, error) {
 	claim, held, err := s.d.Store.SystemClaim(ctx)
 	if err != nil {
@@ -338,9 +338,14 @@ func (s *Service) PreviewSelfRouteOff(ctx context.Context, envID string) (SelfRo
 		place = p
 	}
 	network := SelfRouteItem{Code: ItemSelfNetworkRemoved, State: SelfItemOK, Message: selfNetworkRemovedText}
-	// The carve-out keeps the network exactly when the ensure loop would still want it without the claim (selfWanted).
-	if place.Here == SelfHereYes && s.ownHTTP01(ctx) {
+	switch {
+	case place.Here == SelfHereYes && s.ownHTTP01(ctx):
+		// The carve-out keeps the network exactly when the ensure loop would still want it without the claim (selfWanted).
 		network.Message = selfNetworkKeptText
+	case place.Here == SelfHereYes && place.Kind == SelfKindSwarmService && place.Attached:
+		// TierPlan's own swarm service is on it, and TierPlan never updates its own service (D-03): the switch-off keeps the
+		// network until the service leaves it (A-06), as its job says. A standalone container is disconnected by the job.
+		network.Message = selfNetworkInUseText(place.Namespace, place.ServiceName)
 	}
 	return SelfRoutePreview{
 		Host:   claim.Hostname,

@@ -71,6 +71,17 @@ const (
 	selfOwnHostnamesDefault = "TierPlan's own hostnames"
 )
 
+// selfNetworkInUseText is the switch-off preview's network sentence while TierPlan's own swarm service is on the network, which
+// the switch-off keeps (A-06): the stack-file lines for a service of stack namespace, else the service update for service.
+func selfNetworkInUseText(namespace, service string) string {
+	const head = "The " + ingress.SelfNetworkName + " network stays while TierPlan's service is on it. "
+	const tail = "; a later pass then removes the network."
+	if namespace != "" || service == "" {
+		return head + "Take the " + ingress.SelfNetworkName + " lines out of TierPlan's stack file and run docker stack deploy again" + tail
+	}
+	return head + "Run docker service update --network-rm " + ingress.SelfNetworkName + " " + service + " on a manager" + tail
+}
+
 // selfHostnameOKText is the hostname item's sentence when the name is free.
 func selfHostnameOKText(host, domain string) string {
 	return host + " is free and under " + domain + "."

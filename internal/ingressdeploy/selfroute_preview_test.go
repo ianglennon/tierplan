@@ -452,6 +452,57 @@ func TestPreviewSelfRouteOff(t *testing.T) {
 			t.Errorf("network message = %q, want %q", got, want)
 		}
 	})
+	// 28-UAT step 7 and tear-down: on a swarm the switch-off keeps tierplan-self while TierPlan's own service is on it (A-06),
+	// so the preview says so, and how to take it off, rather than that it is removed.
+	t.Run("TierPlan's service on the network keeps it", func(t *testing.T) {
+		r, facts, k, dom := newSelfRouteRig(t, selfRigOptions{})
+		k.set(func(k *selfRouteKnobs) { k.http01 = false })
+		facts.setAttached(true)
+		claimSelfRoute(t, r, dom)
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		want := "The tierplan-self network stays while TierPlan's service is on it. Take the tierplan-self lines out of " +
+			"TierPlan's stack file and run docker stack deploy again; a later pass then removes the network."
+		if got := pv.Items[1].Message; got != want {
+			t.Errorf("network message = %q, want %q", got, want)
+		}
+		if pv.Items[1].State != ingressdeploy.SelfItemOK {
+			t.Errorf("network state = %q, want ok: the release goes ahead", pv.Items[1].State)
+		}
+	})
+	t.Run("TierPlan's service outside a stack keeps it", func(t *testing.T) {
+		r, facts, k, dom := newSelfRouteRig(t, selfRigOptions{})
+		k.set(func(k *selfRouteKnobs) { k.http01 = false })
+		facts.setAttached(true)
+		facts.mu.Lock()
+		facts.facts.StackNamespace = ""
+		service := facts.facts.ServiceName
+		facts.mu.Unlock()
+		claimSelfRoute(t, r, dom)
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		want := "The tierplan-self network stays while TierPlan's service is on it. Run docker service update --network-rm " +
+			"tierplan-self " + service + " on a manager; a later pass then removes the network."
+		if got := pv.Items[1].Message; got != want {
+			t.Errorf("network message = %q, want %q", got, want)
+		}
+	})
+	t.Run("the carve-out still says why when TierPlan is on it", func(t *testing.T) {
+		r, facts, _, dom := newSelfRouteRig(t, selfRigOptions{})
+		facts.setAttached(true)
+		claimSelfRoute(t, r, dom)
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		if got, want := pv.Items[1].Message, "The tierplan-self network stays, because the port-80 carve-out uses it."; got != want {
+			t.Errorf("network message = %q, want %q", got, want)
+		}
+	})
 	t.Run("never refused, even when nothing can be told", func(t *testing.T) {
 		r, _, k, dom := newSelfRouteRig(t, selfRigOptions{})
 		claimSelfRoute(t, r, dom)

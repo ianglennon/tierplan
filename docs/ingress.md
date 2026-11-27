@@ -411,8 +411,9 @@ hostname that the fold would delete, and ingress is on. See
 To switch the route off, press **Turn off own route**, or call `POST /api/env/{envId}/ingress/self/off/preview` and then
 `DELETE /api/env/{envId}/ingress/self`, which answers `202` with a job ID (`self_route_not_on` when the route is not on in that
 environment). The job's steps are `self_release` and `self_network`. The preview says whether `tierplan-self` is removed or
-stays because the carve-out uses it. A stack operation running in the environment does not refuse the switch-off: the job
-waits up to 30 seconds for the environment's operation lock, then releases the route without it.
+stays, because the carve-out uses it or because TierPlan's own swarm service is still on it. A stack operation running in
+the environment does not refuse the switch-off: the job waits up to 30 seconds for the environment's operation lock, then
+releases the route without it.
 
 On a swarm, the network stays while TierPlan's service is still on it. Take the stack-file lines out after switching the route
 off and deploy again, before any other deploy of the stack, so that the stack file never names a network that is gone; a later
