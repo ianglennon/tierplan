@@ -1110,6 +1110,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, err
 	}
+	// TierPlan's own route (D-12, D-14): the trust set a proxy verifies TierPlan against is the self-signed anchor and the
+	// chain served now, and the holder builds the reconciler's self input from it, the instance's URLs, TIERPLAN_LISTEN's port
+	// and whether TierPlan's own certificate renews over HTTP-01. The same URL reader feeds the deployer.
+	selfURLs := instanceSelfURLs(inst, cfg.Listen)
+	ownTr := newOwnTrust(rt.servedChain, tlsSrc.Leaf, tlsClock.Now)
+	selfRt.wire(selfInputs{trust: ownTr, urls: selfURLs, http01: ownHTTP01InUse(acmeWire.mgr), notify: ingressNotifier.Notify})
 	// One sampler hub serves every viewer of any container's stats (D-29 to D-31).
 	statsHub := api.NewStatsHub(aggregator, api.StatsHubOptions{Log: log})
 	registryStore := registry.NewStore(st, vlt, nil)
@@ -1154,7 +1160,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	// The ingress reconciler renders every environment's bundle over the same stores, notifier and clock. It is run in
 	// the background below; it starts nothing else and adds no route, table or file (D-11, D-20).
-	ingressRecon := wireIngressRecon(log, ingressStore, certStore, ingressNotifier, bo.acmeClock)
+	ingressRecon := wireIngressRecon(log, ingressStore, certStore, ingressNotifier, bo.acmeClock, selfRt)
 	// The ingress channel: the instance ID is minted before the hub serves, and the hub delivers the reconciler's bundles to
 	// the nodes that dial in. A removed environment closes its nodes' sessions through the one kicker the registry holds
 	// (D-23, D-29).
@@ -1304,8 +1310,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc, Hub: ingressHub, Broker: broker,
 		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
 		OwnHTTP01InUse: ownHTTP01InUse(acmeWire.mgr), Clock: bo.janitorClock,
-		Self:   selfReader(socketPath, selfID),
-		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead, ingressHostRead(aggregator)),
+		Self:     selfReader(socketPath, selfID),
+		SelfURLs: selfURLs,
+		Stacks:   api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead, ingressHostRead(aggregator)),
 		CurrentBundle: func(envID string) (string, bool) {
 			b, ok := ingressRecon.Current(envID)
 			return b.ID, ok

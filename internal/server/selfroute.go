@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
+	"github.com/ianglennon/tierplan/internal/ingressrender"
 )
 
 // selfReadyTimeout is how long the holder waits for the first observation of its claim's environment before it says it is
@@ -62,7 +64,40 @@ type selfRoute struct {
 	// mu serialises writers; readers load snap.
 	mu   sync.Mutex
 	snap atomic.Pointer[selfSnapshot]
+
+	// in is what SelfInput and the install hook read besides the snapshot, set once by wire. Nil until then: SelfInput
+	// answers nothing and the hook does nothing.
+	in atomic.Pointer[selfInputs]
+	// inMu guards http01, the cached answer of in.http01, and seen, the last SelfInput answer per environment.
+	inMu   sync.Mutex
+	http01 selfHTTP01
+	seen   map[string]string
 }
+
+// selfInputs are the server's facts SelfInput builds TierPlan's own route from, besides the claim and the observation.
+type selfInputs struct {
+	// trust is TierPlan's own trust set: the self-signed anchor and the served chain (D-14).
+	trust *ownTrust
+	// urls are the instance's own addresses and TIERPLAN_LISTEN's port, read on every call.
+	urls func() ingressdeploy.SelfURLs
+	// http01 is whether TierPlan's own certificate renews over HTTP-01 (acme.HTTP01InUse), so the carve-out is needed
+	// (D-12). Nil is never.
+	http01 func(ctx context.Context) (bool, error)
+	// notify wakes the reconciler of an environment (ingress.Notifier.Notify).
+	notify func(envID string)
+}
+
+// selfHTTP01 is the cached answer of selfInputs.http01.
+type selfHTTP01 struct {
+	have bool
+	val  bool
+	at   time.Time
+}
+
+// selfHTTP01TTL is how long SelfInput trusts its last answer of whether TierPlan renews over HTTP-01. SelfInput runs on
+// every 2 s poll of the reconciler, and the answer is a database read; a change of challenge type reaches the carve-out
+// within this long.
+const selfHTTP01TTL = 10 * time.Second
 
 // newSelfRoute builds the holder. now nil is time.Now and log nil is slog.Default(). It reads nothing until Reload.
 func newSelfRoute(systemClaim func(ctx context.Context) (ingressstore.SystemClaim, bool, error), now func() time.Time, log *slog.Logger) *selfRoute {
@@ -170,4 +205,143 @@ func (h *selfRoute) Ready() bool {
 		return true
 	}
 	return !h.now().Before(s.WaitSince.Add(selfReadyTimeout))
+}
+
+// wire gives the holder the facts SelfInput and the install hook read. The server calls it once, after the ACME manager
+// exists and before the reconciler runs.
+func (h *selfRoute) wire(in selfInputs) {
+	h.in.Store(&in)
+}
+
+// SelfInput is ingressrecon.Deps.Self (D-12, D-14): TierPlan's own route and trust for the one environment TierPlan's
+// claim names, or with no claim the one TierPlan runs in when its own certificate renews over HTTP-01 (the carve-out). The
+// host is the claim's (empty for the carve-out alone), the backend and attachment the observation's, the port
+// TIERPLAN_LISTEN's, the server name the public URL's host else the agent URL's (Pitfall 10), and the trust and the version
+// ownTrust's, so the version moves whenever the trust does. Every other environment, an instance with neither URL, an
+// unknown listen port and an environment with no claim and no carve-out need answer ok false: their bundles carry no self
+// input at all.
+//
+// A change of anything but the trust (an observation, a URL, the challenge type) does not move the version, so SelfInput
+// wakes the reconciler of the environment itself when its answer differs from the one before: the reconciler calls it for
+// every environment on every poll, so the change is rendered within one poll. A nil holder answers nothing.
+func (h *selfRoute) SelfInput(ctx context.Context, envID string) (ingressrender.SelfInput, int64, bool) {
+	if h == nil {
+		return ingressrender.SelfInput{}, 0, false
+	}
+	in := h.in.Load()
+	if in == nil {
+		return ingressrender.SelfInput{}, 0, false
+	}
+	out, ver, ok := h.selfInput(ctx, in, envID)
+	h.remember(in, envID, out, ok)
+	return out, ver, ok
+}
+
+func (h *selfRoute) selfInput(ctx context.Context, in *selfInputs, envID string) (ingressrender.SelfInput, int64, bool) {
+	s := h.snap.Load()
+	if envID == "" || h.selfEnv(s) != envID {
+		return ingressrender.SelfInput{}, 0, false
+	}
+	urls := in.urls()
+	pub, agent := hostOf(urls.PublicURL), hostOf(urls.AgentURL)
+	serverName := pub
+	if serverName == "" {
+		serverName = agent
+	}
+	if serverName == "" || urls.ListenPort <= 0 {
+		return ingressrender.SelfInput{}, 0, false
+	}
+	var acmeHosts []string
+	if s.Attached && h.http01InUse(ctx, in) {
+		acmeHosts = selfACMEHosts(pub, agent)
+	}
+	if !s.Claimed && len(acmeHosts) == 0 {
+		return ingressrender.SelfInput{}, 0, false
+	}
+	trust, ver := in.trust.PEM()
+	out := ingressrender.SelfInput{
+		BackendHost: s.Backend, BackendPort: urls.ListenPort, ServerName: serverName,
+		TrustPEM: trust, ACMEHosts: acmeHosts, Attached: s.Attached,
+	}
+	if s.Claimed {
+		out.Host = s.Host
+	}
+	return out, ver, true
+}
+
+// selfEnv is the environment TierPlan's own route or carve-out can be in: the claim's while one exists, else the one the
+// observation says TierPlan runs in, else none.
+func (h *selfRoute) selfEnv(s *selfSnapshot) string {
+	switch {
+	case s.Claimed:
+		return s.EnvID
+	case s.HasObs && s.Obs.Kind != "":
+		return s.Obs.EnvID
+	}
+	return ""
+}
+
+// selfACMEHosts are the public and agent URL hosts, once each, leaving out an empty one.
+func selfACMEHosts(hosts ...string) []string {
+	var out []string
+	for _, x := range hosts {
+		if x != "" && !slices.Contains(out, x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// http01InUse is in.http01's answer, read at most once per selfHTTP01TTL. A read that fails keeps the last answer (false
+// before the first), so a passing database error neither adds nor drops the carve-out.
+func (h *selfRoute) http01InUse(ctx context.Context, in *selfInputs) bool {
+	if in.http01 == nil {
+		return false
+	}
+	now := h.now()
+	h.inMu.Lock()
+	c := h.http01
+	h.inMu.Unlock()
+	if c.have && now.Sub(c.at) < selfHTTP01TTL && !now.Before(c.at) {
+		return c.val
+	}
+	v, err := in.http01(ctx)
+	if err != nil {
+		h.log.Debug("could not read whether TierPlan's own certificate renews over HTTP-01; the carve-out keeps its last answer", "error", err)
+		h.inMu.Lock()
+		v = h.http01.val
+		h.inMu.Unlock()
+		return v
+	}
+	h.inMu.Lock()
+	h.http01 = selfHTTP01{have: true, val: v, at: now}
+	h.inMu.Unlock()
+	return v
+}
+
+// http01Cached is the last answer of in.http01, without reading it: the install hook runs where it must not block.
+func (h *selfRoute) http01Cached() bool {
+	h.inMu.Lock()
+	defer h.inMu.Unlock()
+	return h.http01.val
+}
+
+// remember records SelfInput's answer for the environment, the trust left out (its version is the reconciler's own
+// version), and wakes the environment's reconciler when it differs from the one recorded before. The first answer for an
+// environment is recorded quietly: whoever asked is rendering it.
+func (h *selfRoute) remember(in *selfInputs, envID string, out ingressrender.SelfInput, ok bool) {
+	key := ""
+	if ok {
+		key = fmt.Sprintf("%q|%q|%d|%q|%q|%t", out.Host, out.BackendHost, out.BackendPort, out.ServerName, strings.Join(out.ACMEHosts, ","), out.Attached)
+	}
+	h.inMu.Lock()
+	if h.seen == nil {
+		h.seen = map[string]string{}
+	}
+	prev, had := h.seen[envID]
+	h.seen[envID] = key
+	h.inMu.Unlock()
+	if had && prev != key && in.notify != nil {
+		in.notify(envID)
+	}
 }

@@ -247,3 +247,26 @@ func ownHTTP01InUse(mgr *acme.Manager) func(ctx context.Context) (bool, error) {
 		return acme.HTTP01InUse(st), nil
 	}
 }
+
+// selfURLSource is the part of the instance TierPlan's own route reads: its two URLs and whether each is fixed by its
+// environment variable (*instance.Instance).
+type selfURLSource interface {
+	PublicURL() string
+	AgentURL() string
+	Locked() bool
+	AgentURLLocked() bool
+}
+
+// instanceSelfURLs reads the instance's own addresses, their locks and TIERPLAN_LISTEN's port, for the deployer's
+// Deps.SelfURLs and the self-route holder (D-07). The URLs are read on every call, so a settings change applies at once;
+// the port is fixed for the life of the process.
+func instanceSelfURLs(inst selfURLSource, listen string) func() ingressdeploy.SelfURLs {
+	port := listenPort(listen)
+	return func() ingressdeploy.SelfURLs {
+		return ingressdeploy.SelfURLs{
+			PublicURL: inst.PublicURL(), AgentURL: inst.AgentURL(),
+			PublicLocked: inst.Locked(), AgentLocked: inst.AgentURLLocked(),
+			ListenPort: port,
+		}
+	}
+}
