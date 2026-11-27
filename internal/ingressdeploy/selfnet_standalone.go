@@ -45,9 +45,15 @@ func (s *Service) selfConnectable(sp *selfPass) bool {
 	return s.d.SelfConnect != nil && sp.place.Here == SelfHereYes && sp.place.Kind == SelfKindStandalone && sp.place.ContainerID != ""
 }
 
+// selfDisconnectable is whether TierPlan can take its own container off the self network on this host.
+func (s *Service) selfDisconnectable(sp *selfPass) bool {
+	return s.d.SelfDisconnect != nil && sp.place.Here == SelfHereYes && sp.place.Kind == SelfKindStandalone
+}
+
 // standaloneSelfWork is whether the self network of a standalone host has a write waiting that the proxy's plan does not
 // already bring: it is wanted and missing, or wanted and TierPlan's container (a recreated one, after an upgrade) is not on
-// it while TierPlan can connect itself.
+// it while TierPlan can connect itself; or TierPlan's own bridge is there and not wanted, and TierPlan is not stuck on it
+// (on it with no way to disconnect itself), so it is to be taken down.
 func (s *Service) standaloneSelfWork(sp *selfPass, l standaloneLive) bool {
 	if !sp.known || l.selfForeign {
 		return false
@@ -55,7 +61,7 @@ func (s *Service) standaloneSelfWork(sp *selfPass, l standaloneLive) bool {
 	if sp.wanted {
 		return l.self == nil || (s.selfConnectable(sp) && !sp.place.Attached)
 	}
-	return false
+	return l.self != nil && (!sp.place.Attached || s.selfDisconnectable(sp))
 }
 
 // ensureStandaloneSelfNetwork is the self network step of a standalone pass (D-04), under the operation lock and before the
@@ -64,7 +70,8 @@ func (s *Service) standaloneSelfWork(sp *selfPass, l standaloneLive) bool {
 // host's pools under the address-space lock when TierPlan plans them, else the engine's choice. Then, when wanted, TierPlan's
 // own container is connected to it under SelfBackendAlias unless it is on it already, and each connect is audited as
 // ingress.self_network_attached (D-18). A connect that fails is logged and tried again on the next pass: it changes nothing.
-// c is the host's client, inside one write.
+// When not wanted, TierPlan's container is taken off it through SelfDisconnect; removeStandaloneSelf removes the bridge once
+// the proxy is off it too. c is the host's client, inside one write.
 func (s *Service) ensureStandaloneSelfNetwork(ctx context.Context, c *dockerx.Client, sp *selfPass, l standaloneLive) (selfNet, error) {
 	if l.selfForeign {
 		return selfNet{foreign: true}, nil
@@ -84,10 +91,57 @@ func (s *Service) ensureStandaloneSelfNetwork(ctx context.Context, c *dockerx.Cl
 		}
 		net.id = id
 	}
-	if sp.wanted && net.id != "" {
+	switch {
+	case sp.wanted && net.id != "":
 		s.connectSelf(ctx, sp, net.id)
+	case !sp.wanted && net.id != "" && sp.place.Attached:
+		net.keptInUse = !s.disconnectSelf(ctx, sp, net.id)
 	}
 	return net, nil
+}
+
+// disconnectSelf takes TierPlan's own container off the self network, which is no longer wanted (D-02), and says whether it
+// is off. A host on which TierPlan cannot disconnect itself, or an engine that refuses, keeps the network in use; the next
+// pass tries again.
+func (s *Service) disconnectSelf(ctx context.Context, sp *selfPass, networkID string) bool {
+	if !s.selfDisconnectable(sp) {
+		return false
+	}
+	if err := s.d.SelfDisconnect(ctx, networkID); err != nil {
+		s.log().Warn("the ingress ensure loop could not take TierPlan's own container off "+ingress.SelfNetworkName+"; the next pass tries again",
+			"environment", sp.info.ID, "error", err)
+		return false
+	}
+	sp.place.Attached = false
+	s.log().Info("the ingress ensure loop took TierPlan's own container off "+ingress.SelfNetworkName+": it is no longer needed", "environment", sp.info.ID)
+	return true
+}
+
+// removeStandaloneSelf removes TierPlan's own bridge from a standalone host once it is not wanted, TierPlan's container is
+// off it and the proxy is too (proxyOff: the proxy as read is not on it, or this pass brought it up without it), so nothing
+// of TierPlan's is left behind (D-02). An engine that answers the network is still in use keeps it (KeptInUse) and is never
+// a failed pass; the next pass tries again. The caller holds the operation lock.
+func (s *Service) removeStandaloneSelf(ctx context.Context, sp *selfPass, proxyOff bool) error {
+	if !sp.known || sp.wanted || sp.net.id == "" || sp.net.foreign || sp.net.keptInUse {
+		return nil
+	}
+	if sp.place.Attached || !proxyOff {
+		sp.net.keptInUse = sp.place.Attached
+		return nil
+	}
+	info := sp.info
+	err := s.d.Engine.WriteOnNode(ctx, info.ID, info.Nodes[0].AgentID, func(c *dockerx.Client) error {
+		return c.NetworkRemove(ctx, sp.net.id)
+	})
+	switch {
+	case err == nil, dockerx.IsNotFound(err):
+		sp.net.id = ""
+		return nil
+	case dockerx.IsNetworkInUse(err):
+		sp.net.keptInUse = true
+		return nil
+	}
+	return fmt.Errorf("remove the self network: %w", err)
 }
 
 // createSelfBridge makes the self bridge on a standalone host and returns its ID.

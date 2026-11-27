@@ -125,6 +125,10 @@ func (s *Service) ensureStandalonePass(ctx context.Context, envID string, state 
 	}
 	if !plan.Up {
 		s.forgetOutstanding(envID)
+		if err := s.removeStandaloneSelf(ctx, sp, !l.proxyOnSelf); err != nil {
+			s.log().Warn("the ingress ensure loop could not remove TierPlan's own network from a standalone host", "environment", envID, "error", err)
+			return EnsureWriteFailed, true
+		}
 		return s.standaloneQuietClass(ctx, envID, l), true
 	}
 	if !plan.Token {
@@ -151,6 +155,11 @@ func (s *Service) ensureStandalonePass(ctx context.Context, envID string, state 
 	}
 	if len(refs) > 0 {
 		return s.downShadowed(ctx, envID, info, refs), true
+	}
+	// The proxy is up without the self network when it is not wanted, so TierPlan's own bridge can go now (D-02).
+	if err := s.removeStandaloneSelf(ctx, sp, !sp.net.attach); err != nil {
+		s.log().Warn("the ingress ensure loop could not remove TierPlan's own network from a standalone host", "environment", envID, "error", err)
+		return EnsureWriteFailed, true
 	}
 	return EnsureOK, true
 }

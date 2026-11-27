@@ -31,9 +31,9 @@ const (
 	// standaloneSelfNetworkKey is the project's key of TierPlan's self network, which the project names as external: the
 	// ensure loop makes it and removes it, never the Compose SDK.
 	standaloneSelfNetworkKey = "self"
-	standaloneVolumeKey  = "cache"
-	standaloneSecretKey  = "token"
-	standaloneSecretEnv  = "TIERPLAN_SECRET_token" //nolint:gosec // G101: the name of a variable, not a credential
+	standaloneVolumeKey      = "cache"
+	standaloneSecretKey      = "token"
+	standaloneSecretEnv      = "TIERPLAN_SECRET_token" //nolint:gosec // G101: the name of a variable, not a credential
 )
 
 // StandaloneToken is the join token a standalone proxy is created with.
