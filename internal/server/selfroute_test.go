@@ -6,10 +6,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -165,5 +168,235 @@ func TestHolderFeedsTheRouter(t *testing.T) {
 	code, ip = throughRoute(t, router)
 	if code != http.StatusOK || ip != "203.0.113.7" {
 		t.Fatalf("after the observation: status %d client %q, want 200 and the forwarded 203.0.113.7", code, ip)
+	}
+}
+
+// wantSelfPrefixes is 10.9.0.0/24 without its gateway 10.9.0.1: eight prefixes in address order.
+var wantSelfPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("10.9.0.0/32"), netip.MustParsePrefix("10.9.0.2/31"), netip.MustParsePrefix("10.9.0.4/30"),
+	netip.MustParsePrefix("10.9.0.8/29"), netip.MustParsePrefix("10.9.0.16/28"), netip.MustParsePrefix("10.9.0.32/27"),
+	netip.MustParsePrefix("10.9.0.64/26"), netip.MustParsePrefix("10.9.0.128/25"),
+}
+
+func TestHolderTrustedPrefixesFollowTheObservation(t *testing.T) {
+	reloaded := func(t *testing.T) *selfRoute {
+		t.Helper()
+		h, _, _ := newHolderRig(t, true, nil)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	t.Run("attached: the subnet without its gateway", func(t *testing.T) {
+		h := reloaded(t)
+		h.Observe(attachedObs(holderEnv))
+		got := h.TrustedPrefixes()
+		if !slices.Equal(got, wantSelfPrefixes) {
+			t.Fatalf("prefixes = %v, want %v", got, wantSelfPrefixes)
+		}
+		for _, p := range got {
+			if p.Contains(netip.MustParseAddr("10.9.0.1")) {
+				t.Fatalf("prefix %v holds the gateway", p)
+			}
+		}
+	})
+	t.Run("not attached: none", func(t *testing.T) {
+		h := reloaded(t)
+		h.Observe(attachedObs(holderEnv))
+		o := attachedObs(holderEnv)
+		o.Attached = false
+		h.Observe(o)
+		if got := h.TrustedPrefixes(); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none once TierPlan is off the network", got)
+		}
+	})
+	t.Run("foreign: none", func(t *testing.T) {
+		h := reloaded(t)
+		o := attachedObs(holderEnv)
+		o.Foreign, o.Exists, o.Attached = true, false, false
+		h.Observe(o)
+		if got := h.TrustedPrefixes(); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none for a foreign network", got)
+		}
+		// Even an observation that claimed Attached on a foreign network trusts nothing.
+		o.Attached, o.Exists = true, true
+		h.Observe(o)
+		if got := h.TrustedPrefixes(); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none for a foreign network said to be attached", got)
+		}
+	})
+	t.Run("another environment changes nothing (T-28-50)", func(t *testing.T) {
+		h := reloaded(t)
+		other := attachedObs("env-2")
+		other.Subnet, other.Gateway = netip.MustParsePrefix("10.66.0.0/24"), netip.MustParseAddr("10.66.0.1")
+		h.Observe(other)
+		if got := h.TrustedPrefixes(); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none: env-2 is not the claim's environment", got)
+		}
+		h.Observe(attachedObs(holderEnv))
+		h.Observe(other)
+		if got := h.TrustedPrefixes(); !slices.Equal(got, wantSelfPrefixes) {
+			t.Fatalf("prefixes = %v, want env-1's %v unchanged by env-2", got, wantSelfPrefixes)
+		}
+		if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin}) {
+			t.Fatalf("origins = %q, want only the claim's", got)
+		}
+	})
+	t.Run("an ingress subnet overlapping the subnet: none", func(t *testing.T) {
+		h := reloaded(t)
+		o := attachedObs(holderEnv)
+		o.IngressSubnets = []netip.Prefix{netip.MustParsePrefix("10.9.0.0/16")}
+		h.Observe(o)
+		if got := h.TrustedPrefixes(); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none when the ingress overlay overlaps", got)
+		}
+	})
+	t.Run("a bridge gateway inside the subnet is carved out", func(t *testing.T) {
+		h := reloaded(t)
+		o := attachedObs(holderEnv)
+		o.BridgeGateways = []netip.Addr{netip.MustParseAddr("10.9.0.200")}
+		h.Observe(o)
+		for _, p := range h.TrustedPrefixes() {
+			if p.Contains(netip.MustParseAddr("10.9.0.200")) {
+				t.Fatalf("prefix %v holds the bridge gateway", p)
+			}
+		}
+	})
+	t.Run("a claim moved to another environment drops the old network", func(t *testing.T) {
+		h, src, _ := newHolderRig(t, true, nil)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		h.Observe(attachedObs(holderEnv))
+		src.set(ingressstore.SystemClaim{EnvID: "env-2", Hostname: holderHost, Service: "tierplan", Port: 7480}, true)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.TrustedPrefixes(); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none: env-1 is no longer the claim's environment", got)
+		}
+	})
+	t.Run("no claim: the environment TierPlan runs in, for the carve-out", func(t *testing.T) {
+		h, _, _ := newHolderRig(t, false, nil)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		notHere := attachedObs("env-2")
+		notHere.Kind = ""
+		h.Observe(notHere)
+		if got := h.TrustedPrefixes(); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none from an environment TierPlan does not run in", got)
+		}
+		h.Observe(attachedObs(holderEnv))
+		if got := h.TrustedPrefixes(); !slices.Equal(got, wantSelfPrefixes) {
+			t.Fatalf("prefixes = %v, want %v from TierPlan's own environment", got, wantSelfPrefixes)
+		}
+		h.Observe(notHere)
+		if got := h.TrustedPrefixes(); !slices.Equal(got, wantSelfPrefixes) {
+			t.Fatalf("prefixes = %v, want TierPlan's own unchanged by env-2", got)
+		}
+		if got := h.ExtraOrigins(); len(got) != 0 {
+			t.Fatalf("origins = %q, want none without a claim", got)
+		}
+	})
+}
+
+func TestHolderOriginsFollowTheClaim(t *testing.T) {
+	h, src, _ := newHolderRig(t, false, nil)
+	if got := h.ExtraOrigins(); len(got) != 0 {
+		t.Fatalf("before Reload: origins = %q, want none", got)
+	}
+	src.set(ingressstore.SystemClaim{EnvID: holderEnv, Hostname: "TP.Apps.Example.Org.", Service: "tierplan", Port: 7480}, true)
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin}) {
+		t.Fatalf("with the claim: origins = %q, want [%q]", got, holderOrigin)
+	}
+	// A read that fails keeps what the holder knew.
+	src.fail(errors.New("database is locked"))
+	if err := h.Reload(context.Background()); err == nil {
+		t.Fatal("Reload with a failing read: want the error")
+	}
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin}) {
+		t.Fatalf("after a failed read: origins = %q, want [%q] kept", got, holderOrigin)
+	}
+	src.set(ingressstore.SystemClaim{}, false)
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.ExtraOrigins(); len(got) != 0 {
+		t.Fatalf("after the claim is cleared: origins = %q, want none", got)
+	}
+	// An observation never adds an origin: not of TierPlan's environment, not of another, whatever it carries.
+	h.Observe(attachedObs(holderEnv))
+	h.Observe(attachedObs("env-2"))
+	if got := h.ExtraOrigins(); len(got) != 0 {
+		t.Fatalf("after observations with no claim: origins = %q, want none", got)
+	}
+	// The slice handed out is the caller's: changing it changes nothing.
+	src.set(ingressstore.SystemClaim{EnvID: holderEnv, Hostname: holderHost, Service: "tierplan", Port: 7480}, true)
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.ExtraOrigins()[0] = "https://evil.example"
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin}) {
+		t.Fatalf("after the caller changed its copy: origins = %q, want [%q]", got, holderOrigin)
+	}
+}
+
+// logCapture keeps every record a slog handler is given.
+type logCapture struct {
+	mu   sync.Mutex
+	recs []slog.Record
+}
+
+func (c *logCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (c *logCapture) Handle(_ context.Context, r slog.Record) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recs = append(c.recs, r.Clone())
+	return nil
+}
+func (c *logCapture) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *logCapture) WithGroup(string) slog.Handler      { return c }
+
+// trustChanges are the info lines of trusted-set changes, as "before->after" counts.
+func (c *logCapture) trustChanges() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, r := range c.recs {
+		if r.Level != slog.LevelInfo || r.Message != "the trusted proxies on TierPlan's own network changed" {
+			continue
+		}
+		var before, after int64 = -1, -1
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "prefixes_before":
+				before = a.Value.Int64()
+			case "prefixes_after":
+				after = a.Value.Int64()
+			}
+			return true
+		})
+		out = append(out, fmt.Sprintf("%d->%d", before, after))
+	}
+	return out
+}
+
+func TestHolderLogsTrustedSetChanges(t *testing.T) {
+	logs := &logCapture{}
+	h, _, _ := newHolderRig(t, true, slog.New(logs))
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.Observe(attachedObs(holderEnv))
+	h.Observe(attachedObs(holderEnv)) // the same set again: no line
+	o := attachedObs(holderEnv)
+	o.Attached = false
+	h.Observe(o)
+	if got, want := logs.trustChanges(), []string{"0->8", "8->0"}; !slices.Equal(got, want) {
+		t.Fatalf("trusted-set log lines = %v, want %v", got, want)
 	}
 }
