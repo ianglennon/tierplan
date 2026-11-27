@@ -135,7 +135,7 @@ func (s *Service) removeStandaloneSelf(ctx context.Context, sp *selfPass, proxyO
 	})
 	switch {
 	case err == nil, dockerx.IsNotFound(err):
-		sp.net.id = ""
+		sp.net.id, sp.net.removed = "", true
 		return nil
 	case dockerx.IsNetworkInUse(err):
 		sp.net.keptInUse = true

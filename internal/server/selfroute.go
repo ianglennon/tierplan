@@ -138,6 +138,18 @@ func (h *selfRoute) Reload(ctx context.Context) error {
 	return nil
 }
 
+// claimChanged is the claim store's change hook (WR-01): a set or clear of the system claim reloads the holder at once, so
+// the route's origin and the claim's environment follow the stored claim even when no ensure pass publishes an observation
+// (TierPlan's environment unreachable, or ingress switched off part-way). A read that fails is logged and keeps what the
+// holder knew; the next observation reads it again.
+func (h *selfRoute) claimChanged() {
+	ctx, cancel := context.WithTimeout(context.Background(), selfReloadTimeout)
+	defer cancel()
+	if err := h.Reload(ctx); err != nil {
+		h.log.Warn("the system claim could not be read after it changed; TierPlan's own route keeps what it knew until the next pass", "error", err)
+	}
+}
+
 // Observe takes an observation the ingress Service published. It reads the claim first, since a switch on or off wakes the
 // ensure loop, then keeps the observation only when it is of TierPlan's own environment: the claim's while one exists,
 // else the one TierPlan runs in (the carve-out case), as the observation's Kind says.

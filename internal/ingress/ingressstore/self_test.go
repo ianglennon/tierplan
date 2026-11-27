@@ -443,3 +443,39 @@ func TestStackCannotTakeTheSystemHostname(t *testing.T) {
 		t.Fatalf("%d route rows, want 1", n)
 	}
 }
+
+// TestSystemClaimChangeHookRunsAfterCommit (WR-01): the change hook runs once after each set or clear commits, and sees the
+// change already stored; a refused set, a rolled-back one and a clear with nothing to clear do not run it.
+func TestSystemClaimChangeHookRunsAfterCommit(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "e1", "One")
+	d1 := registerDomain(t, s, "e1", "apps.example.org")
+	var seen []bool
+	s.OnSystemClaimChanged(func() {
+		_, ok, err := s.SystemClaim(ctx)
+		if err != nil {
+			t.Errorf("SystemClaim in the change hook: %v", err)
+		}
+		seen = append(seen, ok)
+	})
+	boom := errors.New("audit write failed")
+	if err := s.SetSystemClaim(ctx, selfClaim("e1", selfHost, d1.ID), func(context.Context, *sql.Tx, SystemClaim) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("SetSystemClaim with a failing hook = %v", err)
+	}
+	if err := s.SetSystemClaim(ctx, selfClaim("e1", selfHost, d1.ID), nil); err != nil {
+		t.Fatalf("SetSystemClaim: %v", err)
+	}
+	if err := s.SetSystemClaim(ctx, selfClaim("e1", "other.apps.example.org", d1.ID), nil); !errors.Is(err, ErrSystemClaimHeld) {
+		t.Fatalf("second SetSystemClaim = %v, want ErrSystemClaimHeld", err)
+	}
+	if _, ok, err := s.ClearSystemClaim(ctx, "e1", "u1", fixedNow, nil); err != nil || !ok {
+		t.Fatalf("ClearSystemClaim = ok %v, err %v", ok, err)
+	}
+	if _, ok, err := s.ClearSystemClaim(ctx, "e1", "u1", fixedNow, nil); err != nil || ok {
+		t.Fatalf("second ClearSystemClaim = ok %v, err %v; want nothing cleared", ok, err)
+	}
+	if len(seen) != 2 || !seen[0] || seen[1] {
+		t.Fatalf("the change hook saw %v, want [true false]: once after the set, once after the clear", seen)
+	}
+}

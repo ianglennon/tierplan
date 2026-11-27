@@ -614,3 +614,22 @@ func TestHolderReadyGate(t *testing.T) {
 		}
 	})
 }
+
+// TestHolderClaimChangedReloads (WR-01): the store's change hook reloads the holder at once, without waiting for an ensure
+// pass to publish an observation, so the route's origin goes with the claim even while TierPlan's environment is unreachable.
+func TestHolderClaimChangedReloads(t *testing.T) {
+	h, src, _ := newHolderRig(t, true, nil)
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	src.set(ingressstore.SystemClaim{}, false)
+	h.claimChanged()
+	if got := h.ExtraOrigins(); len(got) != 0 {
+		t.Fatalf("after the claim went: origins = %q, want none", got)
+	}
+	src.fail(errors.New("database is locked"))
+	h.claimChanged() // a read that fails keeps what the holder knew, and is only logged
+	if got := h.ExtraOrigins(); len(got) != 0 {
+		t.Fatalf("after a failed reload: origins = %q, want none", got)
+	}
+}

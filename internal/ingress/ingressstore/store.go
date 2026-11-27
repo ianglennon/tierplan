@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -86,6 +87,22 @@ type Store struct {
 	now        func() time.Time
 	notifier   *ingress.Notifier
 	agentHosts func() []string
+	// claimChanged is called after a set or a clear of the system claim commits (OnSystemClaimChanged); nil is none.
+	claimChanged atomic.Pointer[func()]
+}
+
+// OnSystemClaimChanged registers f, replacing any earlier one, to be called after every SetSystemClaim or ClearSystemClaim
+// that commits a change, on the caller's goroutine, outside the transaction (WR-01). The server reloads its self-route
+// holder from it, so the origin and trusted-proxy sets follow the claim without waiting for an ensure pass.
+func (s *Store) OnSystemClaimChanged(f func()) {
+	s.claimChanged.Store(&f)
+}
+
+// systemClaimChanged calls the registered change hook, if any.
+func (s *Store) systemClaimChanged() {
+	if f := s.claimChanged.Load(); f != nil && *f != nil {
+		(*f)()
+	}
 }
 
 // New returns a Store.

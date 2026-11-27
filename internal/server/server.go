@@ -955,6 +955,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		selfNow = bo.janitorClock.Now
 	}
 	selfRt := newSelfRoute(ingressStore.SystemClaim, selfNow, log)
+	ingressStore.OnSystemClaimChanged(selfRt.claimChanged)
 	if err := selfRt.Reload(ctx); err != nil {
 		log.Warn("the system claim could not be read at start; TierPlan's own route is not trusted until the next ensure pass", "error", err)
 	}

@@ -104,7 +104,7 @@ func (s *Store) SetSystemClaim(ctx context.Context, in SystemClaimInput, hook Sy
 		now = s.now()
 	}
 	now = now.UTC()
-	return s.write(ctx, in.EnvID, in.Actor, now, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+	err := s.write(ctx, in.EnvID, in.Actor, now, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
 		if _, err := q.GetSystemClaim(ctx); err == nil {
 			return false, ErrSystemClaimHeld
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -152,6 +152,10 @@ func (s *Store) SetSystemClaim(ctx context.Context, in SystemClaimInput, hook Sy
 		}
 		return true, nil
 	})
+	if err == nil {
+		s.systemClaimChanged()
+	}
+	return err
 }
 
 // systemInsertError names why the hostname row was refused: a second system claim (the partial unique
@@ -215,6 +219,9 @@ func (s *Store) ClearSystemClaim(ctx context.Context, envID, actor string, now t
 	})
 	if err != nil {
 		return SystemClaim{}, false, err
+	}
+	if ok {
+		s.systemClaimChanged()
 	}
 	return cleared, ok, nil
 }

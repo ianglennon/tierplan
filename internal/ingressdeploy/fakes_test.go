@@ -6,9 +6,11 @@ package ingressdeploy_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,9 +64,15 @@ func newGate() *gate { return &gate{entered: make(chan struct{}), proceed: make(
 type fakeEngine struct {
 	cli  *dockerx.Client
 	gate *gate
+	// failReadAfterWrite makes the first ClusterRead after each write fail, as a manager that stops answering between a
+	// pass's write and its read does.
+	failReadAfterWrite, failNextRead atomic.Bool
 }
 
 func (e *fakeEngine) WriteOnManager(ctx context.Context, _ string, fn func(*dockerx.Client) error) error {
+	if e.failReadAfterWrite.Load() {
+		defer e.failNextRead.Store(true)
+	}
 	if g := e.gate; g != nil {
 		g.once.Do(func() {
 			close(g.entered)
@@ -82,6 +90,9 @@ func (e *fakeEngine) WriteOnNode(_ context.Context, _, _ string, fn func(*docker
 }
 
 func (e *fakeEngine) ClusterRead(_ context.Context, _ string, fn func(*dockerx.Client) error) error {
+	if e.failNextRead.CompareAndSwap(true, false) {
+		return errors.New("the manager did not answer")
+	}
 	return fn(e.cli)
 }
 

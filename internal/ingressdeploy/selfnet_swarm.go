@@ -48,6 +48,8 @@ type selfNet struct {
 	// keptInUse is TierPlan's own network left in place though not wanted: TierPlan is on it, or the engine refused its
 	// removal because something still is.
 	keptInUse bool
+	// removed is TierPlan's own network removed by this pass, so a read after it that fails still publishes it gone (WR-01).
+	removed bool
 }
 
 // selfPass is what one ensure pass knows of the self network before it reads the swarm.
@@ -153,7 +155,7 @@ func (s *Service) removeSelfNetwork(ctx context.Context, c *dockerx.Client, sp *
 	err := c.NetworkRemove(ctx, sp.net.id)
 	switch {
 	case err == nil, dockerx.IsNotFound(err):
-		sp.net.id = ""
+		sp.net.id, sp.net.removed = "", true
 		return nil
 	case dockerx.IsNetworkInUse(err):
 		sp.net.keptInUse = true
@@ -395,7 +397,14 @@ func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(fun
 	})
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not read TierPlan's own network", "environment", envID, "error", err)
-		return SelfObservation{}, false
+		if !sp.net.removed {
+			return SelfObservation{}, false
+		}
+		// This pass removed the network: its subnet is free for the engine to hand out again, so it must not stay trusted on
+		// the strength of the last observation. Only the removal is published; the rest waits for the next read.
+		gone := SelfObservation{EnvID: envID, Wanted: o.Wanted, Kind: o.Kind, Namespace: o.Namespace, BackendHost: o.BackendHost, Observed: true}
+		s.publishSelf(gone)
+		return gone, true
 	}
 	o.Attached = o.Exists && sp.place.Attached
 	o.KeptInUse = o.Exists && sp.known && !sp.wanted && (sp.place.Attached || sp.net.keptInUse)

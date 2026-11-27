@@ -500,3 +500,31 @@ func TestSelfNetworkForeignMembersAreReported(t *testing.T) {
 		}
 	})
 }
+
+// TestRemovedSelfNetworkIsNotTrustedAfterAFailedRead (WR-01): a pass that removes TierPlan's own network and then cannot read
+// the swarm publishes that the network is gone, so its subnet, which the swarm can hand to a user network, is not trusted.
+func TestRemovedSelfNetworkIsNotTrustedAfterAFailedRead(t *testing.T) {
+	r, _ := newSelfRig(t, selfRigOptions{})
+	r.claimSelf()
+	r.round()
+	if o, ok := r.svc.SelfObservationOf(r.envID); !ok || !o.Exists {
+		t.Fatalf("observation with the claim held = %+v, %v; want the network", o, ok)
+	}
+	r.unclaimSelf()
+	r.round() // the proxy drops the network
+	if _, ok := r.selfNetwork(); !ok {
+		t.Fatal("the self network went before the proxy dropped it")
+	}
+	r.eng.failReadAfterWrite.Store(true)
+	r.round() // the network goes, and the read after it fails
+	if _, ok := r.selfNetwork(); ok {
+		t.Fatal("the self network is still there")
+	}
+	o, ok := r.svc.SelfObservationOf(r.envID)
+	if !ok || o.Exists || o.Subnet.IsValid() || o.NetworkID != "" {
+		t.Fatalf("observation after the removal = %+v, %v; want the network gone", o, ok)
+	}
+	if p := ingress.SelfTrustedPrefixes(o.Facts()); len(p) != 0 {
+		t.Errorf("the observation still trusts %v", p)
+	}
+}
