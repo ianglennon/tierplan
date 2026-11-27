@@ -6,10 +6,12 @@ package api_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -303,4 +305,81 @@ func TestIngressStatusSelfRouteFromTheDeployer(t *testing.T) {
 		s.Refusal.Code != ingressdeploy.CodeSelfRouteNotHere || s.DirectAddress != selfRoutePublic {
 		t.Errorf("selfRoute = %+v, want here unknown with self_route_not_here", s)
 	}
+}
+
+// TestIngressPreviewNotices: the ingress switch-on and switch-off reviews carry the deployer's neutral notes (UI-SPEC S4): the
+// HTTP-01 carve-out on the switch-on when TierPlan runs here on the self network and its own certificate renews over HTTP-01,
+// and the release of TierPlan's own route on the switch-off while it is on. Neither carries a note otherwise.
+func TestIngressPreviewNotices(t *testing.T) {
+	t.Parallel()
+
+	t.Run("switch-on", func(t *testing.T) {
+		t.Parallel()
+		for _, http01 := range []bool{true, false} {
+			f := newDeployFixDeps(t, false, nil, func(_ *deployFix, d *ingressdeploy.Deps) {
+				d.SelfURLs = func() ingressdeploy.SelfURLs {
+					return ingressdeploy.SelfURLs{PublicURL: selfRoutePublic, ListenPort: 7480}
+				}
+				d.OwnHTTP01InUse = func(context.Context) (bool, error) { return http01, nil }
+				// TierPlan runs on this swarm as a service on the self network.
+				d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) {
+					return envs.SwarmMembership{Known: true, Member: true, ClusterID: "cluster-1", NodeID: "node-1"}, nil
+				}
+				d.Self = func(context.Context) (ingressdeploy.SelfFacts, error) {
+					return ingressdeploy.SelfFacts{
+						ContainerID: "c-self", ServiceName: "tierplan_tierplan", ServiceID: "svc-self", StackNamespace: "tierplan",
+						Networks: []string{ingress.SelfNetworkName}, Swarm: true,
+					}, nil
+				}
+			})
+			rec := f.credCall(t, f.adminA, http.MethodPost, "/api/env/"+f.envA+"/ingress/enable/preview", `{}`)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("enable preview: %d %s", rec.Code, rec.Body)
+			}
+			pv := decodeBody[struct {
+				Notice   string `json:"notice"`
+				Findings []struct {
+					Code, Severity string
+				} `json:"findings"`
+			}](t, rec)
+			for _, fd := range pv.Findings {
+				if fd.Severity != "error" && fd.Severity != "warning" {
+					t.Errorf("finding %+v has a severity outside the enum", fd)
+				}
+			}
+			switch {
+			case http01 && (!strings.Contains(pv.Notice, "HTTP-01") || !strings.Contains(pv.Notice, "tierplan.example.org")):
+				t.Errorf("notice = %q, want the carve-out naming tierplan.example.org", pv.Notice)
+			case !http01 && strings.Contains(rec.Body.String(), `"notice"`):
+				t.Errorf("without HTTP-01 the preview carries a notice: %s", rec.Body)
+			}
+		}
+	})
+
+	t.Run("switch-off", func(t *testing.T) {
+		t.Parallel()
+		f := newSelfRouteFix(t, nil)
+		path := "/api/env/" + f.envA + "/ingress/disable/preview"
+		rec := f.credCall(t, f.adminA, http.MethodPost, path, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("disable preview: %d %s", rec.Code, rec.Body)
+		}
+		if body := rec.Body.String(); strings.Contains(body, `"notice"`) || strings.Contains(body, `"selfRouteHost"`) {
+			t.Errorf("with the route off the preview carries a notice: %s", body)
+		}
+
+		f.claim(t)
+		rec = f.credCall(t, f.adminA, http.MethodPost, path, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("disable preview: %d %s", rec.Code, rec.Body)
+		}
+		pv := decodeBody[struct {
+			Notice        string `json:"notice"`
+			SelfRouteHost string `json:"selfRouteHost"`
+		}](t, rec)
+		want := "TierPlan's own route on " + selfRouteHost + " is released first. Direct access on " + selfRoutePublic + " keeps working."
+		if pv.Notice != want || pv.SelfRouteHost != selfRouteHost {
+			t.Errorf("notice = %q, host %q; want %q, %q", pv.Notice, pv.SelfRouteHost, want, selfRouteHost)
+		}
+	})
 }
