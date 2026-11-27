@@ -161,6 +161,21 @@ func (c *certSource) set(cert tls.Certificate, now time.Time) error {
 	return nil
 }
 
+// Leaf is the parsed leaf of the certificate the source holds now, nil when it holds none. It reads
+// the same atomic pointer a handshake does and takes no lock: the ACME installer calls its install
+// hooks with mu held, and a hook that asks for the leaf must not wait on that lock.
+func (c *certSource) Leaf() *x509.Certificate {
+	cert := c.cert.Load()
+	if cert == nil || len(cert.Certificate) == 0 {
+		return nil
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil
+	}
+	return leaf
+}
+
 // GetCertificate implements tls.Config.GetCertificate. The hello is not read:
 // one certificate serves every name.
 func (c *certSource) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
