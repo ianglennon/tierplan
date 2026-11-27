@@ -270,11 +270,13 @@ type SelfObservation struct {
 	Attached bool
 	// Kind is where TierPlan runs (SelfPlace.Kind), "" when it is not here or cannot be told.
 	Kind string
-	// BackendHost is the name the proxy reaches TierPlan by on the network: TierPlan's swarm service name.
+	// BackendHost is the name the proxy reaches TierPlan by on the network: TierPlan's swarm service name, or on a standalone
+	// host the alias TierPlan connects itself with (SelfBackendAlias).
 	BackendHost string
 	// Foreign is a network of the reserved name that is not TierPlan's.
 	Foreign bool
-	// KeptInUse is TierPlan's own network left in place, though not wanted, because TierPlan's service is still on it.
+	// KeptInUse is TierPlan's own network left in place, though not wanted, because TierPlan (its service, or on a standalone
+	// host its container) or something else is still on it.
 	KeptInUse bool
 	// Observed is true for every observation a pass made; the zero value is "no pass has read it yet".
 	Observed bool
@@ -307,12 +309,21 @@ func (s *Service) SelfObservationOf(envID string) (SelfObservation, bool) {
 // observeSelf reads the self network, the ingress networks and the node's bridges on a manager and publishes what it found. A
 // read that fails publishes nothing, so the last observation stands rather than one with a part missing.
 func (s *Service) observeSelf(ctx context.Context, sp *selfPass) {
+	s.observeSelfOn(ctx, sp, func(fn func(*dockerx.Client) error) error { return s.d.Engine.ClusterRead(ctx, sp.info.ID, fn) })
+}
+
+// observeSelfOn is observeSelf through read, which runs a read-only function on the engine that holds the self network: a
+// swarm's manager, or a standalone host's one engine. It returns whether it published.
+func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(func(*dockerx.Client) error) error) (SelfObservation, bool) {
 	envID := sp.info.ID
 	o := SelfObservation{EnvID: envID, Wanted: sp.known && sp.wanted, Kind: sp.place.Kind, Observed: true}
-	if sp.place.Kind == SelfKindSwarmService {
+	switch sp.place.Kind {
+	case SelfKindSwarmService:
 		o.BackendHost = sp.place.ServiceName
+	case SelfKindStandalone:
+		o.BackendHost = SelfBackendAlias
 	}
-	err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+	err := read(func(c *dockerx.Client) error {
 		o.Exists, o.NetworkID, o.Subnet, o.Gateway, o.Foreign = false, "", netip.Prefix{}, netip.Addr{}, false
 		o.IngressSubnets, o.BridgeGateways = nil, nil
 		rows, err := c.Networks(ctx)
@@ -358,11 +369,12 @@ func (s *Service) observeSelf(ctx context.Context, sp *selfPass) {
 	})
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not read TierPlan's own network", "environment", envID, "error", err)
-		return
+		return SelfObservation{}, false
 	}
 	o.Attached = o.Exists && sp.place.Attached
 	o.KeptInUse = o.Exists && sp.known && !sp.wanted && (sp.place.Attached || sp.net.keptInUse)
 	s.publishSelf(o)
+	return o, true
 }
 
 // firstIPAM is the first pool of a network with a valid subnet, and its gateway when the engine reports one.

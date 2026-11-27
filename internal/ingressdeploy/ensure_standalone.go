@@ -48,7 +48,19 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 	if !validIngressURL(s.url()) {
 		return EnsureURLUnset, true
 	}
-	l, plan, err := s.standaloneSurvey(ctx, info, state)
+	sp := s.selfPassOf(ctx, info)
+	class, record := s.ensureStandalonePass(ctx, envID, state, info, sp)
+	// Every pass that could read the host tells the server what the self network holds, whether or not it wrote (D-06).
+	if record && ctx.Err() == nil && class != EnsureUnreachable && class != EnsurePaused {
+		s.observeStandaloneSelf(ctx, sp)
+	}
+	return class, record
+}
+
+// ensureStandalonePass is the pass over a reachable standalone host whose ingress URL is usable. sp is what the pass knows
+// of the self network; the self network step runs under the lock before the proxy's project is built (D-04).
+func (s *Service) ensureStandalonePass(ctx context.Context, envID string, state ingressstore.DeployState, info EnvInfo, sp *selfPass) (string, bool) {
+	l, plan, err := s.standaloneSurvey(ctx, info, state, sp)
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not read a standalone host", "environment", envID, "error", err)
 		return EnsureUnreachable, true
@@ -58,7 +70,7 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 		s.log().Warn("the ingress ensure loop could not read a standalone host's containers", "environment", envID, "error", err)
 		return EnsureUnreachable, true
 	}
-	if !plan.Up && len(shadow) == 0 {
+	if !plan.Up && len(shadow) == 0 && !s.standaloneSelfWork(sp, l) {
 		return s.standaloneQuietClass(ctx, envID, l), true
 	}
 	release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
@@ -83,7 +95,7 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 	if state.Paused {
 		return s.observePaused(ctx, envID, state)
 	}
-	if l, plan, err = s.standaloneSurvey(ctx, info, state); err != nil {
+	if l, plan, err = s.standaloneSurvey(ctx, info, state, sp); err != nil {
 		s.log().Warn("the ingress ensure loop could not read a standalone host under the lock", "environment", envID, "error", err)
 		return EnsureUnreachable, true
 	}
@@ -97,6 +109,20 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 	if len(shadow) > 0 {
 		return s.downShadowed(ctx, envID, info, shadow), true
 	}
+	if s.standaloneSelfWork(sp, l) {
+		if err := s.d.Engine.WriteOnNode(ctx, envID, info.Nodes[0].AgentID, func(c *dockerx.Client) (err error) {
+			sp.net, err = s.ensureStandaloneSelfNetwork(ctx, c, sp, l)
+			return err
+		}); err != nil {
+			s.log().Warn("the ingress ensure loop could not put TierPlan's own network right on a standalone host", "environment", envID, "error", err)
+			return EnsureWriteFailed, true
+		}
+	} else {
+		sp.net = selfNet{attach: sp.standaloneAttach(l), foreign: l.selfForeign}
+		if l.self != nil {
+			sp.net.id = l.self.ID
+		}
+	}
 	if !plan.Up {
 		s.forgetOutstanding(envID)
 		return s.standaloneQuietClass(ctx, envID, l), true
@@ -105,7 +131,7 @@ func (s *Service) ensureStandalone(ctx context.Context, envID string, state ingr
 		s.forgetOutstanding(envID)
 	}
 	s.log().Info("the ingress ensure loop is putting a standalone proxy right", "environment", envID, "reason", plan.Reason, "token", plan.Token)
-	if err := s.redeployStandalone(ctx, envID, info, state, l, plan); err != nil {
+	if err := s.redeployStandalone(ctx, envID, info, state, l, plan, sp.net.attach); err != nil {
 		s.log().Warn("the ingress ensure loop could not put a standalone proxy right", "environment", envID, "reason", plan.Reason, "error", err)
 		// A failed up may still have made the network and started the proxy on it: a hit or an unreadable host takes it down.
 		refs, rerr := s.shadowRefs(ctx, info)
@@ -167,8 +193,9 @@ func (s *Service) downSystem(ctx context.Context, envID string, info EnvInfo) {
 	}
 }
 
-// standaloneSurvey reads the host and decides what it needs from what it holds and what the server knows.
-func (s *Service) standaloneSurvey(ctx context.Context, info EnvInfo, state ingressstore.DeployState) (standaloneLive, standalonePlan, error) {
+// standaloneSurvey reads the host and decides what it needs from what it holds and what the server knows. A proxy that is
+// not on the self network as sp wants it (D-04) is brought up again, with the attachment wanted.
+func (s *Service) standaloneSurvey(ctx context.Context, info EnvInfo, state ingressstore.DeployState, sp *selfPass) (standaloneLive, standalonePlan, error) {
 	l, err := s.readStandaloneLive(ctx, info)
 	if err != nil {
 		return l, standalonePlan{}, err
@@ -181,7 +208,11 @@ func (s *Service) standaloneSurvey(ctx context.Context, info EnvInfo, state ingr
 	if err != nil {
 		return l, standalonePlan{}, err
 	}
-	return l, planStandalone(l, IngressImage(s.d.ServerVersion), s.url(), strings.Join(s.pins(), ","), state.AccessLogs, enrolled, tok), nil
+	plan := planStandalone(l, IngressImage(s.d.ServerVersion), s.url(), strings.Join(s.pins(), ","), state.AccessLogs, enrolled, tok)
+	if !plan.Up && l.proxy != nil && l.proxyOnSelf != sp.standaloneAttach(l) {
+		plan = standalonePlan{Up: true, Token: !enrolled, Reason: "self_network"}
+	}
+	return l, plan, nil
 }
 
 // standaloneQuietClass is the class of a pass that has nothing to write: EnsureNotEnrolled when the proxy has run for
@@ -205,7 +236,7 @@ func (s *Service) standaloneQuietClass(ctx context.Context, envID string, l stan
 // redeployStandalone issues the token the plan asks for, then brings the system project up in a job and waits for it.
 // The caller holds the operation lock, which the job is named the holder of for as long as it runs. The engine's words
 // stay in the job; the error says only that the deploy did not succeed.
-func (s *Service) redeployStandalone(ctx context.Context, envID string, info EnvInfo, state ingressstore.DeployState, l standaloneLive, plan standalonePlan) error {
+func (s *Service) redeployStandalone(ctx context.Context, envID string, info EnvInfo, state ingressstore.DeployState, l standaloneLive, plan standalonePlan, selfNetwork bool) error {
 	if s.d.System == nil {
 		return errNoSystem
 	}
@@ -222,7 +253,7 @@ func (s *Service) redeployStandalone(ctx context.Context, envID string, info Env
 	}
 	project := StandaloneProject(StandaloneInput{
 		Image: IngressImage(s.d.ServerVersion), URL: s.url(), Pin: strings.Join(s.pins(), ","), AccessLog: state.AccessLogs,
-		Subnet: subnet, Token: tok,
+		Subnet: subnet, Token: tok, SelfNetwork: selfNetwork,
 	})
 	in := stackops.SystemDeployInput{
 		EnvID: envID, NodeID: info.Nodes[0].AgentID, Project: project, Network: standaloneNetworkKey,

@@ -30,6 +30,12 @@ type standaloneLive struct {
 	network *dockerx.NetworkRow
 	// volume is true when the host holds the cache volume and it is TierPlan's.
 	volume bool
+	// self is TierPlan's own self network (the name and the label pair) when the host holds it, nil otherwise; selfForeign
+	// is a network of that name that is not TierPlan's, which is never attached, adopted or removed.
+	self        *dockerx.NetworkRow
+	selfForeign bool
+	// proxyOnSelf is true when the proxy container is attached to the network named tierplan-self.
+	proxyOnSelf bool
 }
 
 // running is true when the proxy container is up or restarting: neither needs an up.
@@ -67,6 +73,11 @@ func (s *Service) readStandaloneLive(ctx context.Context, info EnvInfo) (standal
 				if t, err := time.Parse(time.RFC3339Nano, det.StartedAt); err == nil && t.Year() > 1 {
 					l.StartedAt = t.UTC()
 				}
+				for _, n := range det.Networks {
+					if n.Name == ingress.SelfNetworkName {
+						l.proxyOnSelf = true
+					}
+				}
 				for _, kv := range det.Env {
 					switch {
 					case kv == ingressbundle.EnvAccessLog+"="+accessLogOn:
@@ -84,9 +95,15 @@ func (s *Service) readStandaloneLive(ctx context.Context, info EnvInfo) (standal
 			return err
 		}
 		for i := range nets {
-			if ingress.OwnsNetwork(nets[i].Name, nets[i].Labels) {
-				l.network = &nets[i]
-				break
+			switch {
+			case ingress.OwnsNetwork(nets[i].Name, nets[i].Labels):
+				if l.network == nil {
+					l.network = &nets[i]
+				}
+			case ingress.OwnsSelfNetwork(nets[i].Name, nets[i].Labels):
+				l.self = &nets[i]
+			case nets[i].Name == ingress.SelfNetworkName:
+				l.selfForeign = true
 			}
 		}
 		vol, _, err := c.VolumeDetail(ctx, ingress.VolumeName)
@@ -144,7 +161,8 @@ type standalonePlan struct {
 	Up bool
 	// Token is true when the up needs a fresh join token: the proxy has to enrol.
 	Token bool
-	// Reason is a short word for the log: missing_container, missing_network, not_running, image, access_log, address or token.
+	// Reason is a short word for the log: missing_container, missing_network, not_running, image, access_log, address,
+	// token or self_network.
 	Reason string
 }
 

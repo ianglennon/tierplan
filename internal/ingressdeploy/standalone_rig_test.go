@@ -47,6 +47,8 @@ type proxyFixture struct {
 	TokenLabel string
 	// URL and Pin are the server address and pin the container was created with; "" is what the rig's deployer wants.
 	URL, Pin string
+	// Self puts the container on TierPlan's self network as well as the ingress network.
+	Self bool
 }
 
 // The address and pin the rig's deployer wants of a proxy (newRig's Deps).
@@ -140,7 +142,7 @@ func (f *fakeSystem) play(in stackops.SystemDeployInput) {
 	state := hostFixture{
 		Proxy: &proxyFixture{
 			Image: svc.Image, TokenLabel: svc.CustomLabels[ingressdeploy.TokenLabel], AccessLog: hasEnv(env, ingressbundle.EnvAccessLog+"=1"),
-			URL: envValue(env, ingressbundle.EnvURL), Pin: envValue(env, ingressbundle.EnvPin),
+			URL: envValue(env, ingressbundle.EnvURL), Pin: envValue(env, ingressbundle.EnvPin), Self: namesSelfNetwork(in.Project, svc),
 		},
 		NetworkSubnet: n.Ipam.Config[0].Subnet, Volume: true,
 	}
@@ -199,10 +201,14 @@ func (f *fakeSystem) reconfigure() {
 		if state == "" {
 			state = "running"
 		}
-		cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+		fc := dockertest.FakeContainer{
 			ID: "proxy-1", Names: []string{"/tierplan-ingress-proxy-1"}, Image: p.Image, State: state, Labels: labels,
 			Inspect: dockertest.FakeInspect{Env: env, StartedAt: "2026-11-21T12:00:00Z"},
-		})
+		}
+		if p.Self {
+			fc.Networks = map[string]dockertest.FakeEndpoint{ingress.NetworkName: {}, ingress.SelfNetworkName: {}}
+		}
+		cfg.Containers = append(cfg.Containers, fc)
 	}
 	if f.host.NetworkSubnet != "" {
 		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{
@@ -214,6 +220,16 @@ func (f *fakeSystem) reconfigure() {
 		cfg.Volumes = append(cfg.Volumes, dockertest.FakeVolume{Name: ingress.VolumeName, Driver: "local", Labels: ingress.ObjectLabels()})
 	}
 	f.rig.fake.Reconfigure(cfg)
+}
+
+// namesSelfNetwork is whether the proxy service of a project joins the network named tierplan-self.
+func namesSelfNetwork(p *types.Project, svc types.ServiceConfig) bool {
+	for key := range svc.Networks {
+		if n, ok := p.Networks[key]; ok && n.Name == ingress.SelfNetworkName {
+			return true
+		}
+	}
+	return false
 }
 
 // deployCount is how many times DeploySystem was called.

@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package ingressdeploy
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/ingress"
+)
+
+// SelfBackendAlias is the name TierPlan's own container answers to on a standalone host's self network (D-04): the ensure
+// loop connects the container under it, and the proxy reaches TierPlan by it. It is the observation's BackendHost there.
+const SelfBackendAlias = "tierplan"
+
+// SelfBridgeSpec is the self network on a standalone host (D-02): a user-defined bridge carrying SelfNetworkLabels. An
+// empty subnet leaves the choice to the engine.
+func SelfBridgeSpec(subnet string) dockerx.NetworkCreateSpec {
+	return dockerx.NetworkCreateSpec{
+		Name:   ingress.SelfNetworkName,
+		Driver: dockerx.DriverBridge,
+		Labels: ingress.SelfNetworkLabels(),
+		Subnet: subnet,
+	}
+}
+
+// standaloneAttach is whether the proxy is to be on the self network as the host was read in l: the network is not foreign
+// and is wanted. When wanted could not be read, the proxy keeps the attachment it has.
+func (sp *selfPass) standaloneAttach(l standaloneLive) bool {
+	if l.selfForeign {
+		return false
+	}
+	if !sp.known {
+		return l.self != nil && l.proxyOnSelf
+	}
+	return sp.wanted
+}
+
+// selfConnectable is whether TierPlan can connect its own container on this host: it runs here as a standalone container
+// and the server reaches its local engine (Deps.SelfConnect).
+func (s *Service) selfConnectable(sp *selfPass) bool {
+	return s.d.SelfConnect != nil && sp.place.Here == SelfHereYes && sp.place.Kind == SelfKindStandalone && sp.place.ContainerID != ""
+}
+
+// standaloneSelfWork is whether the self network of a standalone host has a write waiting that the proxy's plan does not
+// already bring: it is wanted and missing, or wanted and TierPlan's container (a recreated one, after an upgrade) is not on
+// it while TierPlan can connect itself.
+func (s *Service) standaloneSelfWork(sp *selfPass, l standaloneLive) bool {
+	if !sp.known || l.selfForeign {
+		return false
+	}
+	if sp.wanted {
+		return l.self == nil || (s.selfConnectable(sp) && !sp.place.Attached)
+	}
+	return false
+}
+
+// ensureStandaloneSelfNetwork is the self network step of a standalone pass (D-04), under the operation lock and before the
+// proxy's project is built. TierPlan's own bridge (the name and the label pair) is adopted whatever its subnet; one of the
+// name that is not TierPlan's is foreign and never attached. When wanted and absent, the bridge is made, its /24 from the
+// host's pools under the address-space lock when TierPlan plans them, else the engine's choice. Then, when wanted, TierPlan's
+// own container is connected to it under SelfBackendAlias unless it is on it already. A connect that fails is logged and
+// tried again on the next pass: it changes nothing. c is the host's client, inside one write.
+func (s *Service) ensureStandaloneSelfNetwork(ctx context.Context, c *dockerx.Client, sp *selfPass, l standaloneLive) (selfNet, error) {
+	if l.selfForeign {
+		return selfNet{foreign: true}, nil
+	}
+	attach := sp.standaloneAttach(l)
+	net := selfNet{attach: attach}
+	if l.self != nil {
+		net.id = l.self.ID
+	}
+	if !sp.known {
+		return net, nil
+	}
+	if net.id == "" && sp.wanted {
+		id, err := s.createSelfBridge(ctx, c, sp.info)
+		if err != nil {
+			return selfNet{}, err
+		}
+		net.id = id
+	}
+	if sp.wanted && net.id != "" {
+		s.connectSelf(ctx, sp, net.id)
+	}
+	return net, nil
+}
+
+// createSelfBridge makes the self bridge on a standalone host and returns its ID.
+func (s *Service) createSelfBridge(ctx context.Context, c *dockerx.Client, info EnvInfo) (string, error) {
+	subnet := ""
+	if s.d.AddressSpaces != nil {
+		defer s.d.AddressSpaces.LockAllocation(info.ID)()
+		var err error
+		if subnet, err = s.chooseSubnetSized(ctx, info.ID, true, SelfNetworkPrefix); err != nil {
+			return "", fmt.Errorf("choose the self network's subnet: %w", err)
+		}
+	}
+	id, _, err := c.NetworkCreate(ctx, SelfBridgeSpec(subnet))
+	if err != nil {
+		return "", fmt.Errorf("create the self network: %w", err)
+	}
+	return id, nil
+}
+
+// connectSelf connects TierPlan's own container to the self network when it is not on it and TierPlan can. The place is
+// updated, so the observation of the pass says TierPlan is attached.
+func (s *Service) connectSelf(ctx context.Context, sp *selfPass, networkID string) {
+	if sp.place.Attached || !s.selfConnectable(sp) {
+		return
+	}
+	if err := s.d.SelfConnect(ctx, networkID, SelfBackendAlias); err != nil {
+		s.log().Warn("the ingress ensure loop could not connect TierPlan's own container to "+ingress.SelfNetworkName+"; the next pass tries again",
+			"environment", sp.info.ID, "error", err)
+		return
+	}
+	sp.place.Attached = true
+	s.log().Info("the ingress ensure loop connected TierPlan's own container to "+ingress.SelfNetworkName, "environment", sp.info.ID)
+}
+
+// observeStandaloneSelf reads the self network, the ingress network and the host's bridge on the standalone host's engine
+// and publishes what it found, as observeSelf does on a swarm. A host on which the self network is wanted, while TierPlan
+// cannot connect its own container (no local engine), is logged when that is first seen.
+func (s *Service) observeStandaloneSelf(ctx context.Context, sp *selfPass) {
+	info := sp.info
+	prev, had := s.SelfObservationOf(info.ID)
+	o, ok := s.observeSelfOn(ctx, sp, func(fn func(*dockerx.Client) error) error {
+		return s.d.Engine.OnNode(ctx, info.ID, info.Nodes[0].AgentID, fn)
+	})
+	if !ok {
+		return
+	}
+	stuck := o.Wanted && o.Exists && !o.Attached && s.d.SelfConnect == nil
+	if stuck && (!had || !prev.Wanted || !prev.Exists || prev.Attached) {
+		s.log().Warn("TierPlan cannot connect its own container to "+ingress.SelfNetworkName+": it does not reach the host's engine through its "+
+			"local socket. Connect it by hand with the alias "+SelfBackendAlias+", or run TierPlan with the Docker socket mounted",
+			"environment", info.ID)
+	}
+}
