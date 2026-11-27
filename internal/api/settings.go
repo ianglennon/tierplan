@@ -44,6 +44,12 @@ const codeInvalidAgentURL = "invalid_agent_url"
 // proxies dial the agent URL, so it must never become a route through the ingress.
 const codeAgentURLIsIngressHost = "agent_url_is_ingress_host"
 
+// codePublicURLIsIngressHost is the field error code of a public URL whose host
+// is a hostname the ingress serves while no free agent URL is set: agents and
+// proxies would dial the route (D-07, D-10). The pair is checked, not the field,
+// so the public URL may be the self route's host when a direct agent URL stays.
+const codePublicURLIsIngressHost = "public_url_is_ingress_host"
+
 // targetSettings is the audit target of a settings change.
 const targetSettings = "settings"
 
@@ -187,6 +193,9 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		Summary:     "Change the instance name, the public URL or the agent URL",
 		Description: "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field " +
 			"(instance_name_required, instance_name_too_long, invalid_public_url, " + codeInvalidAgentURL + "). " +
+			"An agent URL whose host the ingress serves (the self route's or a stack's) answers 422 " + codeAgentURLIsIngressHost +
+			", and a public URL whose host the ingress serves answers 422 " + codePublicURLIsIngressHost +
+			" unless the same save or the stored settings keep an agent URL the ingress does not serve; both change nothing. " +
 			"An http public URL answers 422 " + codeInvalidPublicURL + " and an http agent URL answers 422 " + codeInvalidAgentURL +
 			", each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. " +
 			"An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while " +
@@ -277,16 +286,26 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		}
 
 		// After the field checks and before the transaction, so a refusal changes
-		// nothing. Only a value this save changes is checked: an env-locked value
-		// cannot change here, and the self-route preview refuses a locked
-		// contradiction (28-21).
-		if d.IngressHosts != nil && len(problems) == 0 && agentURL != before.AgentURL && agentURL != "" {
+		// nothing, and only when this save changes an URL. The pair is what is
+		// checked: agents dial the agent URL, or the public URL when none is set, so
+		// the effective agent URL (this save's, else the stored one) must be free
+		// whenever the public URL names a claimed host. An env-locked public URL is
+		// never re-checked: the API cannot change it, and the self-route preview
+		// refuses a locked contradiction (28-21).
+		if d.IngressHosts != nil && len(problems) == 0 && (agentURL != before.AgentURL || url != before.PublicURL) {
 			hosts, err := d.IngressHosts(ctx)
 			if err != nil {
 				return nil, internal("read the ingress hostnames", err)
 			}
-			if _, claimed := hosts[urlHostname(agentURL)]; claimed {
+			claimed := func(u string) bool {
+				_, ok := hosts[urlHostname(u)]
+				return u != "" && ok
+			}
+			if agentURL != before.AgentURL && claimed(agentURL) {
 				add("body.agentUrl", codeAgentURLIsIngressHost)
+			}
+			if !before.PublicURLLocked && claimed(url) && (agentURL == "" || claimed(agentURL)) {
+				add("body.publicUrl", codePublicURLIsIngressHost)
 			}
 		}
 
