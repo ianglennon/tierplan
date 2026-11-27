@@ -239,4 +239,50 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 		}
 		return &IngressSelfRouteStartOutput{CacheControl: "no-store", Body: IngressSelfRouteStartBody{JobID: id}}, nil
 	})
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewIngressSelfRouteOff",
+		Method:      http.MethodPost,
+		Path:        selfRouteOffPreviewPath,
+		Summary:     "Preview switching TierPlan's own route off",
+		Description: "Says what switching TierPlan's own route off in this environment would do, and writes nothing. items are self_origin_removed (the origin TierPlan stops accepting) " +
+			"and self_network_removed (whether the tierplan-self network goes, or stays for TierPlan's own HTTP-01 challenges), each with state ok and the server's sentence; host is the route's hostname " +
+			"and directAddress the address that keeps reaching TierPlan, empty for the page's own origin. It never refuses because of the route's state or the environment's health: " +
+			"an environment that cannot be read only leaves where TierPlan runs unknown. 409 " + problemSelfRouteNotOn + " when TierPlan's own route is not on in this environment. " +
+			"Answered with Cache-Control no-store. " + selfRouteGateText + " A caller who holds ingress.manage but is not an instance admin is refused 403 " + problemInstanceAdminRequired +
+			" and the refusal is audited as permission.denied.",
+		Tags: []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressSelfRoutePathInput) (*IngressSelfRoutePreviewOutput, error) {
+		if _, err := gate(ctx, http.MethodPost, selfRouteOffPreviewPath, in.EnvID, in.UserAgent); err != nil {
+			return nil, err
+		}
+		pv, err := d.Service.PreviewSelfRouteOff(ctx, in.EnvID)
+		if err != nil {
+			return nil, fail(ctx, "preview switching TierPlan's own route off", err)
+		}
+		return &IngressSelfRoutePreviewOutput{CacheControl: "no-store", Body: ingressSelfRoutePreviewBody(pv)}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "disableIngressSelfRoute",
+		Method:      http.MethodDelete,
+		Path:        selfRoutePath,
+		Summary:     "Switch TierPlan's own route off",
+		Description: "Takes the environment's operation lock and answers 202 with a job's ID at once. The job (ingress_self_route_disable) releases the hostname with its audit entry " +
+			"(ingress.self_route_disabled) as self_release, then reports from the ingress's next pass whether the tierplan-self network was removed or kept (self_network). " +
+			"No state of the route, the engine, the certificate or the environment stops it: TierPlan stays reachable on its direct address. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. " +
+			"409 " + problemSelfRouteNotOn + " when TierPlan's own route is not on in this environment; 409 " + problemOperationLocked + " while another operation holds the environment, naming it. " +
+			selfRouteGateText + " A caller who holds ingress.manage but is not an instance admin is refused 403 " + problemInstanceAdminRequired + " and the refusal is audited as permission.denied.",
+		DefaultStatus: http.StatusAccepted,
+		Tags:          []string{"ingress"},
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressSelfRoutePathInput) (*IngressSelfRouteStartOutput, error) {
+		p, err := gate(ctx, http.MethodDelete, selfRoutePath, in.EnvID, in.UserAgent)
+		if err != nil {
+			return nil, err
+		}
+		id, err := d.Service.DisableSelfRoute(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID)
+		if err != nil {
+			return nil, fail(ctx, "switch TierPlan's own route off", err)
+		}
+		return &IngressSelfRouteStartOutput{CacheControl: "no-store", Body: IngressSelfRouteStartBody{JobID: id}}, nil
+	})
 }

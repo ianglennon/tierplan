@@ -1902,6 +1902,30 @@ export interface paths {
          * @description Takes the environment's operation lock and answers 202 with a job's ID at once. The job (ingress_self_route_enable) runs the preview's checks again as its first item, self_check, and a refusal ends it there with the refusing item's reason as the code (for example host_taken, vip_ingress_off, self_route_already_on or self_route_not_here) before anything is written. Otherwise self_claim stores the hostname for TierPlan with its audit entry (ingress.self_route_enabled), and self_network waits for the ingress to report the tierplan-self network. The job ends done once the claim is stored, even when the route is not served yet. Follow it at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 409 operation_locked while another operation holds the environment, naming it. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
          */
         post: operations["enableIngressSelfRoute"];
+        /**
+         * Switch TierPlan's own route off
+         * @description Takes the environment's operation lock and answers 202 with a job's ID at once. The job (ingress_self_route_disable) releases the hostname with its audit entry (ingress.self_route_disabled) as self_release, then reports from the ingress's next pass whether the tierplan-self network was removed or kept (self_network). No state of the route, the engine, the certificate or the environment stops it: TierPlan stays reachable on its direct address. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 409 self_route_not_on when TierPlan's own route is not on in this environment; 409 operation_locked while another operation holds the environment, naming it. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
+         */
+        delete: operations["disableIngressSelfRoute"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/self/off/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching TierPlan's own route off
+         * @description Says what switching TierPlan's own route off in this environment would do, and writes nothing. items are self_origin_removed (the origin TierPlan stops accepting) and self_network_removed (whether the tierplan-self network goes, or stays for TierPlan's own HTTP-01 challenges), each with state ok and the server's sentence; host is the route's hostname and directAddress the address that keeps reaching TierPlan, empty for the page's own origin. It never refuses because of the route's state or the environment's health: an environment that cannot be read only leaves where TierPlan runs unknown. 409 self_route_not_on when TierPlan's own route is not on in this environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
+         */
+        post: operations["previewIngressSelfRouteOff"];
         delete?: never;
         options?: never;
         head?: never;
@@ -22510,6 +22534,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngressSelfRouteStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableIngressSelfRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressSelfRouteStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressSelfRouteOff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressSelfRoutePreviewBody"];
                 };
             };
             /** @description Error */
