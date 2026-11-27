@@ -111,6 +111,18 @@ func goldenScenarios() map[string]Input {
 		// for the two ACME hosts on the challenge path, at CarveOutPriority with no tls, to
 		// svc-tierplan-plain, TierPlan's plain listener. Everything else is the self-route golden's.
 		"self-acme-carveout": selfACMEInput(),
+		// The carve-out with no system claim (D-12): TierPlan is on the self network for its own
+		// certificate only. The file is the empty golden's strict-SNI defaults plus tierplan-acme and
+		// svc-tierplan-plain.
+		"self-carveout-only": {
+			Snapshot: ingress.Snapshot{Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 13}},
+			Self: &SelfInput{
+				BackendHost: "tierplan_tierplan",
+				BackendPort: 7480,
+				ACMEHosts:   []string{"tierplan.example.org"},
+				Attached:    true,
+			},
+		},
 		// One https route on port 8443: its service names the user transport and the bundle holds it (D-13).
 		"https-backend": {
 			Snapshot: ingress.Snapshot{

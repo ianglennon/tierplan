@@ -258,7 +258,11 @@ func TestRuleAndPriority(t *testing.T) {
 	}
 }
 
-// TestEveryRouterIsOnWebsecureOnly pins PROH-21-03: no rendered router is ever on the web entry point.
+// TestEveryRouterIsOnWebsecureOnly pins PROH-21-03 as Phase 28 left it (D-12, Pitfall 8): the one
+// router on the web entry point is TierPlan's own HTTP-01 carve-out, tierplan-acme. It is on web only,
+// has no tls, sits at CarveOutPriority, and its rule is the scenario's ACME hosts, exactly, on the
+// challenge path. Every other router is on websecure only and served over TLS. No router names any
+// other entry point (the ping entry point included).
 func TestEveryRouterIsOnWebsecureOnly(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(goldenDir, "*", "tierplan.yml"))
 	if err != nil {
@@ -267,7 +271,8 @@ func TestEveryRouterIsOnWebsecureOnly(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no golden dynamic file was found")
 	}
-	routers := 0
+	scenarios := goldenScenarios()
+	routers, carveOuts := 0, 0
 	for _, f := range files {
 		raw, err := os.ReadFile(f) //nolint:gosec // G304: a golden file under testdata
 		if err != nil {
@@ -289,14 +294,159 @@ func TestEveryRouterIsOnWebsecureOnly(t *testing.T) {
 		for name, r := range rs {
 			routers++
 			eps := toStrings(t, dig(t, r, "entryPoints"))
-			if !slices.Equal(eps, []string{"websecure"}) {
-				t.Errorf("%s: router %s entryPoints = %v, want [websecure] only", f, name, eps)
+			fields, _ := r.(map[string]any)
+			_, hasTLS := fields["tls"]
+			if name != acmeRouterName {
+				if !slices.Equal(eps, []string{"websecure"}) {
+					t.Errorf("%s: router %s entryPoints = %v, want [websecure] only", f, name, eps)
+				}
+				if !hasTLS {
+					t.Errorf("%s: router %s on websecure has no tls", f, name)
+				}
+				continue
+			}
+			carveOuts++
+			if !slices.Equal(eps, []string{"web"}) {
+				t.Errorf("%s: router %s entryPoints = %v, want [web] only", f, name, eps)
+			}
+			if hasTLS {
+				t.Errorf("%s: router %s has a tls key; the carve-out is plain HTTP", f, name)
+			}
+			if p, _ := fields["priority"].(int); p != CarveOutPriority {
+				t.Errorf("%s: router %s priority = %v, want %d", f, name, fields["priority"], CarveOutPriority)
+			}
+			scenario, ok := scenarios[filepath.Base(filepath.Dir(f))]
+			if !ok || scenario.Self == nil {
+				t.Errorf("%s: router %s in a scenario with no self input", f, name)
+				continue
+			}
+			rule, _ := fields["rule"].(string)
+			if hosts, ok := carveOutRuleHosts(rule); !ok {
+				t.Errorf("%s: router %s rule %q is not hosts on the challenge path", f, name, rule)
+			} else {
+				for _, h := range hosts {
+					if !slices.Contains(scenario.Self.ACMEHosts, h) {
+						t.Errorf("%s: router %s routes %q, which is not an ACME host of the scenario", f, name, h)
+					}
+				}
 			}
 		}
 	}
 	if routers == 0 {
 		t.Fatal("no router was checked")
 	}
+	if carveOuts == 0 {
+		t.Fatal("no golden holds the carve-out, so its rule was never checked")
+	}
+}
+
+// carveOutRuleHosts parses a carve-out rule: one Host matcher, or two or more joined by || in
+// parentheses, then exactly the challenge PathPrefix. Anything else (another matcher, a negation,
+// a second path) is not a carve-out rule.
+func carveOutRuleHosts(rule string) ([]string, bool) {
+	const tail = " && PathPrefix(`/.well-known/acme-challenge/`)"
+	head, ok := strings.CutSuffix(rule, tail)
+	if !ok {
+		return nil, false
+	}
+	parts := []string{head}
+	if inner, ok := strings.CutPrefix(head, "("); ok {
+		inner, ok = strings.CutSuffix(inner, ")")
+		if !ok {
+			return nil, false
+		}
+		parts = strings.Split(inner, " || ")
+		if len(parts) < 2 {
+			return nil, false
+		}
+	}
+	hosts := make([]string, 0, len(parts))
+	for _, p := range parts {
+		h, ok := strings.CutPrefix(p, "Host(`")
+		if !ok {
+			return nil, false
+		}
+		h, ok = strings.CutSuffix(h, "`)")
+		if !ok || h == "" || strings.ContainsAny(h, "`()|&! ") {
+			return nil, false
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, true
+}
+
+// TestCarveOutRefusals pins T-28-46 and D-12: an ACME host that could reach the rule with a backtick or
+// a brace fails the render whether or not TierPlan is attached; a blank ACME host fails an attached
+// render; and the carve-out is rendered only while TierPlan is attached and has an ACME host. Hosts are
+// lower-cased and deduplicated, so each is matched once.
+func TestCarveOutRefusals(t *testing.T) {
+	carveOutOnly := func(attached bool, hosts ...string) Input {
+		return Input{
+			Snapshot: ingress.Snapshot{Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 1}},
+			Self:     &SelfInput{BackendHost: "tierplan_tierplan", BackendPort: 7480, ACMEHosts: hosts, Attached: attached},
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		in    Input
+		code  string
+		field string
+	}{
+		{"a backtick", carveOutOnly(true, "tierplan.example.org", "a`b"), CodeUnsafeValue, "self acmeHost"},
+		{"a brace", carveOutOnly(true, "tier{plan.example.org"), CodeUnsafeValue, "self acmeHost"},
+		{"a backtick while not attached", carveOutOnly(false, "a`b"), CodeUnsafeValue, "self acmeHost"},
+		{"a blank host", carveOutOnly(true, "tierplan.example.org", ""), CodeSelfInput, "self acmeHost"},
+		{"a backtick beside the self route", func() Input {
+			in := selfACMEInput()
+			in.Self.ACMEHosts = append(in.Self.ACMEHosts, "x`) || Host(`evil.example")
+			return in
+		}(), CodeUnsafeValue, "self acmeHost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := Render(tc.in)
+			var refused *RefusedError
+			if !errors.As(err, &refused) {
+				t.Fatalf("Render = %+v, %v; want a refusal", res.Skipped, err)
+			}
+			if refused.Code != tc.code || refused.Field != tc.field {
+				t.Errorf("refused %s on %q, want %s on %q", refused.Code, refused.Field, tc.code, tc.field)
+			}
+		})
+	}
+
+	noCarveOut := func(t *testing.T, in Input) {
+		t.Helper()
+		raw, _ := dynamicOf(t, mustRender(t, in).Bundle)
+		for _, s := range []string{acmeRouterName, plainServiceName, "acme-challenge", "web\n"} {
+			if strings.Contains(string(raw), s) {
+				t.Errorf("the dynamic file names %s:\n%s", s, raw)
+			}
+		}
+	}
+	t.Run("not attached: no carve-out", func(t *testing.T) {
+		noCarveOut(t, carveOutOnly(false, "tierplan.example.org"))
+		in := selfACMEInput()
+		in.Self.Attached = false
+		noCarveOut(t, in)
+	})
+	t.Run("no ACME host: no carve-out", func(t *testing.T) {
+		noCarveOut(t, carveOutOnly(true))
+		noCarveOut(t, selfRouteInput(true))
+	})
+	t.Run("no self input: no carve-out", func(t *testing.T) {
+		in := selfACMEInput()
+		in.Self = nil
+		noCarveOut(t, in)
+	})
+	t.Run("hosts are lower-cased and deduplicated", func(t *testing.T) {
+		in := carveOutOnly(true, "Tierplan.Example.org", "tierplan.example.org", "agent.example.org")
+		_, doc := dynamicOf(t, mustRender(t, in).Bundle)
+		rule, _ := dig(t, doc, "http", "routers", acmeRouterName, "rule").(string)
+		want := "(Host(`agent.example.org`) || Host(`tierplan.example.org`)) && PathPrefix(`/.well-known/acme-challenge/`)"
+		if rule != want {
+			t.Errorf("rule = %q, want %q", rule, want)
+		}
+	})
 }
 
 // oneHostInput is the one-host golden's input with the versions the caller picks.
