@@ -68,6 +68,11 @@ type Options struct {
 	MutationGuard MutationGuard
 	// TrustedProxies are the peers whose X-Forwarded-For is believed (D-39).
 	TrustedProxies []netip.Prefix
+	// LiveTrustedProxies is read on every request and its prefixes are trusted in addition to
+	// TrustedProxies (D-06): the self network's subnet minus its gateway, which the ingress ensure
+	// loop refreshes while the server runs. A peer inside it is also on the self network, which
+	// PeerOnSelfNetwork reports (A-05). Nil is none, so a router built without it behaves as before.
+	LiveTrustedProxies func() []netip.Prefix
 	// Proxy notices a misconfigured reverse proxy from the requests it carries
 	// (D-53). Nil observes nothing.
 	Proxy *ProxyObserver
@@ -110,7 +115,7 @@ func New(opts Options) *Router {
 	r := &Router{mux: chi.NewRouter(), fallback: opts.Fallback, opts: opts}
 
 	r.mux.Use(middleware.RequestID)
-	r.mux.Use(clientIP(opts.TrustedProxies))
+	r.mux.Use(clientIP(opts.TrustedProxies, opts.LiveTrustedProxies))
 	if opts.Proxy != nil {
 		r.mux.Use(opts.Proxy.Observe)
 	}

@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -95,8 +97,10 @@ type (
 // client is what the clientIP middleware learned about the TCP peer.
 type client struct {
 	ip string
-	// trustedPeer is true when the TCP peer is inside TIERPLAN_TRUSTED_PROXIES.
+	// trustedPeer is true when the TCP peer is inside TIERPLAN_TRUSTED_PROXIES or the live set.
 	trustedPeer bool
+	// selfPeer is true when the TCP peer is inside the live set, TierPlan's own self network.
+	selfPeer bool
 	// scheme is the scheme the caller used, as EffectiveScheme works it out.
 	scheme string
 }
@@ -248,6 +252,15 @@ func peerTrusted(ctx context.Context) bool {
 // forwarded scheme and a TLS exporter value can be believed.
 func PeerTrusted(ctx context.Context) bool { return peerTrusted(ctx) }
 
+// PeerOnSelfNetwork reports whether the TCP peer of the request is on TierPlan's own self network:
+// inside the live trusted set, never merely inside TIERPLAN_TRUSTED_PROXIES. The agent and proxy
+// handshakes refuse such a peer, because it is a service the proxy routes to, not a node (D-10,
+// A-05). PeerTrusted is true for it as well.
+func PeerOnSelfNetwork(ctx context.Context) bool {
+	c, _ := ctx.Value(clientKey{}).(client)
+	return c.selfPeer
+}
+
 // Problem types the policy emits. The SPA maps them to copy.
 const (
 	problemOriginMismatch = "origin_mismatch"
@@ -290,32 +303,105 @@ func checkRoute(method, path string, need rbac.Requirement) {
 // clientIP builds the middleware that records the client address. Forwarded
 // headers are consulted only when the TCP peer is a trusted proxy, and then the
 // rightmost address that is not itself a trusted proxy is used, so a client
-// cannot choose the address by prepending to X-Forwarded-For.
-func clientIP(trusted []netip.Prefix) func(http.Handler) http.Handler {
-	return ClientIPMiddleware(trusted)
+// cannot choose the address by prepending to X-Forwarded-For. The trusted set is
+// the static list plus the live one (D-06).
+func clientIP(static []netip.Prefix, live func() []netip.Prefix) func(http.Handler) http.Handler {
+	return ClientIPMiddlewareLive(static, live)
 }
 
 // ClientIPMiddleware is the middleware that records the client address and
 // whether the TCP peer is a trusted proxy. The router installs it; it is exported
 // so a handler served outside the router, and the tests of one, can sit behind
-// the same logic.
+// the same logic. It is ClientIPMiddlewareLive with no live set.
 func ClientIPMiddleware(trusted []netip.Prefix) func(http.Handler) http.Handler {
-	var strategy realclientip.Strategy
-	if len(trusted) > 0 {
-		ranges := make([]net.IPNet, 0, len(trusted))
-		for _, p := range trusted {
-			p = p.Masked()
-			ranges = append(ranges, net.IPNet{
-				IP:   net.IP(p.Addr().AsSlice()),
-				Mask: net.CIDRMask(p.Bits(), p.Addr().BitLen()),
-			})
+	return ClientIPMiddlewareLive(trusted, nil)
+}
+
+// ClientIPMiddlewareLive is ClientIPMiddleware with a second, live part of the trusted set (D-06):
+// live is read once per request and its prefixes are trusted in addition to static. A peer inside
+// static or live has its forwarded address believed (the rightmost entry that is not itself
+// trusted); any other peer is the client address. A peer inside live is also marked as being on
+// TierPlan's own self network, which PeerOnSelfNetwork reports (A-05). A nil live is an empty one.
+//
+// Each request works from one atomic snapshot of the set, and the snapshot is rebuilt only when
+// live returns a different slice than the one it was built from, so a refresh applies on the next
+// request with no restart and no rebuild per request.
+func ClientIPMiddlewareLive(static []netip.Prefix, live func() []netip.Prefix) func(http.Handler) http.Handler {
+	return clientIPMiddlewareLive(static, live, nil)
+}
+
+// trustedSnapshot is the trusted set one request is judged by.
+type trustedSnapshot struct {
+	// key is the slice live returned, which the snapshot was built from.
+	key []netip.Prefix
+	// live is the part of key the snapshot trusts: all of it, or nothing when it could not be used.
+	live []netip.Prefix
+	// union is the static list followed by live.
+	union    []netip.Prefix
+	strategy realclientip.Strategy
+}
+
+// buildTrusted builds the snapshot for the static list and one reading of the live one. The
+// strategy is nil when nothing is trusted. A live part that cannot be turned into ranges is not
+// trusted at all: the snapshot then trusts the static list only, which fails closed.
+func buildTrusted(static, key []netip.Prefix) (*trustedSnapshot, error) {
+	snap := &trustedSnapshot{key: key, live: key}
+	snap.union = append(slices.Clone(static), key...)
+	var err error
+	snap.strategy, err = trustedStrategy(snap.union)
+	if err != nil && len(key) > 0 {
+		snap.live = nil
+		snap.union = slices.Clone(static)
+		snap.strategy, _ = trustedStrategy(snap.union)
+	}
+	return snap, err
+}
+
+// trustedStrategy is the rightmost-untrusted strategy for prefixes, nil for none.
+func trustedStrategy(prefixes []netip.Prefix) (realclientip.Strategy, error) {
+	if len(prefixes) == 0 {
+		return nil, nil
+	}
+	ranges := make([]net.IPNet, 0, len(prefixes))
+	for _, p := range prefixes {
+		p = p.Masked()
+		ranges = append(ranges, net.IPNet{
+			IP:   net.IP(p.Addr().AsSlice()),
+			Mask: net.CIDRMask(p.Bits(), p.Addr().BitLen()),
+		})
+	}
+	return realclientip.NewRightmostTrustedRangeStrategy("X-Forwarded-For", ranges)
+}
+
+// clientIPMiddlewareLive is ClientIPMiddlewareLive with a hook that runs each time a snapshot is
+// built, so a test can count the builds.
+func clientIPMiddlewareLive(static []netip.Prefix, live func() []netip.Prefix, onBuild func()) func(http.Handler) http.Handler {
+	static = slices.Clone(static)
+	first, err := buildTrusted(static, nil)
+	if err != nil {
+		// The static ranges come from validated config, so this cannot happen.
+		panic("httpx: trusted proxy ranges: " + err.Error())
+	}
+	var held atomic.Pointer[trustedSnapshot]
+	held.Store(first)
+	snapshot := func() *trustedSnapshot {
+		cur := held.Load()
+		if live == nil {
+			return cur
 		}
-		s, err := realclientip.NewRightmostTrustedRangeStrategy("X-Forwarded-For", ranges)
-		if err != nil {
-			// The ranges come from validated config, so this cannot happen.
-			panic("httpx: trusted proxy ranges: " + err.Error())
+		now := live()
+		if slices.Equal(cur.key, now) {
+			return cur
 		}
-		strategy = s
+		next, _ := buildTrusted(static, slices.Clone(now))
+		if onBuild != nil {
+			onBuild()
+		}
+		if held.CompareAndSwap(cur, next) {
+			return next
+		}
+		// Another request swapped first; use what it built.
+		return held.Load()
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -326,14 +412,16 @@ func ClientIPMiddleware(trusted []netip.Prefix) func(http.Handler) http.Handler 
 			if ap, err := netip.ParseAddrPort(req.RemoteAddr); err == nil {
 				peer := ap.Addr().Unmap()
 				c.ip = peer.String()
-				if strategy != nil && inPrefixes(peer, trusted) {
+				snap := snapshot()
+				if snap.strategy != nil && inPrefixes(peer, snap.union) {
 					c.trustedPeer = true
+					c.selfPeer = inPrefixes(peer, snap.live)
 					if req.TLS == nil {
 						if p := forwardedScheme(req.Header); p != "" {
 							c.scheme = p
 						}
 					}
-					if fwd := strategy.ClientIP(req.Header, req.RemoteAddr); fwd != "" {
+					if fwd := snap.strategy.ClientIP(req.Header, req.RemoteAddr); fwd != "" {
 						c.ip = fwd
 					}
 				}
