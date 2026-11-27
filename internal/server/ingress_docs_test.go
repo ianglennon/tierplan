@@ -144,23 +144,50 @@ func TestIngressDocsSelfRouteMatchesTheUI(t *testing.T) {
 	}
 }
 
+// TestIngressDocsHTTP01QuotesTheRefusal ties the rewritten HTTP-01 section (D-12) to the code: it quotes the swarm refusal as
+// preflight.go writes it, and names the carve-out's path and network.
+func TestIngressDocsHTTP01QuotesTheRefusal(t *testing.T) {
+	section := guideSection(ingressGuideText(t), "TierPlan's own certificate and HTTP-01")
+	if section == "" {
+		t.Fatal(`docs/ingress.md has no "## TierPlan's own certificate and HTTP-01" section, which https.md links to`)
+	}
+	// The quote is a block quote over several lines: drop the markers and join the lines before comparing.
+	var flat []string
+	for _, line := range strings.Split(section, "\n") {
+		flat = append(flat, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), ">")))
+	}
+	text := strings.Join(flat, " ")
+	for _, want := range []string{
+		unexportedConst(t, "ingressdeploy/preflight.go", "http01SwarmConflict"),
+		"/.well-known/acme-challenge/",
+		ingress.SelfNetworkName,
+		"`" + ingressdeploy.CodeHTTP01Conflict + "`",
+		"`" + ingressdeploy.CodeHTTP01CarveOut + "`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the HTTP-01 section does not say %q", want)
+		}
+	}
+}
+
 // TestIngressDocsHaveNoCAHold keeps two stale texts out of every page under docs/: the reason code `ca_hold`, which the code
 // never wrote (it writes ca_rate_limited), and the promise "A later version lifts this limit", which Phase 28 kept.
 func TestIngressDocsHaveNoCAHold(t *testing.T) {
 	banned := []string{"ca_hold", "A later version lifts this limit"}
 	pages := 0
-	err := filepath.WalkDir("../../docs", func(path string, d fs.DirEntry, err error) error {
+	docs := os.DirFS("../../docs")
+	err := fs.WalkDir(docs, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		b, err := os.ReadFile(path) // #nosec G304 -- a path under the repository's own docs/ directory
+		b, err := fs.ReadFile(docs, path)
 		if err != nil {
 			return err
 		}
 		pages++
 		for _, s := range banned {
 			if strings.Contains(string(b), s) {
-				t.Errorf("%s still says %q", path, s)
+				t.Errorf("docs/%s still says %q", path, s)
 			}
 		}
 		return nil

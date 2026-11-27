@@ -82,12 +82,13 @@ appears.
 | `ingress_name_taken` | The swarm already holds a service, a network or a join token secret under a name ingress uses that is not TierPlan's. Rename or remove it. The check does not look at volumes: the certificate cache volume is a per node object, and a volume of that name that does not carry TierPlan's label would be mounted by the proxy, and switching off leaves it in place. |
 | `ingress_url_unset` | TierPlan does not know its own address, which the proxies dial. Set the agent URL or the public URL. |
 | `ingress_url_routed` | TierPlan's own address is a hostname that a route or a reservation holds, so the proxies would reach TierPlan through themselves. |
-| `ingress_http01_conflict` | See the next section. |
+| `ingress_http01_conflict` | TierPlan runs on this swarm, its own certificate uses HTTP-01 and the carve-out cannot reach it. See [TierPlan's own certificate and HTTP-01](#tierplans-own-certificate-and-http-01). |
 | `ingress_paused` | A restore paused ingress on this environment. An Admin resumes it first with `POST .../ingress/resume`. |
 
 Two findings are warnings and never refuse. `ingress_nodes_not_checked` lists the nodes whose ports could not be read
-(a node that is down does not block the switch). `ingress_http01_unknown` says TierPlan could not tell whether the
-next section applies.
+(a node that is down does not block the switch). `ingress_http01_unknown` says TierPlan could not tell whether
+[TierPlan's own certificate and HTTP-01](#tierplans-own-certificate-and-http-01) applies. The carve-out's
+`ingress_http01_carve_out` is not a finding: the preview carries it in `notice`.
 
 ## On a standalone host
 
@@ -177,11 +178,47 @@ container still uses is not removed: the job fails and names that container, and
 
 ## TierPlan's own certificate and HTTP-01
 
-The proxies take port 80 on every node. If TierPlan itself runs on a node of the swarm and its own certificate is
-ordered with the HTTP-01 challenge, which also needs port 80, the next renewal would fail weeks later without any
-warning. So in this version the switch is refused with `ingress_http01_conflict`: switch TierPlan's own certificate to
-DNS-01 first (see [https.md](https.md)), then switch ingress on.
-When TierPlan runs outside the swarm, nothing conflicts and nothing is shown.
+The proxies take port 80 on every node, or on the host on a standalone host. That matters only when TierPlan runs in this
+environment and its own certificate counts as HTTP-01, which is strict: an active Let's Encrypt configuration for TierPlan's
+own certificate whose challenge is HTTP-01, and not paused. A self-signed install, your own certificate files and Let's
+Encrypt with DNS-01 need nothing on port 80, and nothing in this section applies to them. When TierPlan runs outside the
+environment, nothing conflicts and nothing is shown.
+
+**The carve-out.** When it applies, the proxies keep TierPlan's renewals working. On port 80 they send TierPlan the requests
+for `/.well-known/acme-challenge/` on TierPlan's own hosts, the host of the public URL and the host of the agent URL, and
+nothing else: another host on that path, and TierPlan's hosts on any other path, get the usual redirect to HTTPS. Those
+requests go over [`tierplan-self`](#the-tierplan-self-network) to TierPlan's port 7480, whose plain listener answers that path
+only while an order is open (see [https.md](https.md#lets-encrypt-with-http-01)). The carve-out works whether TierPlan's own
+route is on or not, so it needs the network, and TierPlan on it: on a standalone host TierPlan connects its own container, and
+on a swarm TierPlan's service needs the stack-file lines (see [Turning it on](#turning-it-on)). The switch-on preview then
+carries a notice, `ingress_http01_carve_out`, naming the hosts, and the switch goes ahead. A TierPlan that publishes port 80
+itself for HTTP-01 (`-p 80:7480`) is refused with `ingress_port_in_use`: take that port off just before you switch ingress on.
+After ingress is switched off, nothing answers on port 80 until you publish it to TierPlan again.
+
+**When the switch is still refused.** Where the carve-out cannot reach TierPlan, the switch is refused with
+`ingress_http01_conflict`, so the ingress never takes port 80 from a renewal without saying so. On a swarm where TierPlan runs
+as a service that is not on `tierplan-self`, the refusal says:
+
+> TierPlan runs on this swarm and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes on
+> every node. Add the tierplan-self network to TierPlan's service, or switch TierPlan's own certificate to DNS-01. Then turn
+> ingress on again.
+
+Where TierPlan runs on a swarm node as a plain container, which cannot be put on the network, the second sentence is only
+"Switch TierPlan's own certificate to DNS-01." On a standalone host where TierPlan cannot find its own container, the refusal
+ends "TierPlan couldn't find its own container to connect it to tierplan-self. Switch TierPlan's own certificate to DNS-01
+first."
+
+On a swarm where ingress is not on yet, TierPlan makes `tierplan-self` only once ingress is on, and ingress is refused until
+TierPlan's service is on the network. Make the network yourself first, on a manager, with the labels that tell TierPlan it is
+its own:
+
+```sh
+docker network create --driver overlay --label tierplan.component=ingress --label tierplan.ingress.role=self tierplan-self
+```
+
+Then add the stack-file lines, deploy again and switch ingress on; TierPlan takes the network over as its own.
+[Running TierPlan inside a swarm](install-in-swarm.md#tierplans-own-ingress-route-optional) gives the steps. The other way is
+to switch TierPlan's own certificate to DNS-01 (see [https.md](https.md)), which needs neither port 80 nor the network.
 
 TierPlan decides where it runs from its own Docker socket: the cluster it reports (a manager), or its node (a manager or a
 worker), against the environment's. When its certificate uses HTTP-01 and it cannot tell (no Docker socket is mounted, the
@@ -466,10 +503,8 @@ If you would rather keep the hostnames in a zone you do not want to give a token
 hostname's zone, make `_acme-challenge.<hostname>` a CNAME to a name in a second zone, the challenge zone, that you do
 control. TierPlan follows the CNAME and writes the TXT record at its target. The token must see both zones: the zone of the
 hostname, which TierPlan checks when you add the domain, and the challenge zone, where the record is written. A token that
-sees only one of them is refused, with `dns_zone_not_found` or `dns_delegation_target`. Delegation rests on the automated
-tests, which run against a fake DNS provider and a test CA. It has not been run against Cloudflare itself yet.
-
-<!-- 28-41: complete the line above from 28-S7-RESULT.md (S7 run, or resting on the automated tests). -->
+sees only one of them is refused, with `dns_zone_not_found` or `dns_delegation_target`. The tests run against a fake DNS
+provider and a test CA. This path is covered by automated tests and has not been run against a live second zone.
 
 ## Certificate Transparency
 
