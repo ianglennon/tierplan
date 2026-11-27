@@ -677,7 +677,7 @@ func TestHolderReloadNeverGoesBackwards(t *testing.T) {
 	}()
 	select {
 	case <-bDone:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): // wall-clock: gives an unserialised reload time to finish first; with the fix the outcome holds whatever the timing
 	}
 	close(g.release)
 	wg.Wait()
