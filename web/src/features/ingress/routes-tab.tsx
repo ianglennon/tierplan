@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
+import { SELF_ROUTE_ANCHOR } from "@/features/ingress/self-route-card";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
 import { routeHeadline } from "@/features/stacks/route-state";
 import { useNeeds } from "@/hooks/use-needs";
@@ -109,6 +110,12 @@ function detailOf(
           : "stackIngress.routes.state.pending.detail",
       );
     case "not_attached":
+      // TierPlan's own route is attached through the tierplan-self network, not by redeploying a stack.
+      if (isSystem(r)) {
+        const key = `ingressPage.reasons.${r.reason}`;
+        return r.reason !== "" && keyExists(key) ? t(key) : "";
+      }
+      return t(`stackIngress.routes.state.${r.state}.detail`);
     case "ingress_off":
       return t(`stackIngress.routes.state.${r.state}.detail`);
     case "waiting_certificate": {
@@ -133,14 +140,20 @@ function detailOf(
   }
 }
 
-// isRoute says whether a row is a route a stack serves and so has a state and five conditions. A TierPlan route has
-// no state and is not drawn (Phase 28 draws it).
+// isRoute says whether a row is a route and so has a state and five conditions: a route a stack serves, or TierPlan's
+// own route (ownerKind system, A-07), which is derived the same way.
 function isRoute(r: IngressRoute): boolean {
   return r.kind === "route" && r.state !== "";
 }
 
-// isDrawn says whether the tab draws a row: a route, a name a stack holds with no route to serve (D-08), and a
-// reserved name. A claim TierPlan itself holds is not a stack's and is not drawn.
+// isSystem says whether a row is TierPlan's own route (A-07): it carries the "TierPlan" badge and its hostname links to
+// the route's card on the Settings tab (#tierplan-own-route).
+function isSystem(r: IngressRoute): boolean {
+  return r.kind === "route" && r.ownerKind === "system";
+}
+
+// isDrawn says whether the tab draws a row: a route (TierPlan's own included), a name a stack holds with no route to
+// serve (D-08), and a reserved name. A claim TierPlan itself holds with no route is not drawn.
 function isDrawn(r: IngressRoute): boolean {
   return isRoute(r) || (r.kind === "claim" && r.ownerKind === "stack") || r.kind === "reserved";
 }
@@ -164,8 +177,8 @@ type View = "all" | "attention";
 // RoutesTab is the Routes tab of the Ingress page (UIX-02, UI-SPEC S2): each route of the environment with the
 // stack and service behind it, its headline state drawn through the map the stack page uses, and how many of its
 // five conditions hold, then the names a stack holds with no route and the names reserved (D-08, U-16), so one scan
-// answers why a hostname is not working. A TierPlan route carries no state and is not drawn here.
-// Every value renders as text: no hostname is a link (U-08).
+// answers why a hostname is not working. TierPlan's own route is a row like any other, with the "TierPlan" badge
+// (A-07). Every value renders as text: the only hostname that is a link is TierPlan's own, to its card in Settings.
 export function RoutesTab({ envId }: { envId: string }) {
   const t = useT();
   const query = useQuery(ingressRoutesQuery(envId));
@@ -348,6 +361,7 @@ export function RoutesTab({ envId }: { envId: string }) {
                 const panel = `ingress-conditions-${key}`;
                 const headline = routeHeadline(r.state || "unknown", r.stopped);
                 const detail = detailOf(r, !swarm, t);
+                const system = isSystem(r);
                 return (
                   <Fragment key={key}>
                     <TableRow>
@@ -372,7 +386,23 @@ export function RoutesTab({ envId }: { envId: string }) {
                             />
                           </Button>
                           <div className="min-w-0">
-                            <span className="font-mono text-xs break-all">{host}</span>
+                            {system ? (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Link
+                                  to="/env/$envId/ingress/settings"
+                                  params={{ envId }}
+                                  hash={SELF_ROUTE_ANCHOR}
+                                  className="rounded-sm text-accent-ink hover:underline"
+                                >
+                                  <span className="font-mono text-xs break-all">{host}</span>
+                                </Link>
+                                <Badge variant="outline" className="shrink-0">
+                                  {t("ingressPage.routes.systemBadge")}
+                                </Badge>
+                              </div>
+                            ) : (
+                              <span className="font-mono text-xs break-all">{host}</span>
+                            )}
                             <p className="text-xs text-muted-foreground">
                               {t(
                                 r.strip
@@ -385,7 +415,9 @@ export function RoutesTab({ envId }: { envId: string }) {
                         </div>
                       </TableCell>
                       <TableCell className="align-top whitespace-normal">
-                        {r.stackId === "" ? (
+                        {system ? (
+                          <span className="text-sm">{t("ingressPage.routes.none")}</span>
+                        ) : r.stackId === "" ? (
                           <span className="text-sm break-words">{r.stackName}</span>
                         ) : (
                           <Link
@@ -396,7 +428,7 @@ export function RoutesTab({ envId }: { envId: string }) {
                             {r.stackName}
                           </Link>
                         )}
-                        {swarm ? (
+                        {swarm && !system ? (
                           <Link
                             to="/env/$envId/services/$serviceId"
                             params={{ envId, serviceId: `${r.stackName}_${r.service}` }}

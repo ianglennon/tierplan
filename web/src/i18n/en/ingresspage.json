@@ -59,7 +59,8 @@
       "clearFilter": "Clear filter",
       "noAttention": "No route needs attention.",
       "proxyLogs": "View proxy logs",
-      "viewCertificate": "View certificate"
+      "viewCertificate": "View certificate",
+      "systemBadge": "TierPlan"
     },
     "conditions": {
       "state": {
@@ -86,6 +87,8 @@
       "ingress_off": "Ingress is off.",
       "engine_unreadable": "TierPlan couldn't read this environment just now.",
       "no_bundle": "Ingress hasn't published its settings yet.",
+      "self_not_attached": "TierPlan isn't on the tierplan-self network yet, so the proxies can't reach it.",
+      "not_observed": "TierPlan hasn't checked whether it's on the tierplan-self network since it started.",
       "appliedReady": "On {{applied}} of {{total}} nodes."
     },
     "off": {

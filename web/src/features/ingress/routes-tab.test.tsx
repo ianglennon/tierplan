@@ -330,6 +330,64 @@ describe("the Ingress page's Routes tab", () => {
     expect(pending.className).toContain("motion-reduce:animate-none");
   });
 
+  // TestRoutesTabDrawsTheSystemRow (A-07): TierPlan's own route is a row like any route, with the TierPlan badge.
+  it("draws TierPlan's own route as a row", async () => {
+    swarm = true;
+    serve([
+      route(),
+      route({
+        hostname: "tierplan.example.com",
+        ownerKind: "system",
+        service: "tierplan",
+        stackId: "",
+        stackName: "",
+        port: 7480,
+        scheme: "https",
+        state: "not_attached",
+        reason: "self_not_attached",
+        conditions: conditions({ network_attached: "not_ready", backend_healthy: "unknown" }).map(
+          (c) =>
+            c.code === "network_attached" || c.code === "backend_healthy"
+              ? { ...c, reason: "self_not_attached", message: "from the server" }
+              : c,
+        ),
+      }),
+    ]);
+    mount();
+    const t = await table();
+    const own = rowOf(t, "tierplan.example.com");
+    expect(within(own).getByText("TierPlan", { selector: "[data-slot=badge]" })).toBeTruthy();
+    expect(within(own).getByText("Not attached")).toBeTruthy();
+    expect(
+      within(own).getByText(
+        "TierPlan isn't on the tierplan-self network yet, so the proxies can't reach it.",
+      ),
+    ).toBeTruthy();
+    expect(within(own).getByText("3 of 5 ready")).toBeTruthy();
+    const link = within(own).getByRole("link", { name: "tierplan.example.com" });
+    expect(link.getAttribute("href")).toBe(`/env/${ENV}/ingress/settings#tierplan-own-route`);
+    // The owner is TierPlan, not a stack: no stack link and no service link (its service is not a stack's).
+    expect(within(own).getAllByRole("link")).toHaveLength(1);
+    expect(within(own).getByText("tierplan")).toBeTruthy();
+    // Its five conditions open like any route's, with the self network's reason in words.
+    fireEvent.click(
+      within(own).getByRole("button", { name: "Show conditions for tierplan.example.com" }),
+    );
+    const list = within(t).getByRole("list", { name: "Conditions of tierplan.example.com" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(5);
+    expect(
+      within(list).getAllByText(
+        "TierPlan isn't on the tierplan-self network yet, so the proxies can't reach it.",
+      ),
+    ).toHaveLength(2);
+    // The stack's row has no badge, and its hostname is not a link.
+    const stack = rowOf(t, "app.example.com");
+    expect(within(stack).queryByText("TierPlan", { selector: "[data-slot=badge]" })).toBeNull();
+    expect(within(stack).queryByRole("link", { name: "app.example.com" })).toBeNull();
+    // It is a route, so the summary counts it, and it needs attention.
+    expect(screen.getByText("2 routes: 1 serving, 1 need attention, 0 stopped.")).toBeTruthy();
+  });
+
   describe("held and reserved names, the filter and the summary (D-08, D-25, U-16)", () => {
     const claim = (over: Json = {}): Json => ({
       kind: "claim",
