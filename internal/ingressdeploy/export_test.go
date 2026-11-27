@@ -100,3 +100,7 @@ func (s *Service) VIPIsDisabling(envID string) bool { return s.vipIsDisabling(en
 func (s *Service) SetVIPReadTimeouts(node, pass time.Duration) {
 	s.vipNodeTimeout, s.vipPassTimeout = node, pass
 }
+
+// SetSelfWaitBound replaces the bound of a self route job's wait for the next observation of the self network: fn is called
+// once as the wait starts, and its channel ends the wait. A nil channel never ends it.
+func (s *Service) SetSelfWaitBound(fn func() <-chan time.Time) { s.selfWaitBound = fn }

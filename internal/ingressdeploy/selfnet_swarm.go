@@ -399,6 +399,14 @@ func (s *Service) publishSelf(o SelfObservation) {
 		s.selfObs = map[string]SelfObservation{}
 	}
 	s.selfObs[o.EnvID] = o
+	if s.selfSeq == nil {
+		s.selfSeq = map[string]uint64{}
+	}
+	s.selfSeq[o.EnvID]++
+	if s.selfTick != nil {
+		close(s.selfTick)
+		s.selfTick = nil
+	}
 	cb := s.selfCb
 	s.selfMu.Unlock()
 	if o.Foreign && o.Wanted && (!had || !prev.Foreign || !prev.Wanted) {

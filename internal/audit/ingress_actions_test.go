@@ -201,6 +201,11 @@ var ingressActions = []ingressRow{
 		Reason:     "a failed connect changes nothing and is retried on the next pass; it is logged",
 	},
 	{
+		Action: "ingress.self_route_enabled", Verb: "switch", Actor: "user", Class: "F",
+		DetailKeys: []string{"host", "environment"}, FailureKeys: []string{"step", "code"},
+		Proofs: []string{"TestEnableSelfRouteStoresTheClaimAndAudits"}, Failure: "TestAuditProofSelfRouteEnabledFailure",
+	},
+	{
 		Action: "ingress.vip_moved", Verb: "vip_move", Actor: "system", Class: "A",
 		DetailKeys: []string{"from", "to", "reason"},
 		Proofs:     []string{"TestAuditProofVIPMoved"},

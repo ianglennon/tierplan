@@ -264,6 +264,13 @@ type Service struct {
 	selfMu  sync.Mutex
 	selfObs map[string]SelfObservation
 	selfCb  func(SelfObservation)
+	// selfSeq counts, by environment, the observations published since start, and selfTick is closed by the next one (and
+	// then made again by a waiter), so a switch job can wait for an observation newer than its write; selfMu guards both.
+	selfSeq  map[string]uint64
+	selfTick chan struct{}
+	// selfWaitBound, when set, replaces the bound of a self route job's wait for the next observation: it is called once as
+	// the wait starts and its channel ends the wait. Only a test sets it (export_test.go).
+	selfWaitBound func() <-chan time.Time
 }
 
 // New builds the deployer.
