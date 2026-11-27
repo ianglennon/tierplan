@@ -110,6 +110,9 @@ func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
 	if len(codes) != 16 {
 		t.Fatalf("D-40 names 15 codes and D-31 adds one, the test lists %d", len(codes))
 	}
+	if ReasonSelfNetworkPeer != "self_network_peer" {
+		t.Fatalf("ReasonSelfNetworkPeer = %q, the agents of other versions read this exact text", ReasonSelfNetworkPeer)
+	}
 	if ReasonUnknownAgent != "unknown_agent" {
 		t.Fatalf("ReasonUnknownAgent = %q, the agents of other versions read this exact text", ReasonUnknownAgent)
 	}
@@ -122,7 +125,7 @@ func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
 	}
 	for _, c := range []string{
 		RefuseDuplicateEnvironment, RefuseTypeMismatch, RefuseHostMismatch, RefuseTokenDisabled, RefuseTokenSuperseded, RefuseInsecureTransport, RefuseRateLimited, RefuseInternal,
-		RefuseHostAlreadyConnected, RefuseNodeNotInSwarm,
+		RefuseHostAlreadyConnected, RefuseNodeNotInSwarm, ReasonSelfNetworkPeer,
 	} {
 		if c == "" || seen[c] {
 			t.Fatalf("enrolment refusal %q is empty or collides with a reason code", c)

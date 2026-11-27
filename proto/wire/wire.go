@@ -340,6 +340,13 @@ const (
 	ReasonUnknownAgent = "unknown_agent"
 )
 
+// ReasonSelfNetworkPeer refuses a handshake that reached TierPlan through its own ingress route: the TCP
+// peer is on TierPlan's self network, so the connection came through the proxy, not from the agent's
+// host. Agents connect to TierPlan directly, never through an ingress hostname (SELF-05, D-10). It is a
+// handshake refusal, not a D-40 status code: no environment is ever put in this state. An agent that does
+// not know the code logs it as it is.
+const ReasonSelfNetworkPeer = "self_network_peer"
+
 // Refusals only an enrolment can meet. token_disabled and token_superseded are
 // never sent to the agent: each is reported as auth_rejected and kept specific
 // in the audit detail, so a probe cannot tell a disabled or replaced token from
