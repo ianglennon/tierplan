@@ -601,9 +601,11 @@ func selfURL(s *SelfInput) string {
 // holds no backtick or brace (D-08), the backend host holds only what a service name or an alias may
 // (so it cannot give the backend URL another host, userinfo or path), and the base path is empty: the
 // self route is host-rooted and the renderer never rewrites a prefix (Pitfall 9). While TierPlan is
-// attached, the input must also be complete enough to render: a port in range and a trust bundle of
-// at least one PEM certificate. Not-attached input is allowed to be incomplete (nothing of it is
-// rendered), but its strings are checked all the same. A nil input is fine.
+// attached, the input must also be complete enough to render: a backend host, a port in range and no
+// empty ACME host (the carve-out needs those, D-12), and when it names a host (the self route), a
+// server name and a trust bundle of at least one PEM certificate. An attached input with no host is
+// the carve-out alone, with no system claim. Not-attached input is allowed to be incomplete (nothing
+// of it is rendered), but its strings are checked all the same. A nil input is fine.
 func refuseSelf(s *SelfInput) error {
 	if s == nil {
 		return nil
@@ -635,14 +637,16 @@ func refuseSelf(s *SelfInput) error {
 		return nil
 	}
 	switch {
-	case s.Host == "":
-		return refuse(CodeSelfInput, "host")
 	case s.BackendHost == "":
 		return refuse(CodeSelfInput, "backendHost")
-	case s.ServerName == "":
-		return refuse(CodeSelfInput, "serverName")
 	case s.BackendPort <= 0 || s.BackendPort > maxPort:
 		return refuse(CodeSelfInput, "backendPort")
+	case slices.Contains(s.ACMEHosts, ""):
+		return refuse(CodeSelfInput, "acmeHost")
+	case s.Host == "":
+		return nil
+	case s.ServerName == "":
+		return refuse(CodeSelfInput, "serverName")
 	case !hasCertificateBlock(s.TrustPEM):
 		return refuse(CodeSelfInput, "trustPEM")
 	}

@@ -363,8 +363,14 @@ func TestNamesDoNotCollide(t *testing.T) {
 			if _, has := doc["http"]; !has {
 				return
 			}
-			if got := len(digMap(t, doc, "http", "routers")); got != len(routers) {
-				t.Errorf("%d routers in the file but %d manifest routes", got, len(routers))
+			// TierPlan's HTTP-01 carve-out (D-12) is a router but not a route: it is never in the manifest.
+			fileRouters := digMap(t, doc, "http", "routers")
+			got := len(fileRouters)
+			if _, carve := fileRouters[acmeRouterName]; carve {
+				got--
+			}
+			if got != len(routers) {
+				t.Errorf("%d route routers in the file but %d manifest routes", got, len(routers))
 			}
 		})
 	}
