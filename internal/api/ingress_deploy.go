@@ -14,7 +14,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -121,12 +120,8 @@ type IngressDeployDeps struct {
 	// Jobs is the hub the enable job runs in, the same one the Service was built with. Nil answers 503 jobs_unavailable
 	// to the job routes.
 	Jobs *jobs.Hub
-	// Checker decides whether a caller who did not start a job may still follow it, and whether a caller of TierPlan's own
-	// route is an instance Admin.
+	// Checker decides whether a caller who did not start a job may still follow it.
 	Checker *rbac.Checker
-	// Audit records the refusal of a caller of TierPlan's own route who is not an instance Admin (permission.denied). Nil
-	// records nothing.
-	Audit *audit.Writer
 	// Heartbeat is how often an idle job stream gets a ping, MaxLifetime how long one stream may live and
 	// MaxStreamsPerUser how many one user may have open. Zero is each one's default.
 	Heartbeat, MaxLifetime time.Duration

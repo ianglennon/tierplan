@@ -170,7 +170,22 @@ const (
 	// environment the caller has no grant on exactly as an /api/env route does
 	// (T-03-19), and be open to anyone who may read it.
 	kindSelfEnv
+	// kindEnvInstance is an environment route whose operation adds the
+	// instance-admin gate after the policy (httpx.Router.InstanceAdminGate):
+	// TierPlan's own route, which an environment's Admin may not switch because it
+	// changes what the whole install trusts (D-17). Whoever the policy lets through
+	// and is not an instance admin is refused 403 with reason
+	// instance_admin_required.
+	kindEnvInstance
 )
+
+// instanceAdminRoutes are the routes of kindEnvInstance, by method and pattern.
+var instanceAdminRoutes = map[string]bool{
+	"POST /api/env/{envId}/ingress/self/preview":     true,
+	"POST /api/env/{envId}/ingress/self":             true,
+	"POST /api/env/{envId}/ingress/self/off/preview": true,
+	"DELETE /api/env/{envId}/ingress/self":           true,
+}
 
 func classify(rec httpx.RouteRecord) (kind, rbac.Permission) {
 	switch {
@@ -193,6 +208,8 @@ func classify(rec httpx.RouteRecord) (kind, rbac.Permission) {
 	switch {
 	case reg.Scope == rbac.ScopeGlobal && !envTree:
 		return kindGlobal, reg
+	case reg.Scope == rbac.ScopeEnvironment && envTree && instanceAdminRoutes[rec.Method+" "+rec.Path]:
+		return kindEnvInstance, reg
 	case reg.Scope == rbac.ScopeEnvironment && envTree:
 		return kindEnv, reg
 	}
@@ -234,6 +251,11 @@ func expect(a servertest.Archetype, k kind, reg rbac.Permission, envID string) o
 	case kindGlobal:
 		if g.InstanceAdmin {
 			return allowed
+		}
+		return forbidden
+	case kindEnvInstance:
+		if o := expect(a, kindEnv, reg, envID); o != allowed || g.InstanceAdmin {
+			return o
 		}
 		return forbidden
 	}
@@ -298,7 +320,7 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 		}
 		judged[k]++
 		envs := []string{envA}
-		if k == kindEnv || k == kindSelfEnv {
+		if k == kindEnv || k == kindSelfEnv || k == kindEnvInstance {
 			envs = []string{envA, envB}
 		}
 		t.Run(rec.Method+" "+rec.Path, func(t *testing.T) {
@@ -316,7 +338,7 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 						// then says (400, 404 for an ID of "x", 409 for an offline agent)
 						// is its own business, but never a refusal by the policy.
 						if rr.Code == http.StatusUnauthorized || rr.Code == http.StatusForbidden ||
-							(k == kindEnv && rr.Code == http.StatusNotFound && problemTypeOf(rr.Body.Bytes()) == "environment_not_found") {
+							((k == kindEnv || k == kindEnvInstance) && rr.Code == http.StatusNotFound && problemTypeOf(rr.Body.Bytes()) == "environment_not_found") {
 							t.Errorf("%s: %d %s, but the archetype holds the requirement", who, rr.Code, rr.Body)
 						}
 						if after.count != before.count {
@@ -348,10 +370,13 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 					if k == kindAudit && want == forbidden {
 						wantReason = "no_audit_scope"
 					}
+					if k == kindEnvInstance && want == forbidden && expect(a, kindEnv, reg, envID) == allowed {
+						wantReason = "instance_admin_required"
+					}
 					if after.reason != wantReason {
 						t.Errorf("%s: audit reason %q, want %q", who, after.reason, wantReason)
 					}
-					if (k == kindEnv || (k == kindSelfEnv && want == notVisible)) && after.envID != envID {
+					if (k == kindEnv || k == kindEnvInstance || (k == kindSelfEnv && want == notVisible)) && after.envID != envID {
 						t.Errorf("%s: audit env_id %q, want the path value", who, after.envID)
 					}
 				}
@@ -360,7 +385,7 @@ func TestEveryRouteRefusesEveryArchetypeThatLacksItsRequirement(t *testing.T) {
 	}
 
 	// The walk must have found each shape, or it proved nothing.
-	for _, k := range []kind{kindSelf, kindGlobal, kindEnv, kindAudit, kindSelfEnv} {
+	for _, k := range []kind{kindSelf, kindGlobal, kindEnv, kindAudit, kindSelfEnv, kindEnvInstance} {
 		if judged[k] == 0 {
 			t.Errorf("no route of kind %d was judged: the harness did not reach the registered routes", k)
 		}

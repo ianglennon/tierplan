@@ -12,7 +12,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -52,14 +51,7 @@ type IngressSelfRouteRequest struct {
 // IngressSelfRouteInput is the path and the body of the preview and the switch-on.
 type IngressSelfRouteInput struct {
 	EnvironmentPathInput
-	UserAgent string `header:"User-Agent" hidden:"true"`
-	Body      IngressSelfRouteRequest
-}
-
-// IngressSelfRoutePathInput is the path of the switch-off preview and the switch-off.
-type IngressSelfRoutePathInput struct {
-	EnvironmentPathInput
-	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body IngressSelfRouteRequest
 }
 
 // IngressSelfSnippetBody is the next step that puts TierPlan's swarm service on the self network.
@@ -114,38 +106,6 @@ func ingressSelfRoutePreviewBody(pv ingressdeploy.SelfRoutePreview) IngressSelfR
 	return body
 }
 
-// requireInstanceAdmin is the second gate of every self route operation, after rbac.Require(rbac.PermIngressManage): the caller
-// must be an instance Admin. A caller who is not is refused 403 instance_admin_required, and the refusal is audited as
-// permission.denied the way the RBAC gate audits its own (D-49): when the row cannot be written the answer is 500, since a
-// refusal nobody can see must not look like a normal one.
-func requireInstanceAdmin(ctx context.Context, d IngressDeployDeps, p *rbac.Principal, method, path, envID, userAgent string) error {
-	if d.Checker == nil {
-		d.Log.Error("no permission checker for TierPlan's own route")
-		return huma.Error500InternalServerError("internal error")
-	}
-	a, err := d.Checker.Access(ctx, p)
-	if err != nil {
-		d.Log.Error("could not read the caller's access", "error", err)
-		return huma.Error500InternalServerError("internal error")
-	}
-	if a.Active && a.InstanceAdmin {
-		return nil
-	}
-	if d.Audit != nil {
-		wctx, cancel := doneActionAuditContext(ctx)
-		defer cancel()
-		if err := d.Audit.Record(wctx, audit.Entry{
-			Actor: p.AuditActor(), Action: audit.ActionPermissionDenied, Result: audit.ResultDenied,
-			Reason: problemInstanceAdminRequired, TargetType: "route", TargetID: method + " " + path, EnvID: envID,
-			IP: httpx.ClientIP(ctx), UserAgent: userAgent,
-		}); err != nil {
-			d.Log.Error("could not audit a refusal; refusing with 500", "error", err)
-			return huma.Error500InternalServerError("internal error")
-		}
-	}
-	return httpx.Problem(http.StatusForbidden, problemInstanceAdminRequired, instanceAdminRequiredText)
-}
-
 // RegisterIngressSelfRoute registers the preview, the switch-on, the switch-off preview and the switch-off of TierPlan's own
 // route. Each needs ingress.manage on the environment and an instance Admin.
 func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
@@ -155,15 +115,14 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 	unavailable := func() error {
 		return httpx.Problem(http.StatusServiceUnavailable, problemIngressUnavailable, "Ingress is not available on this server.")
 	}
-	// gate answers 401 to a caller who is not signed in, refuses one who is not an instance Admin, and answers 503 when the
-	// deployer is not wired. It returns the principal.
-	gate := func(ctx context.Context, method, path, envID, userAgent string) (*rbac.Principal, error) {
+	// adminGate refuses, after the policy and before the request is parsed, a caller who holds ingress.manage but is not an
+	// instance Admin, audited as permission.denied like the policy's own refusals.
+	adminGate := huma.Middlewares{r.InstanceAdminGate(problemInstanceAdminRequired, instanceAdminRequiredText)}
+	// gate answers 401 to a caller who is not signed in and 503 when the deployer is not wired. It returns the principal.
+	gate := func(ctx context.Context) (*rbac.Principal, error) {
 		p := httpx.PrincipalFrom(ctx)
 		if p == nil {
 			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
-		}
-		if err := requireInstanceAdmin(ctx, d, p, method, path, envID, userAgent); err != nil {
-			return nil, err
 		}
 		if d.Service == nil {
 			return nil, unavailable()
@@ -203,9 +162,10 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 			"Any refused item stops the switch-on. directAddress is the address that keeps reaching TierPlan whatever the route does, empty for the page's own origin. " +
 			"Answered with Cache-Control no-store. " + selfRouteGateText + " A caller who holds ingress.manage but is not an instance admin is refused 403 " + problemInstanceAdminRequired +
 			" and the refusal is audited as permission.denied.",
-		Tags: []string{"ingress"},
+		Tags:        []string{"ingress"},
+		Middlewares: adminGate,
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressSelfRouteInput) (*IngressSelfRoutePreviewOutput, error) {
-		if _, err := gate(ctx, http.MethodPost, selfRoutePreviewPath, in.EnvID, in.UserAgent); err != nil {
+		if _, err := gate(ctx); err != nil {
 			return nil, err
 		}
 		pv, err := d.Service.PreviewSelfRoute(ctx, in.EnvID, request(in.Body))
@@ -228,8 +188,9 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 			" A caller who holds ingress.manage but is not an instance admin is refused 403 " + problemInstanceAdminRequired + " and the refusal is audited as permission.denied.",
 		DefaultStatus: http.StatusAccepted,
 		Tags:          []string{"ingress"},
+		Middlewares:   adminGate,
 	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressSelfRouteInput) (*IngressSelfRouteStartOutput, error) {
-		p, err := gate(ctx, http.MethodPost, selfRoutePath, in.EnvID, in.UserAgent)
+		p, err := gate(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -250,9 +211,10 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 			"an environment that cannot be read only leaves where TierPlan runs unknown. 409 " + problemSelfRouteNotOn + " when TierPlan's own route is not on in this environment. " +
 			"Answered with Cache-Control no-store. " + selfRouteGateText + " A caller who holds ingress.manage but is not an instance admin is refused 403 " + problemInstanceAdminRequired +
 			" and the refusal is audited as permission.denied.",
-		Tags: []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressSelfRoutePathInput) (*IngressSelfRoutePreviewOutput, error) {
-		if _, err := gate(ctx, http.MethodPost, selfRouteOffPreviewPath, in.EnvID, in.UserAgent); err != nil {
+		Tags:        []string{"ingress"},
+		Middlewares: adminGate,
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressSelfRoutePreviewOutput, error) {
+		if _, err := gate(ctx); err != nil {
 			return nil, err
 		}
 		pv, err := d.Service.PreviewSelfRouteOff(ctx, in.EnvID)
@@ -274,8 +236,9 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 			selfRouteGateText + " A caller who holds ingress.manage but is not an instance admin is refused 403 " + problemInstanceAdminRequired + " and the refusal is audited as permission.denied.",
 		DefaultStatus: http.StatusAccepted,
 		Tags:          []string{"ingress"},
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressSelfRoutePathInput) (*IngressSelfRouteStartOutput, error) {
-		p, err := gate(ctx, http.MethodDelete, selfRoutePath, in.EnvID, in.UserAgent)
+		Middlewares:   adminGate,
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressSelfRouteStartOutput, error) {
+		p, err := gate(ctx)
 		if err != nil {
 			return nil, err
 		}

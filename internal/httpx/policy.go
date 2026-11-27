@@ -738,6 +738,38 @@ func (r *Router) policy(need rbac.Requirement) func(huma.Context, func(huma.Cont
 	}
 }
 
+// InstanceAdminGate is a second gate an operation adds to its Middlewares: it runs after the policy has let the request
+// through and before the request is parsed, and refuses a caller who is not an instance admin with 403, the problem type
+// ptype and detail. The refusal is audited as permission.denied with reason ptype, exactly as the policy audits its own (D-49),
+// so a failed audit write answers 500. A route whose requirement an environment's Admin holds, but whose effect reaches the
+// whole install, uses it (TierPlan's own route, D-17).
+func (r *Router) InstanceAdminGate(ptype, detail string) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		req, w := humachi.Unwrap(ctx)
+		p := PrincipalFrom(ctx.Context())
+		envID := ctx.Param("envId")
+		if p == nil {
+			r.deny(w, req, nil, http.StatusUnauthorized, "", rbac.ReasonUnauthenticated, envID, "Sign in to continue.")
+			return
+		}
+		if r.opts.Checker == nil {
+			r.deny(w, req, p, http.StatusForbidden, ptype, ptype, envID, detail)
+			return
+		}
+		a, err := r.opts.Checker.Access(ctx.Context(), p)
+		if err != nil {
+			r.opts.Logger.Error("could not read the caller's access", "error", err)
+			writeProblem(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if !a.Active || !a.InstanceAdmin {
+			r.deny(w, req, p, http.StatusForbidden, ptype, ptype, envID, detail)
+			return
+		}
+		next(ctx)
+	}
+}
+
 // Guarded mounts a plain chi handler (SSE now, WebSocket later) behind the same
 // policy as Register and records it in the route registry (D-47). Use it for
 // anything huma cannot model; never mount on the mux directly.

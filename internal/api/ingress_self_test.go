@@ -275,6 +275,12 @@ func TestSelfRouteNeedsAnInstanceAdmin(t *testing.T) {
 			t.Errorf("%s: denial row = %+v", o.op, last)
 		}
 	}
+	// The gate runs before the body is read: a body that would not validate is still the gate's 403, never a 422.
+	if rec := f.credCall(t, f.adminA, http.MethodPost, f.selfPath("/preview"), `{"hostname":7}`); rec.Code != http.StatusForbidden {
+		t.Errorf("the environment's Admin with a malformed body got %d %s, want 403", rec.Code, rec.Body)
+	} else if typ, _ := deployProblem(t, rec.Body.Bytes()); typ != "instance_admin_required" {
+		t.Errorf("the environment's Admin with a malformed body: problem type %q, want instance_admin_required", typ)
+	}
 	if _, held, err := f.ingressStore.SystemClaim(testsupport.Context(t)); err != nil || held {
 		t.Fatalf("after the refusals: claim held %v (%v), want none", held, err)
 	}
