@@ -633,3 +633,59 @@ func TestHolderClaimChangedReloads(t *testing.T) {
 		t.Fatalf("after a failed reload: origins = %q, want none", got)
 	}
 }
+
+// gatedClaims answers the claim as it is when read, but holds the first read's answer until release is closed: the read of
+// one reload overtaken by a later one.
+type gatedClaims struct {
+	src     *claimSource
+	first   sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedClaims) read(ctx context.Context) (ingressstore.SystemClaim, bool, error) {
+	c, ok, err := g.src.read(ctx)
+	gate := false
+	g.first.Do(func() { gate = true })
+	if gate {
+		close(g.entered)
+		<-g.release
+	}
+	return c, ok, err
+}
+
+// TestHolderReloadNeverGoesBackwards (WR-02): a reload whose read began before the claim was cleared cannot publish its
+// older answer over a later reload's: the read and the publish of one reload are one step.
+func TestHolderReloadNeverGoesBackwards(t *testing.T) {
+	src := &claimSource{}
+	src.set(ingressstore.SystemClaim{EnvID: holderEnv, Hostname: holderHost, Service: "tierplan", Port: 7480}, true)
+	g := &gatedClaims{src: src, entered: make(chan struct{}), release: make(chan struct{})}
+	h := newSelfRoute(g.read, nil, slog.New(slog.DiscardHandler))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { // A: reads "claimed", then is held
+		defer wg.Done()
+		_ = h.Reload(context.Background())
+	}()
+	<-g.entered
+	src.set(ingressstore.SystemClaim{}, false) // the switch-off commits
+	bDone := make(chan struct{})
+	go func() { // B: reads "no claim"
+		defer close(bDone)
+		_ = h.Reload(context.Background())
+	}()
+	select {
+	case <-bDone:
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(g.release)
+	wg.Wait()
+	<-bDone
+	if got := h.ExtraOrigins(); len(got) != 0 {
+		t.Fatalf("origins = %q, want none: the older reload published over the newer", got)
+	}
+	if s := h.snap.Load(); s.Claimed {
+		t.Fatalf("snapshot = %+v, want no claim", s)
+	}
+}

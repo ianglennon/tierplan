@@ -66,6 +66,9 @@ type selfRoute struct {
 	// mu serialises writers; readers load snap.
 	mu   sync.Mutex
 	snap atomic.Pointer[selfSnapshot]
+	// reloadMu makes a reload's read and its publish one step, so a reload whose read began first can never publish its older
+	// answer over a later one's (WR-02). It is taken before mu, never inside it.
+	reloadMu sync.Mutex
 
 	// in is what SelfInput and the install hook read besides the snapshot, set once by wire. Nil until then: SelfInput
 	// answers nothing and the hook does nothing.
@@ -114,8 +117,11 @@ func newSelfRoute(systemClaim func(ctx context.Context) (ingressstore.SystemClai
 	return h
 }
 
-// Reload reads the stored claim. A read that fails leaves what the holder knew in place.
+// Reload reads the stored claim. A read that fails leaves what the holder knew in place. Reloads run one at a time, read
+// and publish together, so the last to read is the last to publish.
 func (h *selfRoute) Reload(ctx context.Context) error {
+	h.reloadMu.Lock()
+	defer h.reloadMu.Unlock()
 	c, ok, err := h.systemClaim(ctx)
 	if err != nil {
 		return err
