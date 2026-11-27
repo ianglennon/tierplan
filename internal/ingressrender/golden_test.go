@@ -104,6 +104,9 @@ func goldenScenarios() map[string]Input {
 		// svc-tierplan-self to TierPlan on the self network through t-self, which verifies by name against
 		// the trust file. No middleware (D-15) and no skip key.
 		"self-route": selfRouteInput(true),
+		// The same claim while TierPlan is not on the self network (D-03): no router, no service, no
+		// transport, and the route is skipped as self_not_attached.
+		"self-not-attached": selfRouteInput(false),
 		// One https route on port 8443: its service names the user transport and the bundle holds it (D-13).
 		"https-backend": {
 			Snapshot: ingress.Snapshot{

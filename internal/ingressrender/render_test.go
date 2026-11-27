@@ -5,6 +5,7 @@ package ingressrender
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -436,5 +437,109 @@ func TestSharedCertificatePairIsWrittenOnce(t *testing.T) {
 	}
 	if services, ok := dig(t, doc, "http", "services").(map[string]any); !ok || len(services) != 1 {
 		t.Errorf("services = %v, want one shared service", services)
+	}
+}
+
+// TestSelfInputRefusals pins T-28-36 and Pitfall 9: every self value that can reach the dynamic file is
+// held to the route rule, and an attached input that cannot be rendered fails the whole render, so the
+// node keeps its last good bundle.
+func TestSelfInputRefusals(t *testing.T) {
+	keyOnly := []byte("-----BEGIN PRIVATE KEY-----\nS0VZQQ==\n-----END PRIVATE KEY-----\n")
+	cases := []struct {
+		name  string
+		edit  func(s *SelfInput)
+		code  string
+		field string
+	}{
+		{"host with a brace", func(s *SelfInput) { s.Host = "tp{.apps.example.org" }, CodeUnsafeValue, "self host"},
+		{"backend host with a backtick", func(s *SelfInput) { s.BackendHost = "tierplan`x" }, CodeUnsafeValue, "self backendHost"},
+		{"backend host with a slash", func(s *SelfInput) { s.BackendHost = "evil.example/x" }, CodeUnsafeValue, "self backendHost"},
+		{"server name with a brace", func(s *SelfInput) { s.ServerName = "tierplan}.example.org" }, CodeUnsafeValue, "self serverName"},
+		{"acme host with a backtick", func(s *SelfInput) { s.ACMEHosts = []string{"a`b"} }, CodeUnsafeValue, "self acmeHost"},
+		{"port 0", func(s *SelfInput) { s.BackendPort = 0 }, CodeSelfInput, "self backendPort"},
+		{"port above 65535", func(s *SelfInput) { s.BackendPort = 65536 }, CodeSelfInput, "self backendPort"},
+		{"empty trust", func(s *SelfInput) { s.TrustPEM = nil }, CodeSelfInput, "self trustPEM"},
+		{"trust with only a private key", func(s *SelfInput) { s.TrustPEM = keyOnly }, CodeSelfInput, "self trustPEM"},
+		{"no server name", func(s *SelfInput) { s.ServerName = "" }, CodeSelfInput, "self serverName"},
+		{"no backend host", func(s *SelfInput) { s.BackendHost = "" }, CodeSelfInput, "self backendHost"},
+		{"a base path", func(s *SelfInput) { s.BasePath = "/tp" }, CodeSelfInput, "self basePath"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := selfRouteInput(true)
+			tc.edit(in.Self)
+			res, err := Render(in)
+			var refused *RefusedError
+			if !errors.As(err, &refused) {
+				t.Fatalf("Render = %+v, %v; want a refusal", res.Skipped, err)
+			}
+			if refused.Code != tc.code || refused.Field != tc.field {
+				t.Errorf("refused %s on %q, want %s on %q", refused.Code, refused.Field, tc.code, tc.field)
+			}
+		})
+	}
+
+	// Strings and the base path are refused even while TierPlan is not attached; an incomplete
+	// not-attached input (no port, no trust yet) renders, because nothing of it is written.
+	t.Run("not attached: a brace still fails", func(t *testing.T) {
+		in := selfRouteInput(false)
+		in.Self.Host = "tp{.apps.example.org"
+		if _, err := Render(in); err == nil {
+			t.Error("a not-attached self input with a brace rendered")
+		}
+	})
+	t.Run("not attached: a base path still fails", func(t *testing.T) {
+		in := selfRouteInput(false)
+		in.Self.BasePath = "/tp"
+		if _, err := Render(in); err == nil {
+			t.Error("a not-attached self input with a base path rendered")
+		}
+	})
+	t.Run("not attached: incomplete input renders", func(t *testing.T) {
+		in := selfRouteInput(false)
+		in.Self.BackendPort = 0
+		in.Self.TrustPEM = nil
+		if _, err := Render(in); err != nil {
+			t.Errorf("Render: %v", err)
+		}
+	})
+	t.Run("a trust bundle with a key before the certificate renders", func(t *testing.T) {
+		in := selfRouteInput(true)
+		in.Self.TrustPEM = append(slices.Clone(keyOnly), trustSelf...)
+		if _, err := Render(in); err != nil {
+			t.Errorf("Render: %v", err)
+		}
+	})
+}
+
+// TestSystemClaimWithoutSelfInputSkips is D-03: a system claim's route in a render with no self input,
+// a self input that is not attached, or a self input for another host is skipped as self_not_attached,
+// never no_backend, and nothing of TierPlan's route reaches the file.
+func TestSystemClaimWithoutSelfInputSkips(t *testing.T) {
+	other := selfInput(true)
+	other.Host = "elsewhere.apps.example.org"
+	for name, self := range map[string]*SelfInput{
+		"nil":          nil,
+		"not attached": selfInput(false),
+		"another host": other,
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := selfRouteInput(true)
+			in.Self = self
+			res := mustRender(t, in)
+			want := []Skipped{{Hostname: "tp.apps.example.org", PathPrefix: "/", Service: "tierplan", Reason: SkipSelfNotAttached}}
+			if !slices.Equal(res.Skipped, want) {
+				t.Errorf("Skipped = %+v, want %+v", res.Skipped, want)
+			}
+			raw, _ := dynamicOf(t, res.Bundle)
+			for _, s := range []string{selfRouterName, selfServiceName, SelfTransport, "rootCAs"} {
+				if strings.Contains(string(raw), s) {
+					t.Errorf("the dynamic file names %s:\n%s", s, raw)
+				}
+			}
+			if len(res.Bundle.Manifest.Routes) != 0 {
+				t.Errorf("manifest routes = %+v, want none", res.Bundle.Manifest.Routes)
+			}
+		})
 	}
 }
