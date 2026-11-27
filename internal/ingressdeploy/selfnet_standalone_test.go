@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/audit/audittest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 )
@@ -199,4 +201,25 @@ func TestStandaloneEnsureReconnectsAfterARecreate(t *testing.T) {
 	if connects, _ := self.calls(); len(connects) != 2 {
 		t.Errorf("a pass after the reconnect connected again: %+v", connects)
 	}
+}
+
+// TestAuditProofSelfNetworkAttached (D-18): the pass that connects TierPlan's own container to the self network writes one
+// ingress.self_network_attached success row by system:ingress, with the network and the short container ID and nothing
+// else; a pass that finds TierPlan connected already writes none, and the join token is in no row.
+func TestAuditProofSelfNetworkAttached(t *testing.T) {
+	r, self := newStandaloneSelfRig(t, standaloneSelfOptions{})
+	const long = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	self.recreate(long)
+	token := r.issueToken()
+	r.claimSelf()
+
+	r.round()
+	r.round()
+	rows := audittest.Rows(t, r.st, audit.ActionIngressSelfNetworkAttached)
+	row := onlyDeployRow(t, rows, audit.ActionIngressSelfNetworkAttached)
+	wantDeployRow(t, row, audit.SystemIngress, r.envID)
+	if want := map[string]string{"network": ingress.SelfNetworkName, "container": long[:12]}; !maps.Equal(row.Details, want) {
+		t.Errorf("details = %v, want %v", row.Details, want)
+	}
+	audittest.AssertNoSecrets(t, rows, token)
 }

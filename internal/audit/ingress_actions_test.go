@@ -195,6 +195,12 @@ var ingressActions = []ingressRow{
 		Reason:     "atomic: the store write is one transaction",
 	},
 	{
+		Action: "ingress.self_network_attached", Verb: "switch", Actor: "system", Class: "A",
+		DetailKeys: []string{"network", "container"},
+		Proofs:     []string{"TestAuditProofSelfNetworkAttached"},
+		Reason:     "a failed connect changes nothing and is retried on the next pass; it is logged",
+	},
+	{
 		Action: "ingress.vip_moved", Verb: "vip_move", Actor: "system", Class: "A",
 		DetailKeys: []string{"from", "to", "reason"},
 		Proofs:     []string{"TestAuditProofVIPMoved"},
