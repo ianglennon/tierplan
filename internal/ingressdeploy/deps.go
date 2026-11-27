@@ -194,6 +194,12 @@ type Deps struct {
 	LocalSwarm func(ctx context.Context) (envs.SwarmMembership, error)
 	// OwnChallenge reads the HTTP-01 challenge answer of the server's own address, for the preflight.
 	OwnChallenge func(ctx context.Context) (string, error)
+	// Self reads TierPlan's own container on the local engine: its swarm service, stack and networks (D-01, D-03). Nil answers
+	// unknown, so SelfLocation refuses rather than guesses.
+	Self func(ctx context.Context) (SelfFacts, error)
+	// SelfURLs reads the instance's own addresses, their environment locks and TIERPLAN_LISTEN's port, for the route's
+	// backend (D-07); nil means none are set.
+	SelfURLs func() SelfURLs
 	// ServerVersion decides the proxy image's tag (IngressImage).
 	ServerVersion string
 	// URL is the full address of the ingress channel the proxy dials, wss://host:port/ingress/connect.

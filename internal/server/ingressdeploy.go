@@ -58,7 +58,11 @@ type ingressDeployDeps struct {
 	CurrentBundle func(envID string) (string, bool)
 	// OwnChallenge reads the challenge answer of the server's own address; nil reads none.
 	OwnChallenge func(ctx context.Context) (string, error)
-	Clock        stackops.Clock
+	// Self reads TierPlan's own container on the local engine (readSelfFacts on the server's socket); nil answers unknown.
+	Self func(ctx context.Context) (ingressdeploy.SelfFacts, error)
+	// SelfURLs reads the instance's own addresses and port for TierPlan's own route; nil means none are set.
+	SelfURLs func() ingressdeploy.SelfURLs
+	Clock    stackops.Clock
 }
 
 // newIngressDeploy builds the deployer from the server's parts. A nil Stacks leaves the deployer listing no stacks to
@@ -120,6 +124,8 @@ func ingressDeployOf(d ingressDeployDeps) ingressdeploy.Deps {
 		System:        ingressSystem(d),
 		LocalSwarm:    d.Envs.LocalSwarmMembership,
 		OwnChallenge:  d.OwnChallenge,
+		Self:          d.Self,
+		SelfURLs:      d.SelfURLs,
 		ServerVersion: buildinfo.Get().Version,
 		URL:           d.Instance.IngressEndpoint,
 		Pins:          d.Pins,
