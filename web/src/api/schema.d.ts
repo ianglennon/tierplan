@@ -5061,7 +5061,7 @@ export interface paths {
         };
         /**
          * Get the certificate the server serves
-         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity, and a trust verdict: whether a client that knows only the system roots trusts it for the public URL's host, or why not. When certificate files fix the certificate the answer also carries their two paths and the verdict, never their contents. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. 503 https_unavailable when no certificate can be read. Needs settings.read.
+         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity, and a trust verdict: whether a client that knows only the system roots trusts it for the public URL's host, or why not. When certificate files fix the certificate the answer also carries their two paths and the verdict, never their contents. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. selfRoute, present only while TierPlan's own ingress route is on, names the environment, the hostname and the route's state, derived like its card on that environment's ingress page. 503 https_unavailable when no certificate can be read. Needs settings.read.
          */
         get: operations["getHTTPSStatus"];
         put?: never;
@@ -10105,6 +10105,17 @@ export interface components {
             /** @description The propagation-check resolvers, fixed by TIERPLAN_DNS_RESOLVERS. Value and stored are the lists as host:port joined by commas; value is empty when the variable fixes the zone's own name servers */
             resolvers?: components["schemas"]["HTTPSLockBody"];
         };
+        HTTPSSelfRouteBody: {
+            /** @description The environment whose ingress serves TierPlan's own route. The page links its ingress page when the reader holds ingress.read there */
+            envId: string;
+            /** @description The route's hostname */
+            host: string;
+            /**
+             * @description serving: every active ingress node applied a bundle that holds the route. pending: the proxies are still picking it up. waiting_certificate: its hostname has no certificate the bundle can carry yet. self_not_attached: TierPlan is not on the tierplan-self network, so nothing is served on the hostname. unknown: what it depends on could not be read just now. Derived like the route's card on the ingress page
+             * @enum {string}
+             */
+            state: "serving" | "pending" | "waiting_certificate" | "self_not_attached" | "unknown";
+        };
         HTTPSStatusBody: {
             /** @description The Let's Encrypt state; left out when this build has no Let's Encrypt support */
             acme?: components["schemas"]["HTTPSACMEBody"];
@@ -10121,6 +10132,8 @@ export interface components {
             certificate: components["schemas"]["HTTPSCertificateBody"];
             /** @description The HSTS state: the switch, the ramp step and when the next one comes, why it is on but not sent, the withdrawal date, when browsers will have forgotten it, and the environment lock. Left out when this build has no HSTS policy */
             hsts?: components["schemas"]["HTTPSHSTSBody"];
+            /** @description Where else TierPlan is served: its own route through an environment's ingress. Present only while that route is on */
+            selfRoute?: components["schemas"]["HTTPSSelfRouteBody"];
         };
         HTTPSTrustBody: {
             /** @description False when nothing was judged, because no certificate could be read */

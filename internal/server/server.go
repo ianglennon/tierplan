@@ -1366,6 +1366,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	stacksDeps.SelfRoute = ingressDeploy
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
+	// The ingress deploy routes, and the HTTPS status's line about TierPlan's own route, which is derived through them.
+	ingressDeployAPI := api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log, Routes: stacksDeps}
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -1469,7 +1471,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, IngressHosts: ingressStore.InstallClaimHosts, Log: log},
 		HTTPS: api.HTTPSDeps{
 			Served:    func() api.ServedCertificate { return rt.servedWith(trust) },
-			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen), Audit: aud},
+			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen), Audit: aud,
+			// TierPlan's own ingress route, read and derived by the same helper as its card on the ingress page (D-16, A-06).
+			SelfRoute: ingressDeployAPI.SelfRouteLine},
 		Backup: api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
@@ -1482,7 +1486,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// The ingress nodes dial in here, and the typed API lists and revokes them (Phase 22). The bundle a node should
 		// hold is the reconciler's current one.
 		IngressConnect: ingressHub.Handler(),
-		IngressDeploy:  api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log, Routes: stacksDeps},
+		IngressDeploy:  ingressDeployAPI,
 		IngressNodes: api.IngressNodesDeps{
 			Service: ingressSvc, Live: ingressHub.Live, Issuer: ingressDeploy,
 			CurrentBundle: func(envID string) (string, bool) {

@@ -710,13 +710,7 @@ func serveIngressJobStream(w http.ResponseWriter, req *http.Request, d IngressDe
 // selfRouteStatus is TierPlan's own route in envID for the ingress status, nil where TierPlan runs in another environment. A
 // read of the route's facts that fails is an environment TierPlan cannot tell it runs in, with an unknown state.
 func (d IngressDeployDeps) selfRouteStatus(ctx context.Context, envID string, enabled bool) *IngressSelfRouteBody {
-	routes := d.Routes
-	if routes.SelfRoute == nil && d.Service != nil {
-		routes.SelfRoute = d.Service
-	}
-	if routes.Log == nil {
-		routes.Log = d.Log
-	}
+	routes := d.selfRoutes()
 	f, known := routes.readSelfRoute(ctx, envID)
 	if !known {
 		return &IngressSelfRouteBody{Here: string(ingressdeploy.SelfHereUnknown), State: selfStateUnknown, Network: ingress.SelfNetworkName}
@@ -746,6 +740,50 @@ func (d IngressDeployDeps) selfRouteStatus(ctx context.Context, envID string, en
 		body.Snippet = &IngressSelfSnippetBody{Kind: f.Snippet.Kind, Text: f.Snippet.Text}
 	}
 	return body
+}
+
+// selfRoutes are the stack routes' deps TierPlan's own route is read and derived through: its facts come from Routes.SelfRoute,
+// the Service when that is nil.
+func (d IngressDeployDeps) selfRoutes() StacksDeps {
+	routes := d.Routes
+	if routes.SelfRoute == nil && d.Service != nil {
+		routes.SelfRoute = d.Service
+	}
+	if routes.Log == nil {
+		routes.Log = d.Log
+	}
+	return routes
+}
+
+// SelfRouteLine is TierPlan's own route for Settings > HTTPS (D-16, UI-SPEC A-06): the environment that holds it, its hostname
+// and its state, derived by the same call as its card on that environment's ingress page. ok is false while the route is off
+// and when it cannot be read; a read that fails after the route is known leaves the state unknown.
+func (d IngressDeployDeps) SelfRouteLine(ctx context.Context) (envID, host, state string, ok bool) {
+	routes := d.selfRoutes()
+	if routes.Ingress == nil {
+		return "", "", "", false
+	}
+	log := routes.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	claim, held, err := routes.Ingress.SystemClaim(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "TierPlan's own route could not be read for the HTTPS status", "error", err)
+		return "", "", "", false
+	}
+	if !held {
+		return "", "", "", false
+	}
+	set, err := routes.Ingress.Settings(ctx, claim.EnvID)
+	if err != nil {
+		log.WarnContext(ctx, "the ingress settings could not be read for the HTTPS status", "environment", claim.EnvID, "error", err)
+		return claim.EnvID, claim.Hostname, selfStateUnknown, true
+	}
+	f, known := routes.readSelfRoute(ctx, claim.EnvID)
+	in := routes.envRouteInput(ctx, claim.EnvID, set.Enabled)
+	sr := systemRouteState(in, ingress.Route{Hostname: claim.Hostname, PathPrefix: "/"}, f, known)
+	return claim.EnvID, claim.Hostname, selfCardState(sr.State), true
 }
 
 // The states of TierPlan's own route on its card.
