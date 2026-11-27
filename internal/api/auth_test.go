@@ -753,7 +753,8 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		nodesDeps.Issuer = f.ingressIssuer
 	}
 	api.RegisterIngressNodes(r, nodesDeps)
-	api.RegisterIngressDeploy(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
+	// The status derives TierPlan's own route through the stack routes' deps, as on a server.
+	api.RegisterIngressDeploy(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log, Routes: f.stackDeps})
 	api.RegisterIngressVIP(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
 	api.RegisterIngressSelfRoute(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
 	api.RegisterGit(r, gitDeps)

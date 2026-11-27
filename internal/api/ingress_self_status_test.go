@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"testing"
 
@@ -174,4 +175,132 @@ func TestRoutesListDerivesTheSystemRow(t *testing.T) {
 		}
 	})
 
+}
+
+// selfStatusAnswer is the selfRoute object of the ingress status.
+type selfStatusAnswer struct {
+	Here          string `json:"here"`
+	On            bool   `json:"on"`
+	Host          string `json:"host"`
+	State         string `json:"state"`
+	Reason        string `json:"reason"`
+	DirectAddress string `json:"directAddress"`
+	Kind          string `json:"kind"`
+	Attached      bool   `json:"attached"`
+	Network       string `json:"network"`
+	Refusal       *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"refusal"`
+	Snippet *struct {
+		Kind string `json:"kind"`
+		Text string `json:"text"`
+	} `json:"snippet"`
+	CarveOut bool `json:"carveOut"`
+}
+
+// selfStatusOf reads an environment's ingress status as u and returns its selfRoute object, nil when the answer has none.
+func selfStatusOf(t *testing.T, f *selfRouteFix, u credentialUser, envID string) *selfStatusAnswer {
+	t.Helper()
+	rec := f.credCall(t, u, http.MethodGet, "/api/env/"+envID+"/ingress/status", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET ingress/status: %d %s", rec.Code, rec.Body)
+	}
+	return decodeBody[struct {
+		SelfRoute *selfStatusAnswer `json:"selfRoute"`
+	}](t, rec).SelfRoute
+}
+
+// TestIngressStatusCarriesTheSelfRoute: the ingress status carries TierPlan's own route for its card (UI-SPEC A-01) in the
+// environment TierPlan runs in or cannot tell, derived like the route's row, and nothing where TierPlan runs elsewhere. A
+// Viewer reads the same object (ingress.read).
+func TestIngressStatusCarriesTheSelfRoute(t *testing.T) {
+	t.Parallel()
+	const direct = "https://tierplan.example.org:7480"
+	facts := &selfFactsFake{}
+	src := &routeSourcesFake{}
+	f := newSelfRouteFix(t, func(df *deployFix, _ *ingressdeploy.Deps) {
+		df.stackSelfRoute, df.stackIngressRoutes = facts, src
+	})
+	viewer := f.asRoleOn(t, "self-viewer", f.envA, "viewer")
+	b := ingressbundle.Bundle{ID: "b1"}
+	b.Manifest.Routes = []ingressbundle.RouteEntry{{Hostname: selfRouteHost, PathPrefix: "/"}}
+	*src = routeSourcesFake{bundle: b, have: true, nodes: []ingresshub.Node{{Status: "active", AppliedBundleID: "b1"}}}
+	snippet := &ingressdeploy.SelfSnippet{Kind: ingressdeploy.SelfSnippetStackFile, Text: ingressdeploy.StackFileSnippet("tierplan")}
+
+	t.Run("on and attached", func(t *testing.T) {
+		facts.set(f.envA, ingressdeploy.SelfRouteFacts{
+			Here: ingressdeploy.SelfHereYes, On: true, Host: selfRouteHost, Direct: direct, Kind: ingressdeploy.SelfKindSwarmService,
+			Attached: true, AttachedKnown: true, CarveOut: true,
+		})
+		for _, u := range []credentialUser{f.admin, viewer} {
+			s := selfStatusOf(t, f, u, f.envA)
+			if s == nil || s.Here != "yes" || !s.On || s.Host != selfRouteHost || s.State != stackops.RouteServing || s.Reason != "" ||
+				!s.Attached || s.Network != ingress.SelfNetworkName || s.DirectAddress != direct || s.Kind != ingressdeploy.SelfKindSwarmService ||
+				!s.CarveOut || s.Refusal != nil || s.Snippet != nil {
+				t.Errorf("selfRoute = %+v, want on, attached and serving", s)
+			}
+		}
+	})
+
+	t.Run("off", func(t *testing.T) {
+		facts.set(f.envA, ingressdeploy.SelfRouteFacts{
+			Here: ingressdeploy.SelfHereYes, Direct: direct, Kind: ingressdeploy.SelfKindSwarmService, AttachedKnown: true, Snippet: snippet,
+		})
+		s := selfStatusOf(t, f, viewer, f.envA)
+		if s == nil || s.On || s.Host != "" || s.State != "off" || s.DirectAddress != direct || s.Snippet != nil {
+			t.Errorf("selfRoute = %+v, want off with the direct address and no snippet", s)
+		}
+	})
+
+	t.Run("not attached on a swarm", func(t *testing.T) {
+		facts.set(f.envA, ingressdeploy.SelfRouteFacts{
+			Here: ingressdeploy.SelfHereYes, On: true, Host: selfRouteHost, Direct: direct, Kind: ingressdeploy.SelfKindSwarmService,
+			AttachedKnown: true, Snippet: snippet,
+		})
+		s := selfStatusOf(t, f, viewer, f.envA)
+		if s == nil || s.State != "self_not_attached" || s.Reason != stackops.ReasonSelfNotAttached || s.Attached {
+			t.Fatalf("selfRoute = %+v, want self_not_attached", s)
+		}
+		if s.Snippet == nil || s.Snippet.Kind != ingressdeploy.SelfSnippetStackFile || s.Snippet.Text != snippet.Text {
+			t.Errorf("snippet = %+v, want the stack file lines", s.Snippet)
+		}
+	})
+
+	t.Run("attachment not observed yet", func(t *testing.T) {
+		facts.set(f.envA, ingressdeploy.SelfRouteFacts{
+			Here: ingressdeploy.SelfHereYes, On: true, Host: selfRouteHost, Kind: ingressdeploy.SelfKindSwarmService, Attached: true,
+		})
+		if s := selfStatusOf(t, f, viewer, f.envA); s == nil || s.State != "unknown" || s.Reason != "" {
+			t.Errorf("selfRoute = %+v, want unknown, never serving", s)
+		}
+	})
+
+	t.Run("detection cannot tell", func(t *testing.T) {
+		refusal := ingressdeploy.Finding{Code: ingressdeploy.CodeSelfRouteNotHere, Message: "TierPlan can't tell whether it runs in this environment."}
+		facts.set(f.envA, ingressdeploy.SelfRouteFacts{Here: ingressdeploy.SelfHereUnknown, Direct: direct, Refusal: &refusal})
+		s := selfStatusOf(t, f, viewer, f.envA)
+		if s == nil || s.Here != "unknown" || s.On || s.State != "off" || s.Kind != "" || s.Refusal == nil ||
+			s.Refusal.Code != ingressdeploy.CodeSelfRouteNotHere || s.Refusal.Message != refusal.Message {
+			t.Errorf("selfRoute = %+v, refusal %+v, want here unknown with the refusal", s, s.Refusal)
+		}
+	})
+
+	t.Run("another environment", func(t *testing.T) {
+		if s := selfStatusOf(t, f, f.admin, f.envB); s != nil {
+			t.Errorf("selfRoute of the other environment = %+v, want none", s)
+		}
+	})
+}
+
+// TestIngressStatusSelfRouteFromTheDeployer: with no reader of its own the status reads the deployer's facts. The fixture's
+// deployer cannot read TierPlan's own container, so it cannot tell whether TierPlan runs here: here unknown, with the refusal.
+func TestIngressStatusSelfRouteFromTheDeployer(t *testing.T) {
+	t.Parallel()
+	f := newSelfRouteFix(t, nil)
+	s := selfStatusOf(t, f, f.admin, f.envA)
+	if s == nil || s.Here != "unknown" || s.State != "off" || s.Network != ingress.SelfNetworkName || s.Refusal == nil ||
+		s.Refusal.Code != ingressdeploy.CodeSelfRouteNotHere || s.DirectAddress != selfRoutePublic {
+		t.Errorf("selfRoute = %+v, want here unknown with self_route_not_here", s)
+	}
 }

@@ -16,9 +16,11 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 // The ingress deploy routes (Phase 24, DEP-01, DEP-07): an Admin previews what switching ingress on would create and what would
@@ -73,6 +75,30 @@ type IngressStatusBody struct {
 	EnableFailed        bool                  `json:"enableFailed" doc:"True when ingress is off because switching it on failed, and the objects that attempt made remain in the swarm. Switch ingress on again to carry on, or off to remove them"`
 	TokenDisabled       bool                  `json:"tokenDisabled" doc:"True when the join token is disabled, so no further node can enrol"`
 	Redeploy            []IngressRedeployBody `json:"redeploy" doc:"The stacks that must be redeployed to be attached to the ingress network"`
+	SelfRoute           *IngressSelfRouteBody `json:"selfRoute,omitempty" doc:"TierPlan's own route in this environment, for its card. Present when TierPlan runs in this environment or cannot tell whether it does; absent when it runs in another one"`
+}
+
+// IngressSelfRefusalBody is why TierPlan's own route cannot be switched on in the environment, known before the switch is pressed.
+type IngressSelfRefusalBody struct {
+	Code    string `json:"code" doc:"The stable code of the refusal: self_route_not_here when TierPlan cannot tell whether it runs here, self_route_needs_service when it runs as a plain container on a swarm node"`
+	Message string `json:"message" doc:"The server's sentence. Show it as sent"`
+}
+
+// IngressSelfRouteBody is TierPlan's own route in an environment, as its card draws it (UI-SPEC A-01, A-03, A-04). It holds the
+// hostname, a state, the direct address and a stack-file snippet; never a token, a key or a secret.
+type IngressSelfRouteBody struct {
+	Here          string                  `json:"here" enum:"yes,unknown" doc:"yes: TierPlan runs in this environment. unknown: TierPlan cannot tell, so it refuses to switch its route on here (refusal says so)"`
+	On            bool                    `json:"on" doc:"True while TierPlan's own route is on in this environment"`
+	Host          string                  `json:"host" doc:"The route's hostname; empty while it is off"`
+	State         string                  `json:"state" enum:"off,serving,pending,waiting_certificate,self_not_attached,unknown" doc:"off: the route is not on here. serving: every active ingress node applied a bundle that holds it. pending: the proxies are still picking it up. waiting_certificate: its hostname has no certificate the bundle can carry yet, and reason says why. self_not_attached: TierPlan is not on the tierplan-self network, so nothing is served on the hostname. unknown: what it depends on could not be read just now. Derived by the same call as the route's row on the routes list"`
+	Reason        string                  `json:"reason" doc:"For waiting_certificate, no_certificate or certificate_not_ready; for self_not_attached, self_not_attached. Empty for every other state"`
+	DirectAddress string                  `json:"directAddress" doc:"The address that keeps reaching TierPlan whatever the route does, a full URL with the port; empty when that is the page's own origin"`
+	Kind          string                  `json:"kind" enum:"swarm_service,swarm_container,standalone," doc:"How TierPlan runs here: a swarm service, a plain container on a swarm node, or a container on a standalone host. Empty when here is unknown"`
+	Attached      bool                    `json:"attached" doc:"True when TierPlan is on the tierplan-self network"`
+	Network       string                  `json:"network" enum:"tierplan-self" doc:"The network the proxies reach TierPlan over, always tierplan-self"`
+	Refusal       *IngressSelfRefusalBody `json:"refusal,omitempty" doc:"Why the route cannot be switched on here, known before the switch is pressed; absent when nothing stands in the way"`
+	Snippet       *IngressSelfSnippetBody `json:"snippet,omitempty" doc:"In state self_not_attached on a swarm, the next step that puts TierPlan's service on the tierplan-self network; absent otherwise"`
+	CarveOut      bool                    `json:"carveOut" doc:"True when TierPlan's own certificate renews over the HTTP-01 challenge here, so the proxies carry the challenge to TierPlan"`
 }
 
 // IngressStatusOutput wraps IngressStatusBody for huma.
@@ -128,6 +154,10 @@ type IngressDeployDeps struct {
 	MaxStreamsPerUser      int
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// Routes are the stack routes' dependencies: the ingress status derives TierPlan's own route's state through them, by
+	// the same call as its row on the routes list, and reads the route's facts through Routes.SelfRoute (the Service when
+	// that is nil).
+	Routes StacksDeps
 }
 
 // IngressEnableRequest is the optional body of the preview and the enable.
@@ -545,6 +575,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		Description: "Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds, or on a standalone host which of the network, proxy container and cache volume it holds; " +
 			"how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; " +
 			"how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. " +
+			"selfRoute is TierPlan's own route here, present when TierPlan runs in this environment or cannot tell whether it does: whether it is on, its hostname and state (derived like its row on the routes list), the direct address, whether TierPlan is on the tierplan-self network, a refusal known before the switch and the next step while TierPlan's swarm service is not attached. " +
 			"It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).",
 		Tags: []string{"ingress"},
 	}, rbac.Require(rbac.PermIngressRead), func(ctx context.Context, in *EnvironmentPathInput) (*IngressStatusOutput, error) {
@@ -572,6 +603,7 @@ func RegisterIngressDeploy(r *httpx.Router, d IngressDeployDeps) {
 		for _, r := range st.Redeploy {
 			body.Redeploy = append(body.Redeploy, IngressRedeployBody{StackID: r.ID, StackName: r.Name, HoldsClaims: r.HoldsClaims})
 		}
+		body.SelfRoute = d.selfRouteStatus(ctx, in.EnvID, st.Enabled)
 		return &IngressStatusOutput{CacheControl: "no-store", Body: body}, nil
 	})
 
@@ -669,6 +701,66 @@ func serveIngressJobStream(w http.ResponseWriter, req *http.Request, d IngressDe
 			return nil, false
 		},
 	})
+}
+
+// selfRouteStatus is TierPlan's own route in envID for the ingress status, nil where TierPlan runs in another environment. A
+// read of the route's facts that fails is an environment TierPlan cannot tell it runs in, with an unknown state.
+func (d IngressDeployDeps) selfRouteStatus(ctx context.Context, envID string, enabled bool) *IngressSelfRouteBody {
+	routes := d.Routes
+	if routes.SelfRoute == nil && d.Service != nil {
+		routes.SelfRoute = d.Service
+	}
+	if routes.Log == nil {
+		routes.Log = d.Log
+	}
+	f, known := routes.readSelfRoute(ctx, envID)
+	if !known {
+		return &IngressSelfRouteBody{Here: string(ingressdeploy.SelfHereUnknown), State: selfStateUnknown, Network: ingress.SelfNetworkName}
+	}
+	if f.Here == ingressdeploy.SelfHereNo {
+		return nil
+	}
+	body := &IngressSelfRouteBody{
+		Here: string(f.Here), On: f.On, Host: f.Host, State: selfStateOff, DirectAddress: f.Direct, Kind: f.Kind,
+		Attached: f.Attached, Network: ingress.SelfNetworkName, CarveOut: f.CarveOut,
+	}
+	if body.Here != string(ingressdeploy.SelfHereYes) {
+		body.Here, body.Kind = string(ingressdeploy.SelfHereUnknown), ""
+	}
+	if f.Refusal != nil {
+		body.Refusal = &IngressSelfRefusalBody{Code: f.Refusal.Code, Message: f.Refusal.Message}
+	}
+	if f.On {
+		in := routes.envRouteInput(ctx, envID, enabled)
+		sr := systemRouteState(in, ingress.Route{Hostname: f.Host, PathPrefix: "/"}, f, true)
+		body.State, body.Reason = selfCardState(sr.State), sr.Reason
+		if body.State == selfStateUnknown {
+			body.Reason = ""
+		}
+	}
+	if body.State == selfStateNotAttached && f.Snippet != nil {
+		body.Snippet = &IngressSelfSnippetBody{Kind: f.Snippet.Kind, Text: f.Snippet.Text}
+	}
+	return body
+}
+
+// The states of TierPlan's own route on its card.
+const (
+	selfStateOff         = "off"
+	selfStateNotAttached = "self_not_attached"
+	selfStateUnknown     = "unknown"
+)
+
+// selfCardState is the card's word for a system route's state: not_attached is self_not_attached, and a state the card has no
+// word for (ingress off or the backend not running, neither of which a route that is on should be in) is unknown.
+func selfCardState(state string) string {
+	switch state {
+	case stackops.RouteServing, stackops.RoutePending, stackops.RouteWaitingCertificate:
+		return state
+	case stackops.RouteNotAttached:
+		return selfStateNotAttached
+	}
+	return selfStateUnknown
 }
 
 // ingressDisableProblem is the 409 for a switch-off that was refused: its type is the code of the first finding

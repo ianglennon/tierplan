@@ -1482,7 +1482,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// The ingress nodes dial in here, and the typed API lists and revokes them (Phase 22). The bundle a node should
 		// hold is the reconciler's current one.
 		IngressConnect: ingressHub.Handler(),
-		IngressDeploy:  api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log},
+		IngressDeploy:  api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log, Routes: stacksDeps},
 		IngressNodes: api.IngressNodesDeps{
 			Service: ingressSvc, Live: ingressHub.Live, Issuer: ingressDeploy,
 			CurrentBundle: func(envID string) (string, bool) {

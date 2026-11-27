@@ -1961,7 +1961,7 @@ export interface paths {
         };
         /**
          * Read the ingress status of a swarm or standalone environment
-         * @description Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds, or on a standalone host which of the network, proxy container and cache volume it holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).
+         * @description Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds, or on a standalone host which of the network, proxy container and cache volume it holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. selfRoute is TierPlan's own route here, present when TierPlan runs in this environment or cannot tell whether it does: whether it is on, its hostname and state (derived like its row on the routes list), the direct address, whether TierPlan is on the tierplan-self network, a refusal known before the switch and the next step while TierPlan's swarm service is not attached. It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).
          */
         get: operations["getIngressStatus"];
         put?: never;
@@ -11128,6 +11128,50 @@ export interface components {
             /** @description The rows of the environment, never another environment's: the routes in hostname, path then service order, then the claims with no route in hostname order, then the reserved names in hostname order; empty when there are none */
             routes: components["schemas"]["IngressRouteBody"][] | null;
         };
+        IngressSelfRefusalBody: {
+            /** @description The stable code of the refusal: self_route_not_here when TierPlan cannot tell whether it runs here, self_route_needs_service when it runs as a plain container on a swarm node */
+            code: string;
+            /** @description The server's sentence. Show it as sent */
+            message: string;
+        };
+        IngressSelfRouteBody: {
+            /** @description True when TierPlan is on the tierplan-self network */
+            attached: boolean;
+            /** @description True when TierPlan's own certificate renews over the HTTP-01 challenge here, so the proxies carry the challenge to TierPlan */
+            carveOut: boolean;
+            /** @description The address that keeps reaching TierPlan whatever the route does, a full URL with the port; empty when that is the page's own origin */
+            directAddress: string;
+            /**
+             * @description yes: TierPlan runs in this environment. unknown: TierPlan cannot tell, so it refuses to switch its route on here (refusal says so)
+             * @enum {string}
+             */
+            here: "yes" | "unknown";
+            /** @description The route's hostname; empty while it is off */
+            host: string;
+            /**
+             * @description How TierPlan runs here: a swarm service, a plain container on a swarm node, or a container on a standalone host. Empty when here is unknown
+             * @enum {string}
+             */
+            kind: "swarm_service" | "swarm_container" | "standalone" | "";
+            /**
+             * @description The network the proxies reach TierPlan over, always tierplan-self
+             * @enum {string}
+             */
+            network: "tierplan-self";
+            /** @description True while TierPlan's own route is on in this environment */
+            on: boolean;
+            /** @description For waiting_certificate, no_certificate or certificate_not_ready; for self_not_attached, self_not_attached. Empty for every other state */
+            reason: string;
+            /** @description Why the route cannot be switched on here, known before the switch is pressed; absent when nothing stands in the way */
+            refusal?: components["schemas"]["IngressSelfRefusalBody"];
+            /** @description In state self_not_attached on a swarm, the next step that puts TierPlan's service on the tierplan-self network; absent otherwise */
+            snippet?: components["schemas"]["IngressSelfSnippetBody"];
+            /**
+             * @description off: the route is not on here. serving: every active ingress node applied a bundle that holds it. pending: the proxies are still picking it up. waiting_certificate: its hostname has no certificate the bundle can carry yet, and reason says why. self_not_attached: TierPlan is not on the tierplan-self network, so nothing is served on the hostname. unknown: what it depends on could not be read just now. Derived by the same call as the route's row on the routes list
+             * @enum {string}
+             */
+            state: "off" | "serving" | "pending" | "waiting_certificate" | "self_not_attached" | "unknown";
+        };
         IngressSelfRouteItemBody: {
             /** @description The item: self_hostname, self_certificate, self_network, self_origin and self_carve_out for a switch-on; self_origin_removed and self_network_removed for a switch-off */
             code: string;
@@ -11194,6 +11238,8 @@ export interface components {
             pendingWipes: number;
             /** @description The stacks that must be redeployed to be attached to the ingress network */
             redeploy: components["schemas"]["IngressRedeployBody"][] | null;
+            /** @description TierPlan's own route in this environment, for its card. Present when TierPlan runs in this environment or cannot tell whether it does; absent when it runs in another one */
+            selfRoute?: components["schemas"]["IngressSelfRouteBody"];
             /** @description True when the join token is disabled, so no further node can enrol */
             tokenDisabled: boolean;
         };
