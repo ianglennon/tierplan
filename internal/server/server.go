@@ -935,6 +935,28 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	hsts.publicURL = inst.PublicURL
 	hsts.SetAudit(aud.Record)
 	rt.SetOnInstall(hsts.Wake)
+	// One ingress store and one notifier for the whole server: the stack routes judge and (from the deploy gates on) write
+	// the stacks' hostnames through the store, and the notifier wakes the reconciler of the environment that changed.
+	ingressNotifier := ingress.NewNotifier()
+	// The hostname policy refuses the host agents and proxies dial, the agent URL's else the public URL's. It is read from the
+	// instance on every World read, so a settings change applies at once (D-10, SELF-05).
+	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier, AgentHosts: func() []string {
+		if h := hostOf(inst.AgentBase()); h != "" {
+			return []string{h}
+		}
+		return nil
+	}})
+	// TierPlan's own route: the live trusted-proxy set and the route's origin, from the stored system claim and the ingress
+	// ensure loop's observations of TierPlan's own network, never from a request (D-06, D-07). The claim is read once now
+	// (Pitfall 6); the observations arrive once the ingress deployer below is built.
+	selfNow := time.Now
+	if bo.janitorClock != nil {
+		selfNow = bo.janitorClock.Now
+	}
+	selfRt := newSelfRoute(ingressStore.SystemClaim, selfNow, log)
+	if err := selfRt.Reload(ctx); err != nil {
+		log.Warn("the system claim could not be read at start; TierPlan's own route is not trusted until the next ensure pass", "error", err)
+	}
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
@@ -1119,17 +1141,6 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gitx.InstallTransport(registryEgress)
 	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
 	gitConns := gitconn.NewStore(st, vlt, nil)
-	// One ingress store and one notifier for the whole server: the stack routes judge and (from the deploy gates on) write
-	// the stacks' hostnames through the store, and the notifier wakes the reconciler of the environment that changed.
-	ingressNotifier := ingress.NewNotifier()
-	// The hostname policy refuses the host agents and proxies dial, the agent URL's else the public URL's. It is read from the
-	// instance on every World read, so a settings change applies at once (D-10, SELF-05).
-	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier, AgentHosts: func() []string {
-		if h := hostOf(inst.AgentBase()); h != "" {
-			return []string{h}
-		}
-		return nil
-	}})
 	// The per-hostname certificate manager shares the DNS provider map and the clock of the Let's Encrypt manager, so
 	// WithACMEDNS and WithACMEClock move both. It is started before the server listens and run in the background below.
 	certMgr, certStore, err := wireIngressCerts(cfg, log, st, vlt, jobHub, ingressStore, ingressNotifier, bo.acmeClock, acmeDNS)
@@ -1298,6 +1309,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			return b.ID, ok
 		},
 	})
+	// Every observation of a self network reaches the holder, which keeps only TierPlan's own environment's.
+	ingressDeploy.OnSelfObserved(selfRt.Observe)
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
 	router := NewRouter(RouterDeps{
@@ -1309,9 +1322,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Auditor:        refusals,
 			MutationGuard:  auth.NewCSRFGuard(sessions),
 			TrustedProxies: cfg.TrustedProxies,
-			Proxy:          proxyObs,
-			PublicOrigin:   inst.PublicOrigin,
-			Logger:         log,
+			// The self network's subnet and the route host's origin, read on every request (D-06, D-07).
+			LiveTrustedProxies: selfRt.TrustedPrefixes,
+			ExtraOrigins:       selfRt.ExtraOrigins,
+			Proxy:              proxyObs,
+			PublicOrigin:       inst.PublicOrigin,
+			Logger:             log,
 			// Strict-Transport-Security is the policy's decision (D-10): only on a
 			// response to a request that came over TLS, an X-Forwarded-Proto header
 			// decides nothing here, and never over TierPlan's own self-signed
