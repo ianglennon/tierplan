@@ -9,7 +9,9 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingressrender"
 )
@@ -172,3 +174,111 @@ func TestNoSelfInputWithoutAClaimOrCarveOut(t *testing.T) {
 		t.Fatal("an unwired holder's SelfInput is ok, want nothing")
 	}
 }
+
+// fakeInstance is the instance's URLs and their locks.
+type fakeInstance struct {
+	public, agent             string
+	publicLocked, agentLocked bool
+}
+
+func (f fakeInstance) PublicURL() string    { return f.public }
+func (f fakeInstance) AgentURL() string     { return f.agent }
+func (f fakeInstance) Locked() bool         { return f.publicLocked }
+func (f fakeInstance) AgentURLLocked() bool { return f.agentLocked }
+
+// fakeCerts is the ingress certificate store's state and its live certificates by hostname.
+type fakeCerts struct {
+	state ingresscert.State
+	live  map[string]ingresscert.Cert
+}
+
+func (f fakeCerts) LiveCert(_ context.Context, host string) (ingresscert.Cert, bool, error) {
+	c, ok := f.live[host]
+	return c, ok, nil
+}
+
+func (f fakeCerts) State(context.Context) (ingresscert.State, error) { return f.state, nil }
+
+func TestDeployerSelfDepsAreWired(t *testing.T) {
+	inst := fakeInstance{public: wiringPublicURL, agent: wiringAgentURL, publicLocked: true}
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	accepted := ingresscert.State{TermsAcceptedAt: now.Add(-time.Hour), TermsAcceptedBy: "id-admin"}
+	certs := fakeCerts{state: accepted, live: map[string]ingresscert.Cert{
+		"valid.example.org": {
+			EnvID: holderEnv, Hostname: "valid.example.org", Source: ingresscert.SourceACME, Issuer: ingresscert.IssuerProduction,
+			ChainPEM: []byte("chain"), NotBefore: now.Add(-24 * time.Hour), NotAfter: now.Add(60 * 24 * time.Hour), Ready: true,
+		},
+		"pending.example.org": {EnvID: holderEnv, Hostname: "pending.example.org", Source: ingresscert.SourceACME, Issuer: ingresscert.IssuerProduction},
+		"other.example.org": {
+			EnvID: "env-2", Hostname: "other.example.org", Source: ingresscert.SourceACME, Issuer: ingresscert.IssuerProduction,
+			ChainPEM: []byte("chain"), NotBefore: now.Add(-24 * time.Hour), NotAfter: now.Add(60 * 24 * time.Hour), Ready: true,
+		},
+	}}
+	deps := ingressDeployDeps{
+		SelfURLs:   instanceSelfURLs(inst, ":7480"),
+		SocketPath: "/var/run/docker.sock", SelfID: "c0ffee",
+		IngressCerts: certs, Clock: fixedClock{now},
+	}
+	got := ingressDeployOf(deps)
+
+	if got.SelfURLs == nil {
+		t.Fatal("the deployer has no SelfURLs")
+	}
+	wantURLs := ingressdeploy.SelfURLs{PublicURL: wiringPublicURL, AgentURL: wiringAgentURL, PublicLocked: true, AgentLocked: false, ListenPort: 7480}
+	if u := got.SelfURLs(); u != wantURLs {
+		t.Fatalf("SelfURLs() = %+v, want %+v", u, wantURLs)
+	}
+	if got.SelfConnect == nil || got.SelfDisconnect == nil {
+		t.Fatal("SelfConnect or SelfDisconnect is nil with the socket and TierPlan's container known")
+	}
+	for _, d := range []ingressDeployDeps{{SocketPath: "/var/run/docker.sock"}, {SelfID: "c0ffee"}, {}} {
+		if g := ingressDeployOf(d); g.SelfConnect != nil || g.SelfDisconnect != nil {
+			t.Fatalf("SelfConnect/SelfDisconnect set with socket %q and container %q, want nil", d.SocketPath, d.SelfID)
+		}
+	}
+	if g := ingressDeployOf(ingressDeployDeps{}); g.HostCertificate != nil {
+		t.Fatal("HostCertificate set with no certificate store, want nil (unknown)")
+	}
+
+	ctx := context.Background()
+	read := func(t *testing.T, get func(ctx context.Context, envID, host string) (ingressdeploy.HostCertState, error), env, host string) ingressdeploy.HostCertState {
+		t.Helper()
+		st, err := get(ctx, env, host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	if st := read(t, got.HostCertificate, holderEnv, "valid.example.org"); !st.Valid || !st.Known || st.TermsNeeded || st.Paused || st.Reason != "" {
+		t.Fatalf("valid = %+v, want valid and known", st)
+	}
+	if st := read(t, got.HostCertificate, holderEnv, "pending.example.org"); st.Valid || !st.Known || st.Reason != ingresscert.StateQueued {
+		t.Fatalf("pending = %+v, want known, not valid, reason queued", st)
+	}
+	if st := read(t, got.HostCertificate, holderEnv, "none.example.org"); st.Valid || st.Known {
+		t.Fatalf("no certificate = %+v, want unknown", st)
+	}
+	if st := read(t, got.HostCertificate, holderEnv, "other.example.org"); st.Valid || st.Known {
+		t.Fatalf("another environment's certificate = %+v, want unknown here", st)
+	}
+
+	terms := certs
+	terms.state = ingresscert.State{}
+	deps.IngressCerts = terms
+	if st := read(t, ingressDeployOf(deps).HostCertificate, holderEnv, "pending.example.org"); !st.TermsNeeded || st.Valid {
+		t.Fatalf("terms not accepted = %+v, want terms needed", st)
+	}
+	paused := certs
+	paused.state = accepted
+	paused.state.PausedReason = "restore"
+	deps.IngressCerts = paused
+	if st := read(t, ingressDeployOf(deps).HostCertificate, holderEnv, "pending.example.org"); !st.Paused || st.TermsNeeded || st.Valid {
+		t.Fatalf("paused = %+v, want paused", st)
+	}
+}
+
+// fixedClock is a clock that reads one time and never fires.
+type fixedClock struct{ t time.Time }
+
+func (c fixedClock) Now() time.Time                       { return c.t }
+func (c fixedClock) After(time.Duration) <-chan time.Time { return nil }

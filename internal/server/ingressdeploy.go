@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -14,9 +15,11 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/buildinfo"
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/engine"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingresscert"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/instance"
@@ -63,7 +66,12 @@ type ingressDeployDeps struct {
 	Self func(ctx context.Context) (ingressdeploy.SelfFacts, error)
 	// SelfURLs reads the instance's own addresses and port for TierPlan's own route; nil means none are set.
 	SelfURLs func() ingressdeploy.SelfURLs
-	Clock    stackops.Clock
+	// SocketPath and SelfID are the local socket and TierPlan's own container ID, from self-detection and never from a
+	// request: SelfConnect and SelfDisconnect act on that container alone, and are nil when either is not known (D-04).
+	SocketPath, SelfID string
+	// IngressCerts is the ingress certificate store, read for one hostname's certificate state (D-09); nil answers unknown.
+	IngressCerts hostCertReader
+	Clock        stackops.Clock
 }
 
 // newIngressDeploy builds the deployer from the server's parts. A nil Stacks leaves the deployer listing no stacks to
@@ -105,6 +113,7 @@ func ingressDeployOf(d ingressDeployDeps) ingressdeploy.Deps {
 	if d.Clusters != nil {
 		managers = d.Clusters
 	}
+	connect, disconnect := selfConnector(d.SocketPath, d.SelfID)
 	return ingressdeploy.Deps{
 		Engine:         ingressEngine{agg: d.Aggregator, clusters: d.Clusters},
 		Envs:           ingressEnvReader{st: d.Store, svc: d.Envs},
@@ -127,12 +136,20 @@ func ingressDeployOf(d ingressDeployDeps) ingressdeploy.Deps {
 		OwnHTTP01InUse: d.OwnHTTP01InUse,
 		Self:           d.Self,
 		SelfURLs:       d.SelfURLs,
-		ServerVersion:  buildinfo.Get().Version,
-		URL:            d.Instance.IngressEndpoint,
-		Pins:           d.Pins,
-		Clock:          d.Clock,
-		Log:            d.Log,
-		Managers:       managers,
+		SelfConnect:    connect,
+		SelfDisconnect: disconnect,
+		HostCertificate: hostCertificate(d.IngressCerts, func() time.Time {
+			if d.Clock != nil {
+				return d.Clock.Now()
+			}
+			return time.Now()
+		}),
+		ServerVersion: buildinfo.Get().Version,
+		URL:           d.Instance.IngressEndpoint,
+		Pins:          d.Pins,
+		Clock:         d.Clock,
+		Log:           d.Log,
+		Managers:      managers,
 	}
 }
 
@@ -268,5 +285,79 @@ func instanceSelfURLs(inst selfURLSource, listen string) func() ingressdeploy.Se
 			PublicLocked: inst.Locked(), AgentLocked: inst.AgentURLLocked(),
 			ListenPort: port,
 		}
+	}
+}
+
+// selfConnectTimeout bounds one connect or disconnect of TierPlan's own container on the local engine.
+const selfConnectTimeout = 10 * time.Second
+
+// selfConnector is the deployer's Deps.SelfConnect and Deps.SelfDisconnect on a standalone host (D-04): TierPlan's own
+// container, named by self-detection and never by the caller (T-28-57), connected to the self network under the alias or
+// taken off it, through the local socket as readSelfFacts reads it. Both are nil when the socket or the container is not
+// known, so the deployer reports TierPlan as not attached and never tries.
+func selfConnector(socketPath, selfID string) (connect func(ctx context.Context, networkID, alias string) error, disconnect func(ctx context.Context, networkID string) error) {
+	if socketPath == "" || selfID == "" {
+		return nil, nil
+	}
+	connect = func(ctx context.Context, networkID, alias string) error {
+		return onLocalEngine(ctx, socketPath, func(ctx context.Context, cli *dockerx.Client) error {
+			return cli.NetworkConnect(ctx, networkID, selfID, dockerx.EndpointSpec{Alias: alias})
+		})
+	}
+	disconnect = func(ctx context.Context, networkID string) error {
+		return onLocalEngine(ctx, socketPath, func(ctx context.Context, cli *dockerx.Client) error {
+			return cli.NetworkDisconnect(ctx, networkID, selfID)
+		})
+	}
+	return connect, disconnect
+}
+
+// onLocalEngine runs fn against the local engine, within selfConnectTimeout.
+func onLocalEngine(ctx context.Context, socketPath string, fn func(ctx context.Context, cli *dockerx.Client) error) error {
+	cli, err := dockerx.New(engine.LocalSocketTransport{Path: socketPath})
+	if err != nil {
+		return fmt.Errorf("ask the local engine: %w", err)
+	}
+	defer func() { _ = cli.Close() }()
+	ctx, cancel := context.WithTimeout(ctx, selfConnectTimeout)
+	defer cancel()
+	return fn(ctx, cli)
+}
+
+// hostCertReader is the part of the ingress certificate store the self route's certificate item reads (*ingresscert.Store).
+type hostCertReader interface {
+	LiveCert(ctx context.Context, hostname string) (ingresscert.Cert, bool, error)
+	State(ctx context.Context) (ingresscert.State, error)
+}
+
+// hostCertificate is the deployer's Deps.HostCertificate (D-09): the live certificate of the hostname in the environment,
+// as the Certificates tab reads it (ingresscert.StateOf), with the install-wide terms and pause. A certificate is valid when
+// it may be served now; a hostname whose live certificate belongs to another environment is unknown here. A nil store is
+// nil, which the preview shows as pending.
+func hostCertificate(r hostCertReader, now func() time.Time) func(ctx context.Context, envID, host string) (ingressdeploy.HostCertState, error) {
+	if r == nil {
+		return nil
+	}
+	return func(ctx context.Context, envID, host string) (ingressdeploy.HostCertState, error) {
+		st, err := r.State(ctx)
+		if err != nil {
+			return ingressdeploy.HostCertState{}, err
+		}
+		out := ingressdeploy.HostCertState{TermsNeeded: st.TermsAcceptedAt.IsZero(), Paused: st.PausedReason != ""}
+		c, found, err := r.LiveCert(ctx, host)
+		if err != nil {
+			return ingressdeploy.HostCertState{}, err
+		}
+		if !found || c.EnvID != envID {
+			return out, nil
+		}
+		out.Known = true
+		switch state := ingresscert.StateOf(c, now()); {
+		case c.Ready && (state == ingresscert.StateValid || state == ingresscert.StateUploaded || state == ingresscert.StateRenewalFailed):
+			out.Valid = true
+		default:
+			out.Reason = state
+		}
+		return out, nil
 	}
 }

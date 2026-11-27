@@ -1312,7 +1312,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		OwnHTTP01InUse: ownHTTP01InUse(acmeWire.mgr), Clock: bo.janitorClock,
 		Self:     selfReader(socketPath, selfID),
 		SelfURLs: selfURLs,
-		Stacks:   api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead, ingressHostRead(aggregator)),
+		// TierPlan connects its own container on a standalone host, and reads its route's certificate (D-04, D-09).
+		SocketPath: socketPath, SelfID: selfID, IngressCerts: certStore,
+		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead, ingressHostRead(aggregator)),
 		CurrentBundle: func(envID string) (string, bool) {
 			b, ok := ingressRecon.Current(envID)
 			return b.ID, ok
