@@ -90,7 +90,7 @@ func (r *standaloneDisableRig) hostHolds() (container, network, volume bool) {
 // wantStandaloneDisableDone fails the test unless the job is the standalone switch-off and every item ended done.
 func wantStandaloneDisableDone(t *testing.T, job jobs.Job) {
 	t.Helper()
-	want := []string{"self_route", "switch_off", "proxy", "network", "volumes", "token", "nodes"}
+	want := []string{"self_route", "switch_off", "proxy", "network", "self_network", "volumes", "token", "nodes"}
 	var got []string
 	for _, it := range job.Items {
 		got = append(got, it.ID)

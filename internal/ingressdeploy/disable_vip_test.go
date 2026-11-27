@@ -121,7 +121,7 @@ func TestDisableIngressStopsWhenTheVIPStays(t *testing.T) {
 	if it := itemOf(job, ingressdeploy.ItemVirtualIP); it.State != jobs.ItemFailed || it.Code != ingressdeploy.CodeVIPRemoveFailed {
 		t.Errorf("virtual_ip = %q %q, want failed with vip_remove_failed", it.State, it.Code)
 	}
-	for _, id := range []string{"switch_off", "service", "volumes", "network", "secret", "token", "nodes"} {
+	for _, id := range []string{"switch_off", "service", "volumes", "network", "self_network", "secret", "token", "nodes"} {
 		if it := itemOf(job, id); it.State != jobs.ItemSkipped || it.Code != ingressdeploy.CodeNotRun {
 			t.Errorf("%s = %q %q, want skipped and not_run", id, it.State, it.Code)
 		}

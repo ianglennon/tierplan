@@ -56,41 +56,50 @@ const (
 	CodeDisableSecretFailed  = "disable_secret_failed"
 	CodeDisableTokenFailed   = "disable_token_failed"
 	CodeDisableNodesFailed   = "disable_nodes_failed"
+	// CodeDisableSelfNetworkFailed ends the self network item when tierplan-self could not be read or removed for a reason
+	// other than something still being on it, which is never a failure (A-06).
+	CodeDisableSelfNetworkFailed = "disable_self_network_failed"
 )
+
+// ReasonTierPlanAttached is the reason of a self network item that kept tierplan-self: TierPlan's own task or container is
+// still on it, or the engine answered that something is (A-06, Pitfall 5).
+const ReasonTierPlanAttached = "tierplan_attached"
 
 // CodeRoutesLive is the refusal of a switch-off while a claim with routes exists in the environment, a stopped stack's
 // included (D-25).
 const CodeRoutesLive = "ingress_routes_live"
 
 // disableItems are the items of the job in order.
-var disableItems = []string{ItemSelfRoute, ItemVirtualIP, ItemSwitchOff, ItemService, ItemVolumes, ItemNetwork, ItemSecret, ItemToken, ItemNodes}
+var disableItems = []string{ItemSelfRoute, ItemVirtualIP, ItemSwitchOff, ItemService, ItemVolumes, ItemNetwork, ItemSelfNetwork, ItemSecret, ItemToken, ItemNodes}
 
 // disableLabels are the lines of the job's steps.
 var disableLabels = map[string]string{
-	ItemSelfRoute: "Release TierPlan's own route",
-	ItemVirtualIP: "Turn the virtual IP off",
-	ItemSwitchOff: "Stop serving routes",
-	ItemService:   "Remove the proxy service",
-	ItemVolumes:   "Wipe the certificate cache on each node",
-	ItemNetwork:   "Remove the ingress network",
-	ItemSecret:    "Remove the join token secrets",
-	ItemToken:     "Disable the join token",
-	ItemNodes:     "Remove the proxy nodes",
+	ItemSelfRoute:   "Release TierPlan's own route",
+	ItemVirtualIP:   "Turn the virtual IP off",
+	ItemSwitchOff:   "Stop serving routes",
+	ItemService:     "Remove the proxy service",
+	ItemVolumes:     "Wipe the certificate cache on each node",
+	ItemNetwork:     "Remove the ingress network",
+	ItemSelfNetwork: "Remove the " + ingress.SelfNetworkName + " network",
+	ItemSecret:      "Remove the join token secrets",
+	ItemToken:       "Disable the join token",
+	ItemNodes:       "Remove the proxy nodes",
 }
 
 // disableMessages are the sentences of the failure codes, built here and never from an engine's answer.
 var disableMessages = map[string]string{
-	CodeSelfRouteReleaseFailed: "TierPlan's own route could not be released, so ingress was left on.",
-	CodeVIPRemoveFailed:        "The virtual IP could not be removed, so ingress was left on.",
-	CodeDisableSwitchFailed:    "Ingress could not be switched off.",
-	CodeDisableServiceFailed:   "The proxy service could not be removed.",
-	CodeDisableVolumesFailed:   "The certificate cache could not be wiped.",
-	CodeDisableNetworkFailed:   "The ingress network could not be removed.",
-	CodeDisableSecretFailed:    "The join token secrets could not be removed.",
-	CodeDisableTokenFailed:     "The join token could not be disabled.",
-	CodeDisableNodesFailed:     "The proxy nodes could not be removed.",
-	CodeDisableProxyFailed:     "The proxy container could not be removed.",
-	CodeNotRun:                 "Not run because an earlier step failed.",
+	CodeSelfRouteReleaseFailed:   "TierPlan's own route could not be released, so ingress was left on.",
+	CodeVIPRemoveFailed:          "The virtual IP could not be removed, so ingress was left on.",
+	CodeDisableSwitchFailed:      "Ingress could not be switched off.",
+	CodeDisableServiceFailed:     "The proxy service could not be removed.",
+	CodeDisableVolumesFailed:     "The certificate cache could not be wiped.",
+	CodeDisableNetworkFailed:     "The ingress network could not be removed.",
+	CodeDisableSecretFailed:      "The join token secrets could not be removed.",
+	CodeDisableTokenFailed:       "The join token could not be disabled.",
+	CodeDisableNodesFailed:       "The proxy nodes could not be removed.",
+	CodeDisableSelfNetworkFailed: "The " + ingress.SelfNetworkName + " network could not be removed.",
+	CodeDisableProxyFailed:       "The proxy container could not be removed.",
+	CodeNotRun:                   "Not run because an earlier step failed.",
 }
 
 // NodeName is a node of the environment by the ID its agent connects as and the name it goes by.
@@ -399,10 +408,10 @@ type disableRun struct {
 // nothing is retried and nothing is rolled back.
 func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, info EnvInfo) {
 	run := &disableRun{s: s, actor: actor, envID: info.ID, r: r, release: release, items: disableItems}
-	steps := []func(context.Context) error{run.selfRoute, run.virtualIP, run.switchOff, run.service, run.volumes, run.network, run.secret, run.token, run.nodes}
+	steps := []func(context.Context) error{run.selfRoute, run.virtualIP, run.switchOff, run.service, run.volumes, run.network, run.selfNetwork, run.secret, run.token, run.nodes}
 	if !info.Swarm {
 		run.items = standaloneDisableItems
-		steps = []func(context.Context) error{run.selfRoute, run.switchOff, run.proxy, run.networkStandalone, run.volumeStandalone, run.token, run.nodes}
+		steps = []func(context.Context) error{run.selfRoute, run.switchOff, run.proxy, run.networkStandalone, run.selfNetworkStandalone, run.volumeStandalone, run.token, run.nodes}
 	}
 	for i, do := range steps {
 		item := run.items[i]
@@ -715,6 +724,73 @@ func (e *disableRun) network(ctx context.Context) error {
 		return fail(CodeDisableNetworkFailed, err, dockerx.DaemonText(err))
 	}
 	e.done(ItemNetwork, nil)
+	return nil
+}
+
+// selfPlace is where TierPlan runs in the environment, for the self network item; a place that cannot be told is unknown, so
+// TierPlan is not taken to be on the network and the engine's in-use answer is what keeps it.
+func (e *disableRun) selfPlace(ctx context.Context, info EnvInfo) SelfPlace {
+	place, _, err := e.s.SelfLocation(ctx, info)
+	if err != nil {
+		return e.s.selfUnknown()
+	}
+	return place
+}
+
+// selfNetworkDone ends the self network item from what the removal left: removed, kept because TierPlan (or something) is on
+// it, or not there. A kept network is said in the output, as the self route's own switch-off says it.
+func (e *disableRun) selfNetworkDone(sp *selfPass, had bool) {
+	switch {
+	case sp.net.keptInUse:
+		e.r.Output(selfNetInUseText)
+		e.done(ItemSelfNetwork, map[string]string{"removed": "false", "reason": ReasonTierPlanAttached})
+	case had && sp.net.id == "":
+		e.done(ItemSelfNetwork, map[string]string{"removed": "true"})
+	default:
+		e.done(ItemSelfNetwork, map[string]string{"removed": "false"})
+	}
+}
+
+// selfNetwork removes tierplan-self after the ingress network (A-06): with ingress off and TierPlan's own route released,
+// nothing of TierPlan's wants it. While TierPlan's own task is on it, or the engine answers that something still is, it stays
+// and the item is done with the reason tierplan_attached, never a failure: TierPlan's stack file is the person's to change
+// (D-03). One that is not TierPlan's is left alone. What was found is published as the self network's observation, so the
+// trusted-proxy set drops a network that is gone.
+func (e *disableRun) selfNetwork(ctx context.Context) error {
+	s := e.s
+	info, err := s.d.Envs.Info(ctx, e.envID)
+	if err != nil {
+		return fail(CodeDisableSelfNetworkFailed, err)
+	}
+	sp := &selfPass{info: info, place: e.selfPlace(ctx, info), known: true}
+	had := false
+	err = s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
+		rows, err := c.Networks(ctx)
+		if err != nil {
+			return err
+		}
+		row, ok := selfNetworkRowOf(rows)
+		switch {
+		case !ok:
+			return nil
+		case !ingress.OwnsSelfNetwork(row.Name, row.Labels):
+			sp.net.foreign = true
+			return nil
+		}
+		sp.net.id, had = row.ID, true
+		return s.removeSelfNetwork(ctx, c, sp, live{networks: rows})
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fail(CodeDisableSelfNetworkFailed, err, dockerx.DaemonText(err))
+	}
+	if sp.net.foreign {
+		e.r.Output("Left the network " + ingress.SelfNetworkName + " in place: it is not TierPlan's.")
+	}
+	s.observeSelf(ctx, sp)
+	e.selfNetworkDone(sp, had)
 	return nil
 }
 
