@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
 )
@@ -67,32 +68,64 @@ func (s *Service) PreviewSelfRoute(ctx context.Context, envID string, req SelfRo
 	if err != nil {
 		return SelfRoutePreview{}, err
 	}
-	pv.Items = append(pv.Items, netItem, selfOriginItem(host, urls, hostItem))
+	pv.Items = append(pv.Items, netItem, selfOriginItem(host, urls))
 	if s.ownHTTP01(ctx) {
 		pv.Items = append(pv.Items, SelfRouteItem{Code: ItemSelfCarveOut, State: SelfItemOK, Message: selfCarveOutText(selfURLHosts(urls))})
 	}
 	return pv, nil
 }
 
-// selfHostnameItem judges the hostname by the rules every claim is judged by (ingress.CheckSystemClaim), over the
-// environment's world with the hosts agents and proxies dial.
+// selfHostnameItem judges the hostname. Ingress must be on (and not paused) for the environment, the install must hold no
+// self route yet (ingressstore.ErrSystemClaimHeld), and the name must pass the rules every claim is judged by
+// (ingress.CheckSystemClaim) over the environment's world with the host agents and proxies dial (D-10). Only an instance
+// Admin previews the route (D-17), so the holder of a taken name is named whatever its environment. A host agents dial only
+// because TIERPLAN_PUBLIC_URL fixes it is left to the origin item, which says how to move it (Pitfall 10).
 func (s *Service) selfHostnameItem(ctx context.Context, info EnvInfo, host string, urls SelfURLs) (SelfRouteItem, error) {
 	item := SelfRouteItem{Code: ItemSelfHostname}
 	refuse := func(code, msg string) (SelfRouteItem, error) {
 		item.State, item.Reason, item.Message = SelfItemRefused, code, msg
 		return item, nil
 	}
-	w, err := s.d.Store.World(ctx, info.ID, nil)
+	state, err := s.d.Store.DeployState(ctx, info.ID)
+	if err != nil {
+		return item, err
+	}
+	if !state.Enabled {
+		return refuse(CodeVIPIngressOff, selfIngressOffText)
+	}
+	if paused, err := checkPaused(ctx, s, checkInput{Info: info}); err != nil {
+		return item, err
+	} else if len(paused) > 0 {
+		return refuse(paused[0].Code, paused[0].Message)
+	}
+	if _, held, err := s.d.Store.SystemClaim(ctx); err != nil {
+		return item, err
+	} else if held {
+		return refuse(CodeSelfRouteAlreadyOn, selfAlreadyOnText)
+	}
+	if strings.Contains(host, ":") {
+		return refuse(ingress.CodeHostInvalid, selfHostPortText(host))
+	}
+	w, err := s.d.Store.World(ctx, info.ID, func(string) bool { return true })
 	if err != nil {
 		return item, err
 	}
 	w.AgentHosts = withAgentHost(w.AgentHosts, urls)
+	if lockedPublicHost(urls, host) {
+		w.AgentHosts = slices.DeleteFunc(slices.Clone(w.AgentHosts), func(h string) bool { return h == host })
+	}
 	dom, p, bad := ingress.CheckSystemClaim(host, w)
 	if bad {
 		return refuse(p.Code, p.Message)
 	}
 	item.State, item.Message = SelfItemOK, selfHostnameOKText(host, dom.Suffix)
 	return item, nil
+}
+
+// lockedPublicHost is true when host is the host of a public URL TIERPLAN_PUBLIC_URL fixes and no agent URL is set, so agents
+// and proxies dial it and Settings cannot move it.
+func lockedPublicHost(urls SelfURLs, host string) bool {
+	return urls.PublicLocked && urlHost(urls.AgentURL) == "" && host != "" && urlHost(urls.PublicURL) == host
 }
 
 // selfCertificateItem says where the hostname's certificate stands (D-09). Anything that cannot be read is a warning, never
@@ -107,19 +140,29 @@ func (s *Service) selfCertificateItem(ctx context.Context, info EnvInfo, host st
 		s.log().Warn("could not read the certificate of TierPlan's own route", "environment", info.ID, "error", err)
 		return pending
 	}
-	if st.Valid {
+	switch {
+	case st.Valid:
 		return SelfRouteItem{Code: ItemSelfCertificate, State: SelfItemOK, Message: selfCertValidText(host)}
+	case st.TermsNeeded:
+		return SelfRouteItem{Code: ItemSelfCertificate, State: SelfItemRefused, Reason: CodeSelfCertificateTerms, Message: selfTermsText}
+	case st.Paused:
+		return SelfRouteItem{Code: ItemSelfCertificate, State: SelfItemRefused, Reason: CodeSelfCertificatePaused, Message: selfPausedText(host)}
 	}
 	return pending
 }
 
-// selfNetworkItem says whether TierPlan is, or will be, on the self network (D-01, D-03, D-04, D-05).
+// selfNetworkItem says whether TierPlan is, or will be, on the self network (D-01, D-03, D-04, D-05). A place SelfLocation
+// refuses (TierPlan elsewhere, or where it runs cannot be told, or a plain container on a swarm) refuses the item.
 func (s *Service) selfNetworkItem(ctx context.Context, info EnvInfo) (SelfRouteItem, error) {
-	place, _, err := s.SelfLocation(ctx, info)
+	place, findings, err := s.SelfLocation(ctx, info)
 	if err != nil {
 		return SelfRouteItem{}, err
 	}
 	item := SelfRouteItem{Code: ItemSelfNetwork, State: SelfItemOK}
+	if f, ok := firstError(findings); ok {
+		item.State, item.Reason, item.Message = SelfItemRefused, f.Code, f.Message
+		return item, nil
+	}
 	switch {
 	case place.Kind == SelfKindStandalone:
 		item.Message = selfStandaloneText
@@ -131,9 +174,34 @@ func (s *Service) selfNetworkItem(ctx context.Context, info EnvInfo) (SelfRouteI
 	return item, nil
 }
 
-// selfOriginItem says which origin TierPlan will also accept (D-07).
-func selfOriginItem(host string, _ SelfURLs, _ SelfRouteItem) SelfRouteItem {
-	return SelfRouteItem{Code: ItemSelfOrigin, State: SelfItemOK, Message: selfOriginText(host)}
+// selfOriginItem says which origin TierPlan will also accept (D-07). It refuses when neither URL is set (Pitfall 10), when
+// the public URL has a path (Pitfall 9), and when the route host is the host of a public URL TIERPLAN_PUBLIC_URL fixes with no
+// agent URL set (D-10).
+func selfOriginItem(host string, urls SelfURLs) SelfRouteItem {
+	item := SelfRouteItem{Code: ItemSelfOrigin, State: SelfItemRefused}
+	pub, hasPublic := parseSelfURL(urls.PublicURL)
+	_, hasAgent := parseSelfURL(urls.AgentURL)
+	switch {
+	case !hasPublic && !hasAgent:
+		item.Reason, item.Message = CodeSelfRouteNoURL, selfNoURLText
+	case hasPublic && strings.TrimSuffix(pub.Path, "/") != "":
+		item.Reason, item.Message = CodeSelfRouteBasePath, selfBasePathText(pub.Path)
+	case lockedPublicHost(urls, host):
+		item.Reason, item.Message = ingress.CodeHostIsAgentURL, selfLockedPublicText(host)
+	default:
+		item.State, item.Message = SelfItemOK, selfOriginText(host)
+	}
+	return item
+}
+
+// firstError is the first refusing finding.
+func firstError(findings []Finding) (Finding, bool) {
+	for _, f := range findings {
+		if f.Severity == SeverityError {
+			return f, true
+		}
+	}
+	return Finding{}, false
 }
 
 // selfURLs reads the instance's own addresses, none when they are not wired.

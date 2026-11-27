@@ -241,6 +241,8 @@ func TestPreviewSelfRouteRefusals(t *testing.T) {
 	}{
 		{name: "under no registered domain", host: "tp.other.example.net",
 			item: ingressdeploy.ItemSelfHostname, code: ingress.CodeDomainNotAllowed, contains: "not under a domain registered"},
+		{name: "with a port", host: "TP.apps.example.org:443",
+			item: ingressdeploy.ItemSelfHostname, code: ingress.CodeHostInvalid, contains: "tp.apps.example.org:443” is not a valid hostname: give it without a port"},
 		{name: "reserved", setup: func(t *testing.T, r *rig, _ *selfFacts, _ *selfRouteKnobs, dom ingress.Domain) {
 			if _, _, err := r.istore.Reserve(testsupport.Context(t), ingressstore.ReserveInput{EnvID: r.envID, DomainID: dom.ID, Hostname: srHost, Actor: "admin"}, nil); err != nil {
 				t.Fatalf("Reserve: %v", err)
