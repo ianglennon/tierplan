@@ -128,6 +128,22 @@ func TestIngressDocsListEveryStableCode(t *testing.T) {
 	}
 }
 
+// TestIngressDocsSelfRouteMatchesTheUI ties the "## TierPlan's own route" section to the text the card shows (D-03): its
+// stack-file lines are the deployer's snippet, the same as docs/install-in-swarm.md's, and it gives the service update
+// command. The heading is what install-in-swarm.md and reverse-proxy.md link to as #tierplans-own-route.
+func TestIngressDocsSelfRouteMatchesTheUI(t *testing.T) {
+	section := guideSection(ingressGuideText(t), "TierPlan's own route")
+	if section == "" {
+		t.Fatal(`docs/ingress.md has no "## TierPlan's own route" section, which other pages link to as #tierplans-own-route`)
+	}
+	if lines, want := firstYAMLBlock(t, section)+"\n", ingressdeploy.StackFileSnippet("tierplan"); lines != want {
+		t.Errorf("the section's stack-file lines are\n%s\nthe UI shows\n%s", lines, want)
+	}
+	if cmd := ingressdeploy.ServiceUpdateCommand("tierplan"); !strings.Contains(section, cmd) {
+		t.Errorf("the section does not give the service update command %q", cmd)
+	}
+}
+
 // TestIngressDocsHaveNoCAHold keeps two stale texts out of every page under docs/: the reason code `ca_hold`, which the code
 // never wrote (it writes ca_rate_limited), and the promise "A later version lifts this limit", which Phase 28 kept.
 func TestIngressDocsHaveNoCAHold(t *testing.T) {
