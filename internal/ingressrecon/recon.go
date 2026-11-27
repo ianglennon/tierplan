@@ -152,6 +152,21 @@ func (r *Reconciler) Skipped(envID string) []ingressrender.Skipped {
 	return slices.Clone(s.skipped)
 }
 
+// RenderedOwn is the own version of the last bundle rendered for the environment: 0 before any render, for an
+// environment that does not carry TierPlan and for one the reconciler does not know. The staged install (28-32)
+// reads it to tell when the proxies have the trust bundle of TierPlan's new certificate.
+func (r *Reconciler) RenderedOwn(envID string) int64 {
+	r.mu.Lock()
+	s, ok := r.envs[envID]
+	r.mu.Unlock()
+	if !ok {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.own
+}
+
 // Reconcile renders one environment and publishes the bundle when its ID is new. An error leaves the stored
 // bundle, its version pair and its skipped list untouched (D-20, PROH-21-06): the environment's nodes keep the last
 // good configuration, and the error is recorded as the environment's Failure and logged once. A render that
@@ -304,8 +319,8 @@ func (r *Reconciler) renderAll(ctx context.Context) {
 	r.reconcileEach(ctx, r.union(versions))
 }
 
-// pollVersions reconciles the environments whose version pair differs from the pair their bundle was last
-// rendered at, those with no bundle yet, and those holding a bundle or a failure that Versions no longer lists. A read error
+// pollVersions reconciles the environments whose version pair, or own version (read through Deps.Self, A-02), differs
+// from what their bundle was last rendered at, those with no bundle yet, and those holding a bundle or a failure that Versions no longer lists. A read error
 // is logged and the caller re-arms the timer, so a failing read is never a tight loop (T-21-38).
 func (r *Reconciler) pollVersions(ctx context.Context) {
 	versions, err := r.d.Model.Versions(ctx)
@@ -317,7 +332,11 @@ func (r *Reconciler) pollVersions(ctx context.Context) {
 	var due []string
 	for _, v := range versions {
 		listed[v.EnvID] = struct{}{}
-		if r.moved(v) {
+		_, own, ok := r.self(ctx, v.EnvID)
+		if !ok {
+			own = 0
+		}
+		if r.moved(v, own) {
 			due = append(due, v.EnvID)
 		}
 	}
@@ -329,8 +348,9 @@ func (r *Reconciler) pollVersions(ctx context.Context) {
 	r.reconcileEach(ctx, due)
 }
 
-// moved reports whether the environment has no bundle or its bundle was rendered at another version pair.
-func (r *Reconciler) moved(v ingress.EnvVersion) bool {
+// moved reports whether the environment has no bundle or its bundle was rendered at another version pair or another
+// own version. A change of TierPlan's own certificate moves own alone, with the config and certs versions unchanged.
+func (r *Reconciler) moved(v ingress.EnvVersion, own int64) bool {
 	r.mu.Lock()
 	s, ok := r.envs[v.EnvID]
 	r.mu.Unlock()
@@ -339,7 +359,7 @@ func (r *Reconciler) moved(v ingress.EnvVersion) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.have || s.config != v.ConfigVersion || s.certs != v.CertsVersion
+	return !s.have || s.config != v.ConfigVersion || s.certs != v.CertsVersion || s.own != own
 }
 
 // tracked lists the environments the reconciler holds a bundle or a failure for. An environment whose renders have
