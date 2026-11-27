@@ -355,7 +355,8 @@ func TestNamesDoNotCollide(t *testing.T) {
 					t.Errorf("router %s is listed twice", e.Router)
 				}
 				routers[e.Router] = true
-				if e.Router != "r-"+e.Hash[:nameHashLen] {
+				// TierPlan's own route has a fixed name (D-09); every stack route's name is its hash.
+				if e.Router != "r-"+e.Hash[:nameHashLen] && (e.Router != selfRouterName || e.Stack != "") {
 					t.Errorf("router %s is not derived from its hash %s", e.Router, e.Hash)
 				}
 			}

@@ -15,8 +15,11 @@ import (
 
 // allowedImports are the only non-standard-library packages the renderer may import: the YAML encoder,
 // the pure ingress model and the bundle contract.
+// internal/config is allowed for its connect path constants (D-10): the self route excludes the exact
+// paths the agent and proxy addresses are built from. It imports no store, clock or network client.
 var allowedImports = map[string]bool{
 	"go.yaml.in/yaml/v3":                                 true,
+	"github.com/ianglennon/tierplan/internal/config":     true,
 	"github.com/ianglennon/tierplan/internal/ingress":    true,
 	"github.com/ianglennon/tierplan/proto/ingressbundle": true,
 }
@@ -53,7 +56,7 @@ func TestRendererImportsOnlyTheModelAndTheBundle(t *testing.T) {
 				continue // the standard library
 			}
 			if !allowedImports[path] {
-				t.Errorf("%s imports %s: the renderer may import only the standard library, go.yaml.in/yaml/v3, internal/ingress and proto/ingressbundle", name, path)
+				t.Errorf("%s imports %s: the renderer may import only the standard library, go.yaml.in/yaml/v3, internal/config, internal/ingress and proto/ingressbundle", name, path)
 			}
 		}
 	}

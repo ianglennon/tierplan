@@ -6,6 +6,7 @@ package ingressrender
 import (
 	"bytes"
 	"cmp"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -14,6 +15,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/proto/ingressbundle"
 )
@@ -29,9 +31,13 @@ const (
 	// SkipCertificateNotReady: the hostname has a certificate that is not servable yet (issuing, or
 	// within the renewal margin of its expiry).
 	SkipCertificateNotReady SkipReason = "certificate_not_ready"
-	// SkipNoBackend: the route's backend cannot be named (a system-owned claim, which has no backend
-	// until Phase 28, no owning stack, no port, or a scheme that is neither http nor https).
+	// SkipNoBackend: a stack route's backend cannot be named (no owning stack, no port, or a scheme
+	// that is neither http nor https), or the hostname is not claimed at all.
 	SkipNoBackend SkipReason = "no_backend"
+	// SkipSelfNotAttached: the route is TierPlan's own (a system claim) and TierPlan cannot be reached
+	// from the proxy: the render was given no self input, or TierPlan is not on the self network yet
+	// (D-03). Nothing is served on the hostname until it is.
+	SkipSelfNotAttached SkipReason = "self_not_attached"
 )
 
 // The entry point every router is attached to, and the TLS floor of the default options (D-04). The
@@ -86,6 +92,37 @@ type Input struct {
 	CertsVersion int64
 	// OwnVersion is the version of the node's own settings; 0 until Phase 28.
 	OwnVersion int64
+	// Self is how the proxy reaches TierPlan itself, for the system claim's route (D-09). It is nil in
+	// every environment but the one that carries TierPlan, and a system route with no Self is skipped
+	// as self_not_attached.
+	Self *SelfInput
+}
+
+// SelfInput is everything the self route needs (D-09, D-14). The renderer stays pure: the reconciler
+// reads TierPlan's own certificate, its place on the self network and its URLs and fills this in.
+type SelfInput struct {
+	// Host is the system claim's hostname, the route host.
+	Host string
+	// BackendHost is TierPlan's name on the self network: on a swarm the service name from the task's
+	// labels, on a standalone host the connect alias.
+	BackendHost string
+	// BackendPort is TierPlan's listen port.
+	BackendPort int
+	// ServerName is the name the proxy verifies TierPlan's certificate against: the host of the public
+	// URL, a name both TierPlan's Let's Encrypt and its self-signed certificate carry (D-14).
+	ServerName string
+	// TrustPEM is the trust bundle the proxy verifies TierPlan against: the self-signed leaf and the
+	// served chain, concatenated as PEM CERTIFICATE blocks. It is written as one file named by its
+	// checksum, so the bundle ID changes whenever it does.
+	TrustPEM []byte
+	// ACMEHosts are the hosts of the public URL and the agent URL, for TierPlan's own HTTP-01 carve-out
+	// on port 80 (D-12); empty when no carve-out is needed.
+	ACMEHosts []string
+	// BasePath is the public URL's path. It must be empty: the self route is host-rooted (Pitfall 9).
+	BasePath string
+	// Attached says TierPlan's own task or container is on the self network, so the proxy can reach it.
+	// While it is false the system route is skipped as self_not_attached (D-03).
+	Attached bool
 }
 
 // Skipped is a route that is not in the bundle, with the stable reason.
@@ -127,11 +164,17 @@ type certPair struct {
 }
 
 type httpSection struct {
-	Routers           map[string]router           `yaml:"routers,omitempty"`
-	Services          map[string]service          `yaml:"services,omitempty"`
-	Middlewares       map[string]middleware       `yaml:"middlewares,omitempty"`
-	ServersTransports map[string]serversTransport `yaml:"serversTransports,omitempty"`
+	Routers     map[string]router     `yaml:"routers,omitempty"`
+	Services    map[string]service    `yaml:"services,omitempty"`
+	Middlewares map[string]middleware `yaml:"middlewares,omitempty"`
+	// ServersTransports holds the two transport types, serversTransport (t-user-https) and
+	// selfServersTransport (t-self), keyed by name. The map is marshalled in key order.
+	ServersTransports map[string]transport `yaml:"serversTransports,omitempty"`
 }
+
+// transport is a servers-transport type the dynamic file may carry. Only the two typed structs of this
+// file implement it, so no other shape can reach the serversTransports mapping.
+type transport interface{ isTransport() }
 
 type router struct {
 	Rule        string   `yaml:"rule"`
@@ -175,8 +218,32 @@ type serversTransport struct {
 	DisableHTTP2 bool `yaml:"disableHTTP2"`
 }
 
+func (serversTransport) isTransport() {}
+
+// selfServersTransport is how the proxy connects to TierPlan itself (D-14): it verifies TierPlan's
+// certificate by name against TierPlan's own trust file. It is a type of its own with no field that can
+// write the skip-verification key, so the self route can never skip verification
+// (TestSelfTransportHasNoSkipVerificationField). HTTP/2 stays on: S9 held an event feed and a shell for
+// 21 minutes with h2 negotiated to the backend (28-S9-RESULT.md, A7), so disableHTTP2 is not written.
+type selfServersTransport struct {
+	ServerName string   `yaml:"serverName"`
+	RootCAs    []string `yaml:"rootCAs"`
+}
+
+func (selfServersTransport) isTransport() {}
+
 // UserHTTPSTransport is the name of the one transport every user https backend uses (D-13).
 const UserHTTPSTransport = "t-user-https"
+
+// SelfTransport is the name of the transport of TierPlan's own route (D-14).
+const SelfTransport = "t-self"
+
+// The Traefik names of TierPlan's own route. They hold no hash, so they cannot be taken by a stack
+// route (whose names start "r-" and "s-").
+const (
+	selfRouterName  = "tierplan-self"
+	selfServiceName = "svc-tierplan-self"
+)
 
 // templateOpen is the opening delimiter of Go templates, which Traefik runs over dynamic files. It is
 // built from two parts so this source never holds the pair literally.
@@ -218,6 +285,9 @@ func renderSchema2(in Input) (Result, error) {
 			return Result{}, err
 		}
 	}
+	if err := refuseSelf(in.Self); err != nil {
+		return Result{}, err
+	}
 
 	var (
 		http = httpSection{
@@ -230,6 +300,7 @@ func renderSchema2(in Input) (Result, error) {
 		entries  []ingressbundle.RouteEntry
 		names    []namedObject
 		anyHTTPS bool
+		selfTr   *selfServersTransport
 		skipped  []Skipped
 		rendered int
 	)
@@ -239,9 +310,41 @@ func renderSchema2(in Input) (Result, error) {
 				Hostname: r.Hostname, PathPrefix: r.PathPrefix, Stack: r.StackName, Service: r.Service, Reason: reason,
 			})
 		}
-		cert, reason := selectRoute(r, claimed, certs)
+		cert, reason := selectRoute(r, claimed, certs, in.Self)
 		if reason != "" {
 			skip(reason)
+			continue
+		}
+		if r.OwnerKind == ingress.OwnerSystem {
+			// TierPlan's own route (D-09): selectRoute has checked that the self input is attached and
+			// names this host. Its router and service have fixed names, and its transport verifies
+			// TierPlan against the trust file (D-14).
+			http.Routers[selfRouterName] = router{
+				Rule:        selfRule(in.Self.Host),
+				EntryPoints: []string{entryPointSecure},
+				Service:     selfServiceName,
+				Priority:    Priority(r.PathPrefix),
+			}
+			http.Services[selfServiceName] = service{LoadBalancer: loadBalancer{
+				Servers:          []server{{URL: selfURL(in.Self)}},
+				ServersTransport: SelfTransport,
+			}}
+			trust := ingressbundle.CertsDir + "/" + ingressbundle.Checksum(in.Self.TrustPEM) + ".crt"
+			files[trust] = ingressbundle.File{Path: trust, Data: slices.Clone(in.Self.TrustPEM)}
+			selfTr = &selfServersTransport{
+				ServerName: in.Self.ServerName,
+				RootCAs:    []string{ingressbundle.CertRoot + "/" + path2name(trust)},
+			}
+			hash := routeHash(r.Hostname, r.PathPrefix)
+			names = append(names,
+				namedObject{kind: "router", name: selfRouterName, identity: hash, route: r},
+				namedObject{kind: "service", name: selfServiceName, identity: hash, route: r},
+			)
+			addCert(files, pairs, cert)
+			entries = append(entries, ingressbundle.RouteEntry{
+				Router: selfRouterName, Hostname: r.Hostname, PathPrefix: r.PathPrefix, Service: r.Service, Hash: hash,
+			})
+			rendered++
 			continue
 		}
 		url, ok := backendURL(r)
@@ -283,11 +386,7 @@ func renderSchema2(in Input) (Result, error) {
 			names = append(names, namedObject{kind: "middleware", name: MiddlewareName(r.Hostname, r.PathPrefix), identity: hash, route: r})
 		}
 
-		crt := ingressbundle.CertsDir + "/" + ingressbundle.Checksum(cert.ChainPEM) + ".crt"
-		key := ingressbundle.CertsDir + "/" + ingressbundle.Checksum(cert.KeyPEM) + ".key"
-		files[crt] = ingressbundle.File{Path: crt, Data: slices.Clone(cert.ChainPEM)}
-		files[key] = ingressbundle.File{Path: key, Data: slices.Clone(cert.KeyPEM)}
-		pairs[certPair{CertFile: ingressbundle.CertRoot + "/" + path2name(crt), KeyFile: ingressbundle.CertRoot + "/" + path2name(key)}] = struct{}{}
+		addCert(files, pairs, cert)
 
 		entries = append(entries, ingressbundle.RouteEntry{
 			Router:     rname,
@@ -309,8 +408,14 @@ func renderSchema2(in Input) (Result, error) {
 	slices.SortFunc(doc.TLS.Certificates, func(a, b certPair) int {
 		return cmp.Or(cmp.Compare(a.CertFile, b.CertFile), cmp.Compare(a.KeyFile, b.KeyFile))
 	})
+	if anyHTTPS || selfTr != nil {
+		http.ServersTransports = map[string]transport{}
+	}
 	if anyHTTPS {
-		http.ServersTransports = map[string]serversTransport{UserHTTPSTransport: {SkipVerify: true, DisableHTTP2: true}}
+		http.ServersTransports[UserHTTPSTransport] = serversTransport{SkipVerify: true, DisableHTTP2: true}
+	}
+	if selfTr != nil {
+		http.ServersTransports[SelfTransport] = *selfTr
 	}
 	if err := checkUnique(names); err != nil {
 		return Result{}, err
@@ -394,6 +499,97 @@ func urlLabel(v string) bool {
 	return true
 }
 
+// addCert adds a hostname's certificate and key files to the bundle and its pair to the TLS section.
+// Two routes of one hostname add the same files and the same pair.
+func addCert(files map[string]ingressbundle.File, pairs map[certPair]struct{}, cert HostCert) {
+	crt := ingressbundle.CertsDir + "/" + ingressbundle.Checksum(cert.ChainPEM) + ".crt"
+	key := ingressbundle.CertsDir + "/" + ingressbundle.Checksum(cert.KeyPEM) + ".key"
+	files[crt] = ingressbundle.File{Path: crt, Data: slices.Clone(cert.ChainPEM)}
+	files[key] = ingressbundle.File{Path: key, Data: slices.Clone(cert.KeyPEM)}
+	pairs[certPair{CertFile: ingressbundle.CertRoot + "/" + path2name(crt), KeyFile: ingressbundle.CertRoot + "/" + path2name(key)}] = struct{}{}
+}
+
+// selfRule is the self route's rule: the route host, minus the paths agents and ingress proxies dial
+// (D-10), so Traefik answers 404 for those on this host. The paths are config's constants, the ones
+// the agent and proxy addresses are built from.
+func selfRule(host string) string {
+	return "Host(`" + host + "`) && !PathPrefix(`" + config.AgentConnectPath + "`) && !PathPrefix(`" + config.IngressConnectPath + "`)"
+}
+
+// selfURL is TierPlan's address on the self network. TierPlan serves TLS on its listen port, so the
+// scheme is always https.
+func selfURL(s *SelfInput) string {
+	return "https://" + s.BackendHost + ":" + strconv.Itoa(s.BackendPort)
+}
+
+// refuseSelf is refuseRoute for the self input. Every string of it that can reach the dynamic file
+// holds no backtick or brace (D-08), the backend host holds only what a service name or an alias may
+// (so it cannot give the backend URL another host, userinfo or path), and the base path is empty: the
+// self route is host-rooted and the renderer never rewrites a prefix (Pitfall 9). While TierPlan is
+// attached, the input must also be complete enough to render: a port in range and a trust bundle of
+// at least one PEM certificate. Not-attached input is allowed to be incomplete (nothing of it is
+// rendered), but its strings are checked all the same. A nil input is fine.
+func refuseSelf(s *SelfInput) error {
+	if s == nil {
+		return nil
+	}
+	refuse := func(code, field string) error {
+		return &RefusedError{Code: code, Hostname: s.Host, PathPrefix: "/", Field: "self " + field}
+	}
+	fields := []struct{ field, value string }{
+		{"host", s.Host},
+		{"backendHost", s.BackendHost},
+		{"serverName", s.ServerName},
+		{"basePath", s.BasePath},
+	}
+	for _, h := range s.ACMEHosts {
+		fields = append(fields, struct{ field, value string }{"acmeHost", h})
+	}
+	for _, f := range fields {
+		if strings.ContainsAny(f.value, "`{}") {
+			return refuse(CodeUnsafeValue, f.field)
+		}
+	}
+	if !urlLabel(s.BackendHost) {
+		return refuse(CodeUnsafeValue, "backendHost")
+	}
+	if s.BasePath != "" {
+		return refuse(CodeSelfInput, "basePath")
+	}
+	if !s.Attached {
+		return nil
+	}
+	switch {
+	case s.Host == "":
+		return refuse(CodeSelfInput, "host")
+	case s.BackendHost == "":
+		return refuse(CodeSelfInput, "backendHost")
+	case s.ServerName == "":
+		return refuse(CodeSelfInput, "serverName")
+	case s.BackendPort <= 0 || s.BackendPort > maxPort:
+		return refuse(CodeSelfInput, "backendPort")
+	case !hasCertificateBlock(s.TrustPEM):
+		return refuse(CodeSelfInput, "trustPEM")
+	}
+	return nil
+}
+
+// hasCertificateBlock reports whether data holds at least one PEM CERTIFICATE block. The renderer does
+// not parse the certificate itself (the server built the bundle from certificates it serves); this only
+// keeps an empty or key-only bundle from being written as the proxy's trust.
+func hasCertificateBlock(data []byte) bool {
+	for rest := data; ; {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			return false
+		}
+		if b.Type == "CERTIFICATE" {
+			return true
+		}
+	}
+}
+
 // namedObject is one Traefik router, service or middleware name in a bundle, with what makes it the
 // same object as another of that name: the route it came from, and for a service the backend.
 type namedObject struct {
@@ -449,10 +645,14 @@ func checkNoTemplateDelimiters(files []ingressbundle.File) error {
 //     certificate_not_ready); one with no reason but no key bytes is certificate_not_ready too, never
 //     served. The same answer applies to every route of the hostname, so a host is served whole or not
 //     at all and a name with no usable certificate fails at the handshake.
-//  3. A system-owned claim has no backend until Phase 28, and a stack with no name cannot be addressed:
-//     no_backend. A swarm stack's service is reached by its service DNS name and a standalone stack's
-//     by its alias on the host's ingress bridge (Phase 25, D-15). There is no fourth reason code.
-func selectRoute(r ingress.SnapshotRoute, claimed map[string]struct{}, certs map[string]HostCert) (HostCert, SkipReason) {
+//  3. A system-owned claim is TierPlan's own route (D-09). It is served only when the render has a self
+//     input that is attached to the self network and names this hostname; otherwise it is
+//     self_not_attached, never no_backend (D-03). That is the fourth reason code, added on purpose: the
+//     route's condition says TierPlan is not on the self network yet, which no_backend would not.
+//  4. A stack with no name cannot be addressed: no_backend. A swarm stack's service is reached by its
+//     service DNS name and a standalone stack's by its alias on the host's ingress bridge (Phase 25,
+//     D-15).
+func selectRoute(r ingress.SnapshotRoute, claimed map[string]struct{}, certs map[string]HostCert, self *SelfInput) (HostCert, SkipReason) {
 	if _, ok := claimed[r.Hostname]; !ok {
 		return HostCert{}, SkipNoBackend
 	}
@@ -464,6 +664,12 @@ func selectRoute(r ingress.SnapshotRoute, claimed map[string]struct{}, certs map
 		return HostCert{}, cert.Reason
 	case !cert.servable():
 		return HostCert{}, SkipCertificateNotReady
+	}
+	if r.OwnerKind == ingress.OwnerSystem {
+		if self == nil || !self.Attached || self.Host != r.Hostname {
+			return HostCert{}, SkipSelfNotAttached
+		}
+		return cert, ""
 	}
 	if r.OwnerKind != ingress.OwnerStack || !namesABackend(r.Target) || r.StackName == "" {
 		return HostCert{}, SkipNoBackend

@@ -13,11 +13,11 @@ import (
 )
 
 // richestInput has overlapping prefixes, a strip route, an https route, a shared backend, two hosts with
-// certificates, and routes that are skipped for each of the three reasons.
+// certificates, and routes skipped as no_certificate, certificate_not_ready and self_not_attached.
 func richestInput() Input {
 	strip := swarmRoute("app.example.com", "/api", "shop", "api", 9000)
 	strip.Strip = true
-	// A system-owned route has no backend until Phase 28, so it keeps the no_backend reason in the fixture.
+	// A system-owned route with no self input in the render is skipped as self_not_attached.
 	system := swarmRoute("sys.example.com", "/", "", "ui", 8080)
 	system.OwnerKind = ingress.OwnerSystem
 	system.StackName = ""

@@ -184,17 +184,18 @@ func TestNoPartialHost(t *testing.T) {
 	})
 }
 
-// TestSystemHasNoBackend is D-28: a route of a system-owned claim waits for Phase 28, and a route
-// with no stack name cannot be addressed, both as no_backend (there is no fourth reason), even with a
-// ready certificate. A standalone stack's route is not among them (D-15): it is served.
-func TestSystemHasNoBackend(t *testing.T) {
+// TestNamelessAndSelflessSkip is D-28 with Phase 28's D-03: a route with no stack name cannot be
+// addressed and is no_backend, and a route of a system-owned claim in a render with no self input is
+// self_not_attached (never no_backend), even with a ready certificate. A standalone stack's route is
+// not among them (D-15): it is served.
+func TestNamelessAndSelflessSkip(t *testing.T) {
 	system := swarmRoute("sys.example.com", "/", "", "ui", 8080)
 	system.OwnerKind = ingress.OwnerSystem
 	system.StackName = ""
 	system.Target = ""
 	systemClaim := ingress.SnapshotClaim{Claim: ingress.Claim{Hostname: "sys.example.com", OwnerKind: ingress.OwnerSystem}}
 	// A system route that still carries a swarm stack and target (a model that should not produce it):
-	// the owner kind alone keeps it out.
+	// the owner kind alone decides, so it waits for the self input like any system route.
 	odd := swarmRoute("odd.example.com", "/", "shop", "web", 8080)
 	odd.OwnerKind = ingress.OwnerSystem
 	oddClaim := ingress.SnapshotClaim{
@@ -230,8 +231,8 @@ func TestSystemHasNoBackend(t *testing.T) {
 	want := []Skipped{
 		{Hostname: "nameless-swarm.example.com", PathPrefix: "/", Stack: "", Service: "app", Reason: SkipNoBackend},
 		{Hostname: "nameless.example.com", PathPrefix: "/", Stack: "", Service: "app", Reason: SkipNoBackend},
-		{Hostname: "odd.example.com", PathPrefix: "/", Stack: "shop", Service: "web", Reason: SkipNoBackend},
-		{Hostname: "sys.example.com", PathPrefix: "/", Stack: "", Service: "ui", Reason: SkipNoBackend},
+		{Hostname: "odd.example.com", PathPrefix: "/", Stack: "shop", Service: "web", Reason: SkipSelfNotAttached},
+		{Hostname: "sys.example.com", PathPrefix: "/", Stack: "", Service: "ui", Reason: SkipSelfNotAttached},
 	}
 	if !slices.Equal(res.Skipped, want) {
 		t.Errorf("Skipped = %+v\nwant      %+v", res.Skipped, want)

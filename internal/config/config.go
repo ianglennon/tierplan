@@ -784,13 +784,21 @@ func reservedSegment(p string) string {
 // environment are held to one rule. Empty stays empty.
 func NormalisePublicURL(raw string) (string, error) { return normalisePublicURL(raw) }
 
+// AgentConnectPath and IngressConnectPath are the paths, under the base path, where agents and ingress
+// proxies dial in. AgentEndpoint and IngressEndpoint build their addresses from them, and the self route's
+// router excludes both (D-10), so the two can never drift apart.
+const (
+	AgentConnectPath   = "/agent/connect"
+	IngressConnectPath = "/ingress/connect"
+)
+
 // AgentEndpoint is the address an agent dials for the URL it is told to use, the
 // agent URL or else the public URL: the same host and base path, https as wss,
 // with /agent/connect on the end (D-18). Agents dial wss only (D-07), so any other
 // scheme, http included, is an error. It is the one place that builds the address,
 // so the install commands, the welcome and Settings agree.
 func AgentEndpoint(baseURL string) (string, error) {
-	return wssEndpoint(baseURL, "/agent/connect")
+	return wssEndpoint(baseURL, AgentConnectPath)
 }
 
 // IngressEndpoint is the address the ingress proxy dials for the URL it is told to use, the agent URL or else the
@@ -798,7 +806,7 @@ func AgentEndpoint(baseURL string) (string, error) {
 // every rule of AgentEndpoint, and is the one place that builds the address, so the proxy service the deployer
 // writes carries only what an Admin configured and never a name a request supplied.
 func IngressEndpoint(baseURL string) (string, error) {
-	return wssEndpoint(baseURL, "/ingress/connect")
+	return wssEndpoint(baseURL, IngressConnectPath)
 }
 
 // wssEndpoint is the wss address of a path on the host of an https base URL.
