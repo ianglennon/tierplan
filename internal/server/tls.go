@@ -143,11 +143,21 @@ type certSource struct {
 	refresh  func(now time.Time, current *x509.Certificate) (*tls.Certificate, error)
 	interval time.Duration
 
+	// beforeSet, when set, is called with a refreshed pair before it is stored or served, with mu NOT held: the server
+	// stages the pair into the proxies' trust there and waits, bounded, for them to apply it (A-02, A-03), and a
+	// handshake, an install hook or the ACME installer must not wait on that. The first load at start does not call it,
+	// because no proxy trusts anything yet. It is set once, before runCertRefresh starts.
+	beforeSet func(ctx context.Context, cert tls.Certificate)
+	// commit, when set, runs with mu held after beforeSet and right before the refreshed pair is served: the self-signed
+	// source writes its database row and the healthcheck mirror there, so neither names a certificate before the listener
+	// presents it. A failure keeps the current pair.
+	commit func(cert tls.Certificate, now time.Time) error
+
 	// ownsMirror says whether this source's certificate is the one the healthcheck mirror holds.
 	// It is true for the self-signed source from its creation; the ACME installer clears it while
 	// a Let's Encrypt certificate is served, so the source's own name re-sign keeps updating its
 	// database row but never overwrites the mirror (D-16). Whoever flips it holds mu, which Refresh
-	// also holds around the re-sign, so a re-sign and a flip cannot interleave.
+	// also holds around the re-sign's commit, so a mirror write and a flip cannot interleave.
 	ownsMirror atomic.Bool
 }
 
@@ -185,20 +195,41 @@ func (c *certSource) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, err
 // Refresh looks again at the certificate when the recheck interval has passed
 // since the last look, keeping the current pair when the new one cannot be had.
 func (c *certSource) Refresh(now time.Time) {
+	c.refreshIn(context.Background(), now)
+}
+
+// refreshIn is Refresh under ctx, which bounds beforeSet's wait (the server stopping ends it). A new pair is looked for
+// with mu held, handed to beforeSet with mu released, then committed and served with mu held again. Only the refresh loop
+// calls it, so no second refresh can start while beforeSet waits.
+func (c *certSource) refreshIn(ctx context.Context, now time.Time) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if now.Sub(c.checked) < c.interval {
+		c.mu.Unlock()
 		return
 	}
 	c.checked = now
 	next, err := c.refresh(now, c.leaf)
+	c.mu.Unlock()
 	switch {
 	case err != nil:
 		slog.Warn("keeping the current TLS certificate", "error", err)
-	case next != nil:
-		if err := c.set(*next, now); err != nil {
+		return
+	case next == nil:
+		return
+	}
+	if c.beforeSet != nil {
+		c.beforeSet(ctx, *next)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.commit != nil {
+		if err := c.commit(*next, now); err != nil {
 			slog.Warn("keeping the current TLS certificate", "error", err)
+			return
 		}
+	}
+	if err := c.set(*next, now); err != nil {
+		slog.Warn("keeping the current TLS certificate", "error", err)
 	}
 }
 
@@ -209,7 +240,7 @@ func runCertRefresh(ctx context.Context, clk stackops.Clock, src *certSource) {
 		case <-ctx.Done():
 			return
 		case <-clk.After(src.interval):
-			src.Refresh(clk.Now())
+			src.refreshIn(ctx, clk.Now())
 		}
 	}
 }
@@ -239,21 +270,26 @@ func newSelfSignedSource(ctx context.Context, store tlsCertStore, dataDir string
 		if want.covers(leaf) {
 			return nil, nil
 		}
-		next, certPEM, err := signSelfSigned(key, want, at)
+		next, _, err := signSelfSigned(key, want, at)
 		if err != nil {
 			return nil, fmt.Errorf("sign the self-signed certificate for the new names: %w", err)
 		}
+		return &next, nil
+	}
+	// The row and the mirror are written once the new certificate has been staged, right before it is served.
+	src.commit = func(next tls.Certificate, at time.Time) error {
+		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: next.Certificate[0]})
 		if err := store.UpdateCert(checkCtx, selfSignedID, certPEM, at); err != nil {
-			return nil, err
+			return err
 		}
 		// While a Let's Encrypt certificate is served the mirror holds that one, and the
 		// healthcheck must keep trusting what the listener presents.
 		if src.ownsMirror.Load() {
 			if err := writeMirror(dataDir, certPEM); err != nil {
-				return nil, err
+				return err
 			}
 		}
-		return &next, nil
+		return nil
 	}
 	return src, nil
 }

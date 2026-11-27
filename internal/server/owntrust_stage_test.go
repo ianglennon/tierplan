@@ -4,9 +4,16 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -256,4 +263,252 @@ func TestWaitAppliedEndsWithItsContext(t *testing.T) {
 	if err := tr.waitApplied(ctx, 1, func(int64) bool { return false }); err == nil {
 		t.Fatal("waitApplied with an ended context returned nil")
 	}
+}
+
+func TestStagedInstallTimesOutAndInstalls(t *testing.T) {
+	t.Run("proxies that never apply the trust hold the install for ownTrustStageWait, then it installs and warns", func(t *testing.T) {
+		r := newStageRig(t)
+		var logs lockedBuffer
+		r.inst.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		chainPEM, keyPEM, le, _ := acmeChain(t, "le.example.test")
+		applied, seen := r.watchApplied(t, le, func(time.Time) bool { return false })
+		r.inst.applied = applied
+
+		done := serveACME(r.inst, chainPEM, keyPEM)
+		polls := int(ownTrustStageWait / ownTrustStagePoll)
+		for range polls {
+			r.clk.WaitArmed(t)
+			if n, _ := r.installed(); n != 0 {
+				t.Fatalf("installed at %s, before the bounded wait ended", r.clk.Now().Sub(fixedNow))
+			}
+			r.clk.Advance(ownTrustStagePoll)
+		}
+		if err := testsupport.Await(t, "ServeACME to return after the bounded wait", done); err != nil {
+			t.Fatal(err)
+		}
+		n, at := r.installed()
+		if n != 1 || !at.Equal(fixedNow.Add(ownTrustStageWait)) {
+			t.Fatalf("installed %d times at %s, want once at %s", n, at.Sub(fixedNow), ownTrustStageWait)
+		}
+		views := seen()
+		if len(views) == 0 {
+			t.Fatal("applied was never asked")
+		}
+		var warn string
+		for line := range strings.SplitSeq(logs.String(), "\n") {
+			if strings.Contains(line, "level=WARN") {
+				warn = line
+			}
+		}
+		if warn == "" {
+			t.Fatalf("no warn line after the timeout; log:\n%s", logs.String())
+		}
+		if !strings.Contains(warn, "version="+strconv.FormatInt(views[0].version, 10)) || !strings.Contains(warn, "environment=") {
+			t.Errorf("the warn line does not name the environment and the staged version %d: %s", views[0].version, warn)
+		}
+	})
+
+	t.Run("a cancelled context installs at once", func(t *testing.T) {
+		r := newStageRig(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		r.inst.waitIn(ctx)
+		r.inst.applied = func(int64) bool { return false }
+		chainPEM, keyPEM, _, _ := acmeChain(t, "le.example.test")
+		if err := r.inst.ServeACME(chainPEM, keyPEM); err != nil {
+			t.Fatal(err)
+		}
+		if n, at := r.installed(); n != 1 || !at.Equal(fixedNow) {
+			t.Errorf("installed %d times at %s, want once at once: the server is stopping", n, at.Sub(fixedNow))
+		}
+	})
+}
+
+// stagedSourceRig drives a certSource refresh whose beforeSet stages through an ownStaging on a step clock, with the proxies
+// applying the staged trust readyAfter after the wait began.
+type stagedSourceRig struct {
+	clk *stepClock
+	src *certSource
+	tr  *ownTrust
+
+	mu          sync.Mutex
+	hooked      []*x509.Certificate // the incoming leaf of each beforeSet call
+	whileServed []*x509.Certificate // the leaf the source served on each beforeSet call
+}
+
+func newStagedSourceRig(t *testing.T, src *certSource, readyAfter time.Duration) *stagedSourceRig {
+	t.Helper()
+	clk := newStepClock(fixedNow)
+	r := &stagedSourceRig{clk: clk, src: src}
+	rt := newHTTPSRuntime()
+	rt.Install(tlsKindSelfSigned, src.GetCertificate)
+	r.tr = newOwnTrust(rt.servedChain, nil, nil).useClock(clk)
+	readyAt := fixedNow.Add(readyAfter)
+	stg := &ownStaging{
+		trust:   r.tr,
+		applied: func(int64) bool { return !clk.Now().Before(readyAt) },
+		env:     func() string { return "env-self" },
+		log:     slog.New(slog.DiscardHandler),
+	}
+	src.beforeSet = func(ctx context.Context, cert tls.Certificate) {
+		chain := certChain(cert)
+		r.mu.Lock()
+		r.hooked = append(r.hooked, chain[0])
+		r.whileServed = append(r.whileServed, src.Leaf())
+		r.mu.Unlock()
+		stg.stage(ctx, chain, true)
+	}
+	return r
+}
+
+// refresh runs one Refresh at the given instant and moves the step clock through the staged wait, checking before each
+// step that the source still serves before. It returns the leaf served after the refresh.
+func (r *stagedSourceRig) refresh(t *testing.T, at time.Time, before *x509.Certificate, polls int, still func(t *testing.T)) *x509.Certificate {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.src.Refresh(at)
+	}()
+	for range polls {
+		r.clk.WaitArmed(t)
+		if !r.src.Leaf().Equal(before) {
+			t.Fatalf("the new certificate was served at %s, before the proxies applied the staged trust", r.clk.Now().Sub(fixedNow))
+		}
+		if still != nil {
+			still(t)
+		}
+		r.clk.Advance(ownTrustStagePoll)
+	}
+	testsupport.Await(t, "the refresh to finish", done)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.hooked) != 1 {
+		t.Fatalf("beforeSet was called %d times, want once", len(r.hooked))
+	}
+	if !r.whileServed[0].Equal(before) {
+		t.Error("beforeSet was called after the new certificate was set")
+	}
+	after := r.src.Leaf()
+	if !after.Equal(r.hooked[0]) {
+		t.Error("the certificate served after the refresh is not the one beforeSet was given")
+	}
+	if !slices.ContainsFunc(pemCerts(t, mustPEM(r.tr)), after.Equal) {
+		t.Error("the served certificate is not in the trust set")
+	}
+	return after
+}
+
+func mustPEM(tr *ownTrust) []byte {
+	data, _ := tr.PEM()
+	return data
+}
+
+func TestEveryCertificatePathIsStaged(t *testing.T) {
+	t.Run("the fallback to self-signed", func(t *testing.T) {
+		r := newStageRig(t)
+		chainPEM, keyPEM, le, _ := acmeChain(t, "le.example.test")
+		r.inst.applied = func(int64) bool { return true }
+		if err := r.inst.ServeACME(chainPEM, keyPEM); err != nil {
+			t.Fatal(err)
+		}
+		self := r.src.Leaf()
+		readyAt := r.clk.Now().Add(time.Second)
+		applied, seen := r.watchApplied(t, self, func(now time.Time) bool { return !now.Before(readyAt) })
+		r.inst.applied = applied
+
+		done := make(chan error, 1)
+		go func() { done <- r.inst.ServeSelfSigned() }()
+		for range 2 {
+			r.clk.WaitArmed(t)
+			if r.rt.Kind() != tlsKindACME {
+				t.Fatal("the self-signed certificate was served before the proxies applied the staged trust")
+			}
+			r.clk.Advance(ownTrustStagePoll)
+		}
+		if err := testsupport.Await(t, "ServeSelfSigned to return", done); err != nil {
+			t.Fatal(err)
+		}
+		if r.rt.Kind() != tlsKindSelfSigned {
+			t.Fatal("the fallback did not serve the self-signed certificate")
+		}
+		if n, at := r.installed(); n != 2 || !at.Equal(readyAt) {
+			t.Errorf("%d installs, the last at %s, want the fallback installed at %s", n, at.Sub(fixedNow), readyAt.Sub(fixedNow))
+		}
+		views := seen()
+		if len(views) == 0 || !views[0].holds || views[0].served {
+			t.Errorf("applied saw %+v, want the self-signed leaf staged while Let's Encrypt was still served", views)
+		}
+		// Pitfall 4: the Let's Encrypt chain stays as previous, so the return from the fallback is staged the same way.
+		if !r.tr.has(t, le) {
+			t.Error("the Let's Encrypt chain left the set at the fallback")
+		}
+	})
+
+	t.Run("a self-signed re-sign for a new public URL", func(t *testing.T) {
+		f := newSSFixture(t)
+		var public atomic.Value
+		public.Store("https://a.example.test")
+		src, _, err := newCertSource(context.Background(), f.cfg, f.store, func() string { return public.Load().(string) }, str(""), nowFn(fixedNow))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := newStagedSourceRig(t, src, 2*time.Second)
+		old := src.Leaf()
+		mirror := filepath.Join(f.cfg.DataDir, selfSignedDir, mirrorCertFile)
+		oldMirror, err := os.ReadFile(mirror) //nolint:gosec // a path inside the test's temporary directory
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.store.mu.Lock()
+		updates := f.store.updates
+		f.store.mu.Unlock()
+
+		public.Store("https://new.example.test")
+		// Neither the row nor the mirror may name the new certificate while the old one is served.
+		still := func(t *testing.T) {
+			t.Helper()
+			if got, _ := os.ReadFile(mirror); !bytes.Equal(got, oldMirror) { //nolint:gosec // a path inside the test's temporary directory
+				t.Fatal("the mirror holds the new certificate before it is served")
+			}
+			f.store.mu.Lock()
+			defer f.store.mu.Unlock()
+			if f.store.updates != updates {
+				t.Fatal("the row was written before the new certificate is served")
+			}
+		}
+		now := r.refresh(t, fixedNow.Add(2*selfSignedNameCheck), old, 4, still)
+		if now.Equal(old) {
+			t.Fatal("the source did not sign a new certificate")
+		}
+		if got, _ := os.ReadFile(mirror); bytes.Equal(got, oldMirror) { //nolint:gosec // a path inside the test's temporary directory
+			t.Error("the mirror was not written once the new certificate was served")
+		}
+	})
+
+	t.Run("a supplied pair replaced on disk", func(t *testing.T) {
+		dir := t.TempDir()
+		crt, key := filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
+		a := writePair(t, crt, key, "a.example.com")
+		src, err := newSuppliedSource(crt, key, nowFn(fixedNow))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := newStagedSourceRig(t, src, 3*time.Second)
+		b := writePair(t, crt, key, "b.example.com")
+		if now := r.refresh(t, fixedNow.Add(2*suppliedRecheck), a, 6, nil); !now.Equal(b) {
+			t.Error("the replaced pair is not served after the refresh")
+		}
+	})
+
+	t.Run("a refresh that finds nothing new does not call beforeSet", func(t *testing.T) {
+		f := newSSFixture(t)
+		src := f.source(t, "https://a.example.test", "", fixedNow)
+		var calls atomic.Int32
+		src.beforeSet = func(context.Context, tls.Certificate) { calls.Add(1) }
+		src.Refresh(fixedNow.Add(selfSignedNameCheck))
+		if n := calls.Load(); n != 0 {
+			t.Errorf("beforeSet was called %d times for an unchanged certificate", n)
+		}
+	})
 }
