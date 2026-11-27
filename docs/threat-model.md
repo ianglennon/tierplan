@@ -1,4 +1,4 @@
-# TierPlan threat model (Phases 1 to 13.1, the Phase 23 ingress node and the Phase 26 virtual IP)
+# TierPlan threat model (Phases 1 to 13.1, and managed ingress, Phases 18 to 28: the Phase 23 ingress node, the Phase 26 virtual IP and TierPlan's own route)
 
 This describes what TierPlan protects against in its first four builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2; users, teams, roles, encrypted backups, restore and key rotation in Phase 3; changes to containers, networks and volumes, logs and shells in Phase 4; registries and image pulls in Phase 5; swarm services in Phase 6, compose stacks in Phase 7, stack history, adoption and drift in Phase 8, git-backed stacks in Phase 9, networks and address pools in Phase 10, the janitor in Phase 11), what it does not, and the risks that remain. Threat IDs (T-01-nn to T-09-nn) refer to the plans in which each mitigation was designed and tested.
 
@@ -594,6 +594,26 @@ Phase 26 adds one service to a swarm: `tierplan-keepalived`, a global service th
 | The key is disclosed | Sealed at rest, a 0400 secret, a path and never a value in the configuration, never in any answer or audit entry, no shell in the image | 74 |
 | Another machine answers for the address and keeps every node in FAULT | Each node checks with ARP probes before it starts keepalived and reports `address_in_use`; the fault is per node in the status, and it clears when the machine goes | 72 |
 | A compromised node writes false lines | Strict parsing, closed vocabulary, bounds, rate limits | 75 |
+
+## What Phases 18 to 28 add: managed ingress
+
+Managed ingress lets a stack ask for a hostname and a certificate, and serves it from a proxy on the nodes. The Phase 23 section above covers the proxy image and the Phase 26 section covers the virtual IP. This section covers what the milestone as a whole adds, and ends with TierPlan's own route, which Phase 28 added. The unchanged part is the headline: a compromised TierPlan is root on the hosts it manages, and now it also holds every ingress key.
+
+### TierPlan's own route
+
+The self route serves TierPlan's own web interface through the ingress proxy, on a hostname with a certificate, in addition to port 7480. It adds the one place where a request reaches TierPlan from a proxy that is itself reachable from the internet, so this part says what is trusted and what is refused.
+
+**The self network is the only source of trusted forwarded addresses (D-06, D-08).** TierPlan believes `X-Forwarded-For` only from a peer in its trusted set. That set is the static `TIERPLAN_TRUSTED_PROXIES` list plus the subnet of the dedicated `tierplan-self` network while TierPlan is attached to it, minus that network's gateway address, which on a bridge is the host itself. It never includes a bridge gateway (`172.17.0.1` and `172.18.0.1` are what node-local connections look like). It is held in memory, refreshed when the ensure loop inspects the network, and recomputed on the first pass after a start rather than stored. Traefik's entry points trust no incoming `X-Forwarded-*` header, so Traefik writes the client's real address itself, and what TierPlan records for sign-in throttling and the audit log is that address.
+
+**The shared `tierplan-ingress` overlay is never trusted.** Every service that is routed sits on `tierplan-ingress`, so a task of any stack with a label could reach TierPlan from inside the overlay and send a forged `X-Forwarded-For`. Trusting that overlay would let it choose the address TierPlan records and the bucket its sign-in throttle uses. Only the `tierplan-self` network, which exists for TierPlan and the proxies to reach each other, is trusted. A test sends a forged header straight to TierPlan from a routed service and asserts that it is not believed. This is also why the network is separate from the overlay, and residual risk 76 says what the separation does not do.
+
+**The state-changing origin set is derived, never typed and never read from a header (D-07).** TierPlan accepts a state-changing request, and a shell WebSocket, from the exact origins in a set: the public URL's origin, plus `https://<route host>` only while the self route is on. The route host comes from the stored claim. A request header cannot add to the set, which keeps the rule in `docs/reverse-proxy.md`. Cookies stay host-only (`__Host-`), so a session on one host is not sent to the other, and single sign-on callbacks keep going to the public URL (residual risk 78).
+
+**Agents and proxies never connect through ingress (D-10, A-05).** An agent that dialled through the route would reach TierPlan through a hop that terminates TLS, which defeats the certificate pin and the channel binding the agent handshake relies on. Three places refuse it. Settings refuse an agent URL that names a hostname held in the claims table, refuse a claim for the host of the agent URL, and allow the public URL to name the route host only when an agent URL that is not claimed is set. The route itself excludes `/agent/connect` and `/ingress/connect` (under the base path), so Traefik answers 404 for them on that host. And the server refuses an agent or proxy connect whose peer is on the self network, with a stable reason in the agent's log; that refusal has its own peer flag, separate from the trusted-proxy flag, so adding the self subnet to the trusted set never makes the handshake skip its channel-binding check.
+
+**The route can always be released from port 7480 (D-11).** Switching the self route off is a plain call on the instance API and does not depend on the route. No check refuses a release, including one that arrives over the route itself, which may be cut off as the route goes away. Switching ingress off for the environment releases the self route as the first item of the disable job, before the proxies go. A misconfigured route therefore never locks an administrator out of the instance, because 7480 is still there.
+
+**Traefik verifies TierPlan's certificate, by name, against a trust bundle (D-14, A-02, A-03).** The proxy's connection to TierPlan is not made with verification off. It checks the certificate against a trust bundle that follows every change of TierPlan's own certificate, and keeps the previous chain for an hour so that a swap does not fail a connection in flight. `scripts/insecure-tls-check.sh` still fails the build on a switch that turns verification off outside the two reviewed files.
 
 ## Residual risks
 
