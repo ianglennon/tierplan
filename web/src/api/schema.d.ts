@@ -14085,7 +14085,9 @@ export interface components {
              * @enum {string}
              */
             code: "claim_held" | "network_attached" | "backend_healthy" | "certificate_ready" | "applied";
-            /** @description A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the certificate's own failure hint */
+            /** @description On certificate_ready with reason certificate_not_ready: true when the certificate waits because its last order failed (a failed or invalid order, or the backoff after one), and message is then that failure's hint. Absent otherwise */
+            failed?: boolean;
+            /** @description A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the hint of the certificate's last failed order when failed is true */
             message: string;
             /** @description Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network), not_observed (no check has read that since TierPlan started) or self_input_invalid (TierPlan's own route cannot be rendered from what it knows of itself) */
             reason: string;

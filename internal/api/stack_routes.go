@@ -298,9 +298,9 @@ func (d StacksDeps) readBundleState(ctx context.Context, envID string, in *stack
 	}
 }
 
-// readCertMessages fills in, for each hostname the current bundle left out because its certificate is not ready, the
-// certificate's own failure hint. It reads the certificate state and never the certificate. A read that fails leaves
-// the messages out: the condition still names its reason.
+// readCertMessages fills in, for each hostname the current bundle left out because its certificate is not ready and
+// whose last order failed, that failure's hint. It reads the certificate state and never the certificate. A read that
+// fails leaves the messages out: the condition still names its reason.
 func (d StacksDeps) readCertMessages(ctx context.Context, envID string, in *stackops.RouteStateInput) {
 	ops := d.ingressOps()
 	if ops == nil {
@@ -322,7 +322,7 @@ func (d StacksDeps) readCertMessages(ctx context.Context, envID string, in *stac
 	}
 	in.CertMessages = map[string]string{}
 	for host, st := range states {
-		if st.State == stackops.CertWaiting && st.Reason != "" {
+		if st.State == stackops.CertWaiting && st.Failed && st.Reason != "" {
 			in.CertMessages[host] = st.Reason
 		}
 	}

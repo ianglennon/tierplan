@@ -50,7 +50,8 @@ type Condition struct {
 	State string
 	// Reason is a stable Reason code, empty when the condition is ready.
 	Reason string
-	// Message is the server's own sentence for a certificate that is not ready, otherwise empty.
+	// Message is the hint of the failure of a certificate that is not ready because its last order failed, otherwise
+	// empty.
 	Message string
 	// Applied and Total are the active nodes that applied the bundle and the active nodes there are. They are set on the
 	// CondApplied condition only.

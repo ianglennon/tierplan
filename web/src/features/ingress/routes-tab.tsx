@@ -30,7 +30,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { IngressOffEmpty } from "@/features/ingress/ingress-off-empty";
 import { SELF_ROUTE_ANCHOR } from "@/features/ingress/self-route-card";
 import { useEnvIsSwarm } from "@/features/resources/swarm-lists";
-import { routeHeadline } from "@/features/stacks/route-state";
+import { routeHeadline, waitingCertificateDetail } from "@/features/stacks/route-state";
 import { useNeeds } from "@/hooks/use-needs";
 import { keyExists, useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -118,11 +118,8 @@ function detailOf(
       return t(`stackIngress.routes.state.${r.state}.detail`);
     case "ingress_off":
       return t(`stackIngress.routes.state.${r.state}.detail`);
-    case "waiting_certificate": {
-      if (r.reason === "") return "";
-      const key = `stackIngress.routes.reason.${r.reason}`;
-      return keyExists(key) ? t(key) : r.reason;
-    }
+    case "waiting_certificate":
+      return waitingCertificateDetail(r.reason, r.conditions, t);
     case "backend_not_running":
       if (r.stopped) return t("stackIngress.routes.state.backend_not_running.stopped");
       return t(

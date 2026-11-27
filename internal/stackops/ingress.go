@@ -51,10 +51,12 @@ const (
 	CertWaiting = "waiting"
 )
 
-// CertState is the state of the certificate of one hostname. Reason is set for CertWaiting only.
+// CertState is the state of the certificate of one hostname. Reason is set for CertWaiting only. Failed is true when
+// the certificate waits because its last order failed, and Reason is then that failure's hint.
 type CertState struct {
 	State  string
 	Reason string
+	Failed bool
 }
 
 // attachFor is the attachment a conversion of st's project for target carries: nil, nil when no Ingress is wired.

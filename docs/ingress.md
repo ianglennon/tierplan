@@ -586,6 +586,12 @@ knows them:
 | `ca_rate_limited` | Let's Encrypt answered a new-name order of the registered domain with a rate limit and a Retry-After, so TierPlan waits for it. |
 | `concurrency` | Two certificates are already being ordered, the most TierPlan runs at once. The next one starts when a slot is free. |
 
+A route whose certificate is not ready reads Waiting for certificate on the routes list and on the stack page. When the
+certificate's last order failed, and it waits for its backoff or for the cause to be fixed, the line under it says "The last
+order for this certificate failed." followed by the failure's hint, the same hint the Certificates tab shows. In the API the
+route's `certificate_ready` condition then has `failed: true` and the hint as its `message`. Otherwise the line says the
+certificate is still being issued.
+
 ## Virtual IP
 
 A virtual IP gives a swarm's ingress one floating IPv4 address. keepalived runs on every node as a global service, the nodes

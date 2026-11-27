@@ -63,7 +63,8 @@ type RouteStateInput struct {
 	BundleKnown bool
 	// EngineUnreadable is true when the engine could not be read, so what runs and what is attached is not known.
 	EngineUnreadable bool
-	// CertMessages is, by hostname, the server's sentence for a certificate that is not ready.
+	// CertMessages is, by hostname, the hint of the failure of a certificate that is not ready because its last order
+	// failed. A hostname whose certificate recorded no failure is not in it.
 	CertMessages map[string]string
 }
 

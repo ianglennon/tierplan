@@ -18641,8 +18641,12 @@
             ],
             "type": "string"
           },
+          "failed": {
+            "description": "On certificate_ready with reason certificate_not_ready: true when the certificate waits because its last order failed (a failed or invalid order, or the backoff after one), and message is then that failure's hint. Absent otherwise",
+            "type": "boolean"
+          },
           "message": {
-            "description": "A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the certificate's own failure hint",
+            "description": "A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the hint of the certificate's last failed order when failed is true",
             "type": "string"
           },
           "reason": {

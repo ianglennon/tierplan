@@ -256,10 +256,11 @@ func (o ingressOps) CertStates(ctx context.Context, envID string, hostnames []st
 				}
 			}
 			reason := certNotReady
-			if class, ok := failures[c.Hostname]; ok {
+			class, failed := failures[c.Hostname]
+			if failed {
 				reason = ingresscert.FailureHint(class)
 			}
-			out[c.Hostname] = stackops.CertState{State: stackops.CertWaiting, Reason: reason}
+			out[c.Hostname] = stackops.CertState{State: stackops.CertWaiting, Reason: reason, Failed: failed}
 		}
 	}
 	return out, nil

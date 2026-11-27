@@ -152,6 +152,41 @@ describe("the Ingress page's Routes tab", () => {
     expect(within(second).getByText("api").className).toContain("font-mono");
   });
 
+  it("says under Waiting for certificate that the last order failed, with the failure's hint", async () => {
+    const hint =
+      "The challenge name is a CNAME whose target zone TierPlan cannot edit with the domain's token.";
+    const waiting = (hostname: string, failed: boolean) =>
+      route({
+        hostname,
+        state: "waiting_certificate",
+        reason: "certificate_not_ready",
+        conditions: [
+          condition("claim_held"),
+          condition("network_attached"),
+          condition("backend_healthy"),
+          condition("certificate_ready", "not_ready", {
+            reason: "certificate_not_ready",
+            message: failed ? hint : "The certificate is not ready to be served yet.",
+            ...(failed ? { failed: true } : {}),
+          }),
+          condition("applied", "not_ready", { reason: "not_in_bundle" }),
+        ],
+      });
+    serve([waiting("a.example.com", true), waiting("b.example.com", false)]);
+    mount();
+    const t = await table();
+    expect(
+      within(rowOf(t, "a.example.com")).getByText(
+        `The last order for this certificate failed. ${hint}`,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(rowOf(t, "b.example.com")).getByText(
+        "The certificate is still being issued, or isn't ready to serve yet.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("draws a stopped stack's backend as grey and a running stack's as red, as the stack page does", async () => {
     serve([
       route({ hostname: "a.example.com", state: "backend_not_running", stopped: true }),

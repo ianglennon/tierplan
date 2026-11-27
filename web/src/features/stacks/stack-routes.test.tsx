@@ -147,6 +147,42 @@ describe("the stack's Routes card", () => {
     expect(row.querySelector(`[aria-hidden="true"].${dot}`)).not.toBeNull();
   });
 
+  it("says under Waiting for certificate that the last order failed, with the failure's hint", async () => {
+    const hint = "A CAA record on the domain does not allow this certificate authority to issue.";
+    const cert = (over: Json) => ({
+      code: "certificate_ready",
+      state: "not_ready",
+      reason: "certificate_not_ready",
+      ...over,
+    });
+    serve([
+      route({
+        hostname: "a.example.com",
+        state: "waiting_certificate",
+        reason: "certificate_not_ready",
+        conditions: [cert({ message: hint, failed: true })],
+      }),
+      route({
+        hostname: "b.example.com",
+        state: "waiting_certificate",
+        reason: "certificate_not_ready",
+        conditions: [cert({ message: "The certificate is not ready to be served yet." })],
+      }),
+    ]);
+    mount();
+    const c = await card();
+    expect(
+      within(rowOf(c, "a.example.com")).getByText(
+        `The last order for this certificate failed. ${hint}`,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(rowOf(c, "b.example.com")).getByText(
+        "The certificate is still being issued, or isn't ready to serve yet.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("gives a waiting certificate with no reason the label alone, and an unknown reason as sent", async () => {
     serve([
       route({ hostname: "a.example.com", state: "waiting_certificate" }),
