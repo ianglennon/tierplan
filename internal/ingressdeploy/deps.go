@@ -192,7 +192,13 @@ type Deps struct {
 	// manager, the node for a manager or a worker, and whether it can be told at all. The preflight compares it with the
 	// environment's and says so when it cannot tell.
 	LocalSwarm func(ctx context.Context) (envs.SwarmMembership, error)
-	// OwnChallenge reads the HTTP-01 challenge answer of the server's own address, for the preflight.
+	// OwnHTTP01InUse is whether TierPlan's own certificate really renews over HTTP-01 (acme.HTTP01InUse), for the HTTP-01
+	// preflight checks (A-04): only an active Let's Encrypt configuration using HTTP-01 counts, never a self-signed install
+	// whose challenge merely reads HTTP-01 by default. Nil skips the checks; an error makes them warn.
+	OwnHTTP01InUse func(ctx context.Context) (bool, error)
+	// OwnChallenge reads the challenge type of the server's own certificate.
+	//
+	// Deprecated: the preflight reads OwnHTTP01InUse; the challenge type alone says HTTP-01 for a self-signed install.
 	OwnChallenge func(ctx context.Context) (string, error)
 	// Self reads TierPlan's own container on the local engine: its swarm service, stack and networks (D-01, D-03). Nil answers
 	// unknown, so SelfLocation refuses rather than guesses.

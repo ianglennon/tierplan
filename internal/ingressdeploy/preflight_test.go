@@ -299,21 +299,21 @@ func TestPreflightAddressPool(t *testing.T) {
 // TestPreflightHTTP01Conflict: TierPlan's own certificate on HTTP-01, on the swarm it runs on, is refused (D-09).
 func TestPreflightHTTP01Conflict(t *testing.T) {
 	cases := []struct {
-		name      string
-		challenge string
-		local     envs.SwarmMembership
-		refused   bool
+		name    string
+		inUse   bool
+		local   envs.SwarmMembership
+		refused bool
 	}{
-		{"http-01 on the same swarm", "http-01", envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "elsewhere"}, true},
-		{"dns-01 on the same swarm", "dns-01", envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, false},
-		{"http-01 elsewhere", "http-01", envs.SwarmMembership{Known: true, Member: true, ClusterID: "another-cluster", NodeID: "other-node"}, false},
-		{"http-01 on a host that is no swarm node", "http-01", envs.SwarmMembership{Known: true}, false},
-		{"http-01 on a worker of this swarm", "http-01", envs.SwarmMembership{Known: true, Member: true, NodeID: "node-1"}, true},
+		{"http-01 on the same swarm", true, envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "elsewhere"}, true},
+		{"not http-01 on the same swarm", false, envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, false},
+		{"http-01 elsewhere", true, envs.SwarmMembership{Known: true, Member: true, ClusterID: "another-cluster", NodeID: "other-node"}, false},
+		{"http-01 on a host that is no swarm node", true, envs.SwarmMembership{Known: true}, false},
+		{"http-01 on a worker of this swarm", true, envs.SwarmMembership{Known: true, Member: true, NodeID: "node-1"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
-				d.OwnChallenge = func(context.Context) (string, error) { return tc.challenge, nil }
+				d.OwnHTTP01InUse = func(context.Context) (bool, error) { return tc.inUse, nil }
 				d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) { return tc.local, nil }
 			}})
 			res, err := r.svc.Preview(testsupport.Context(t), r.envID, ingressdeploy.EnableRequest{})
@@ -336,7 +336,7 @@ func TestPreflightHTTP01Conflict(t *testing.T) {
 
 	t.Run("unreadable is a warning", func(t *testing.T) {
 		r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
-			d.OwnChallenge = func(context.Context) (string, error) { return "", errors.New("no settings") }
+			d.OwnHTTP01InUse = func(context.Context) (bool, error) { return false, errors.New("no settings") }
 			d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) {
 				return envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, nil
 			}
@@ -359,23 +359,23 @@ func TestPreflightHTTP01Conflict(t *testing.T) {
 func TestPreflightHTTP01SaysWhenItCannotTell(t *testing.T) {
 	cases := []struct {
 		name      string
-		challenge string
+		inUse     bool
 		local     envs.SwarmMembership
 		localErr  error
 		noCluster bool
 		warned    bool
 	}{
-		{name: "no socket", challenge: "http-01", warned: true},
-		{name: "the probe failed", challenge: "http-01", localErr: errors.New("probe failed"), warned: true},
-		{name: "a worker of a swarm the environment does not list", challenge: "http-01", local: envs.SwarmMembership{Known: true, Member: true, NodeID: "stranger"}, warned: true},
-		{name: "a manager, with the environment's cluster not known", challenge: "http-01", noCluster: true, local: envs.SwarmMembership{Known: true, Member: true, ClusterID: "c", NodeID: "stranger"}, warned: true},
-		{name: "no socket, on DNS-01", challenge: "dns-01", warned: false},
-		{name: "a standalone engine", challenge: "http-01", local: envs.SwarmMembership{Known: true}, warned: false},
+		{name: "no socket", inUse: true, warned: true},
+		{name: "the probe failed", inUse: true, localErr: errors.New("probe failed"), warned: true},
+		{name: "a worker of a swarm the environment does not list", inUse: true, local: envs.SwarmMembership{Known: true, Member: true, NodeID: "stranger"}, warned: true},
+		{name: "a manager, with the environment's cluster not known", inUse: true, noCluster: true, local: envs.SwarmMembership{Known: true, Member: true, ClusterID: "c", NodeID: "stranger"}, warned: true},
+		{name: "no socket, not on HTTP-01", inUse: false, warned: false},
+		{name: "a standalone engine", inUse: true, local: envs.SwarmMembership{Known: true}, warned: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
-				d.OwnChallenge = func(context.Context) (string, error) { return tc.challenge, nil }
+				d.OwnHTTP01InUse = func(context.Context) (bool, error) { return tc.inUse, nil }
 				d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) { return tc.local, tc.localErr }
 			}})
 			if tc.noCluster {
@@ -397,6 +397,28 @@ func TestPreflightHTTP01SaysWhenItCannotTell(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPreflightHTTP01SelfSignedIsNotRefused: a self-signed install that never set Let's Encrypt up reads HTTP-01 as its challenge
+// by default, but nothing of TierPlan's needs port 80, so the swarm TierPlan runs on is neither refused nor warned (A-04).
+func TestPreflightHTTP01SelfSignedIsNotRefused(t *testing.T) {
+	r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
+		d.OwnHTTP01InUse = func(context.Context) (bool, error) { return false, nil }
+		d.OwnChallenge = func(context.Context) (string, error) { return "http-01", nil }
+		d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) {
+			return envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, nil
+		}
+	}})
+	res, err := r.svc.Preview(testsupport.Context(t), r.envID, ingressdeploy.EnableRequest{})
+	if err != nil {
+		t.Fatalf("Preview: %v", err)
+	}
+	for _, code := range []string{ingressdeploy.CodeHTTP01Conflict, ingressdeploy.CodeHTTP01Unknown} {
+		if _, ok := findingOf(res.Findings, code); ok {
+			t.Errorf("findings = %+v, want no %s for a self-signed install", res.Findings, code)
+		}
+	}
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
 }
 
 // TestPreflightNameTaken: an object with a reserved ingress name and without the component label refuses; a labelled
@@ -561,7 +583,7 @@ func TestPreflightOrderIsStable(t *testing.T) {
 	r, ne := newNodeRig(t, rigOptions{
 		deps: func(d *ingressdeploy.Deps) {
 			d.URL = func() string { return "" }
-			d.OwnChallenge = func(context.Context) (string, error) { return "http-01", nil }
+			d.OwnHTTP01InUse = func(context.Context) (bool, error) { return true, nil }
 			d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) {
 				return envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, nil
 			}

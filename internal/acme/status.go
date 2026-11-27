@@ -115,6 +115,15 @@ type RunView struct {
 	StartedAt, FinishedAt time.Time
 }
 
+// HTTP01InUse is whether TierPlan's own certificate really renews over the HTTP-01 challenge, so it needs port 80 (A-04).
+// ChallengeType alone cannot say: challengeOf answers HTTP-01 when nothing is saved (RESEARCH F4), so a self-signed install
+// that never set Let's Encrypt up reads HTTP-01 too. Only an active Let's Encrypt configuration counts: not off, not
+// paused, not served from certificate files, with an account or a stored certificate or order, and on HTTP-01.
+func HTTP01InUse(st Status) bool {
+	return st.Mode == ModeActive && !st.CertFiles && st.PausedReason == "" &&
+		(st.HasState || st.Account != nil) && st.ChallengeType == ChallengeHTTP01
+}
+
 // Status reads the page's state. It makes no request to the CA.
 //
 // The state row, the run history and the failed-run count come from one read transaction, so a status

@@ -485,7 +485,7 @@ func checkTypedSubnet(ctx context.Context, s *Service, in checkInput, networks [
 // does not know the cluster of, when its node is one of the environment's. What cannot be told is a warning, never a
 // silent pass: no Docker socket, an engine that does not answer, or a worker whose node the environment does not list.
 func checkHTTP01(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
-	if s.d.OwnChallenge == nil || s.d.LocalSwarm == nil {
+	if s.d.OwnHTTP01InUse == nil || s.d.LocalSwarm == nil {
 		return nil, nil
 	}
 	unknown := func() []Finding {
@@ -495,12 +495,13 @@ func checkHTTP01(ctx context.Context, s *Service, in checkInput) ([]Finding, err
 			Severity: SeverityWarning,
 		}}
 	}
-	challenge, err := s.d.OwnChallenge(ctx)
+	inUse, err := s.d.OwnHTTP01InUse(ctx)
 	if err != nil {
-		s.log().Warn("could not read TierPlan's own challenge type for the ingress preflight", "error", err)
+		s.log().Warn("could not read whether TierPlan's own certificate uses HTTP-01 for the ingress preflight", "error", err)
 		return unknown(), nil
 	}
-	if challenge != challengeHTTP01 {
+	if !inUse {
+		// A self-signed install, certificate files, or Let's Encrypt on DNS-01: nothing of TierPlan's needs port 80 (A-04).
 		return nil, nil
 	}
 	local, err := s.d.LocalSwarm(ctx)
