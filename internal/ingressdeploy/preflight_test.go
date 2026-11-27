@@ -525,7 +525,6 @@ func TestPreflightHTTP01SaysWhenItCannotTell(t *testing.T) {
 func TestPreflightHTTP01SelfSignedIsNotRefused(t *testing.T) {
 	r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
 		d.OwnHTTP01InUse = func(context.Context) (bool, error) { return false, nil }
-		d.OwnChallenge = func(context.Context) (string, error) { return "http-01", nil }
 		d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) {
 			return envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, nil
 		}

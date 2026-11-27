@@ -1290,7 +1290,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	ingressDeploy := newIngressDeploy(ingressDeployDeps{
 		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc, Hub: ingressHub, Broker: broker,
 		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
-		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
+		OwnHTTP01InUse: ownHTTP01InUse(acmeWire.mgr), Clock: bo.janitorClock,
 		Self:   selfReader(socketPath, selfID),
 		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead, ingressHostRead(aggregator)),
 		CurrentBundle: func(envID string) (string, bool) {

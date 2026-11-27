@@ -56,8 +56,9 @@ type ingressDeployDeps struct {
 	Stacks ingressdeploy.Stacks
 	// CurrentBundle is the reconciler's current bundle ID of an environment, for the status.
 	CurrentBundle func(envID string) (string, bool)
-	// OwnChallenge reads the challenge answer of the server's own address; nil reads none.
-	OwnChallenge func(ctx context.Context) (string, error)
+	// OwnHTTP01InUse is whether the server's own certificate really renews over HTTP-01 (acme.HTTP01InUse); nil skips the
+	// HTTP-01 preflight checks.
+	OwnHTTP01InUse func(ctx context.Context) (bool, error)
 	// Self reads TierPlan's own container on the local engine (readSelfFacts on the server's socket); nil answers unknown.
 	Self func(ctx context.Context) (ingressdeploy.SelfFacts, error)
 	// SelfURLs reads the instance's own addresses and port for TierPlan's own route; nil means none are set.
@@ -105,33 +106,33 @@ func ingressDeployOf(d ingressDeployDeps) ingressdeploy.Deps {
 		managers = d.Clusters
 	}
 	return ingressdeploy.Deps{
-		Engine:        ingressEngine{agg: d.Aggregator, clusters: d.Clusters},
-		Envs:          ingressEnvReader{st: d.Store, svc: d.Envs},
-		Store:         d.Ingress,
-		Notifier:      d.Notifier,
-		Tokens:        d.Tokens,
-		NodeRows:      d.Tokens,
-		Kicker:        d.Hub,
-		Events:        events,
-		Nodes:         d.Tokens,
-		Stacks:        d.Stacks,
-		CurrentBundle: d.CurrentBundle,
-		Jobs:          d.Jobs,
-		Locks:         d.Locks,
-		Audit:         d.Audit,
-		Resolver:      d.Resolver,
-		AddressSpaces: d.AddressSpaces,
-		System:        ingressSystem(d),
-		LocalSwarm:    d.Envs.LocalSwarmMembership,
-		OwnChallenge:  d.OwnChallenge,
-		Self:          d.Self,
-		SelfURLs:      d.SelfURLs,
-		ServerVersion: buildinfo.Get().Version,
-		URL:           d.Instance.IngressEndpoint,
-		Pins:          d.Pins,
-		Clock:         d.Clock,
-		Log:           d.Log,
-		Managers:      managers,
+		Engine:         ingressEngine{agg: d.Aggregator, clusters: d.Clusters},
+		Envs:           ingressEnvReader{st: d.Store, svc: d.Envs},
+		Store:          d.Ingress,
+		Notifier:       d.Notifier,
+		Tokens:         d.Tokens,
+		NodeRows:       d.Tokens,
+		Kicker:         d.Hub,
+		Events:         events,
+		Nodes:          d.Tokens,
+		Stacks:         d.Stacks,
+		CurrentBundle:  d.CurrentBundle,
+		Jobs:           d.Jobs,
+		Locks:          d.Locks,
+		Audit:          d.Audit,
+		Resolver:       d.Resolver,
+		AddressSpaces:  d.AddressSpaces,
+		System:         ingressSystem(d),
+		LocalSwarm:     d.Envs.LocalSwarmMembership,
+		OwnHTTP01InUse: d.OwnHTTP01InUse,
+		Self:           d.Self,
+		SelfURLs:       d.SelfURLs,
+		ServerVersion:  buildinfo.Get().Version,
+		URL:            d.Instance.IngressEndpoint,
+		Pins:           d.Pins,
+		Clock:          d.Clock,
+		Log:            d.Log,
+		Managers:       managers,
 	}
 }
 
@@ -235,13 +236,14 @@ func envInfoFrom(envID string, row sqlc.Environment, in envs.RollupInput) ingres
 	return info
 }
 
-// ownChallenge is the validation method the server's own certificate is ordered with now, read from the ACME manager.
-func ownChallenge(mgr *acme.Manager) func(ctx context.Context) (string, error) {
-	return func(ctx context.Context) (string, error) {
+// ownHTTP01InUse is whether the server's own certificate really renews over HTTP-01, read from the ACME manager's status
+// through acme.HTTP01InUse (A-04): a self-signed install whose challenge type merely defaults to HTTP-01 is not.
+func ownHTTP01InUse(mgr *acme.Manager) func(ctx context.Context) (bool, error) {
+	return func(ctx context.Context) (bool, error) {
 		st, err := mgr.Status(ctx)
 		if err != nil {
-			return "", err
+			return false, err
 		}
-		return st.ChallengeType, nil
+		return acme.HTTP01InUse(st), nil
 	}
 }

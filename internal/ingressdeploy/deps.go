@@ -196,10 +196,6 @@ type Deps struct {
 	// preflight checks (A-04): only an active Let's Encrypt configuration using HTTP-01 counts, never a self-signed install
 	// whose challenge merely reads HTTP-01 by default. Nil skips the checks; an error makes them warn.
 	OwnHTTP01InUse func(ctx context.Context) (bool, error)
-	// OwnChallenge reads the challenge type of the server's own certificate.
-	//
-	// Deprecated: the preflight reads OwnHTTP01InUse; the challenge type alone says HTTP-01 for a self-signed install.
-	OwnChallenge func(ctx context.Context) (string, error)
 	// Self reads TierPlan's own container on the local engine: its swarm service, stack and networks (D-01, D-03). Nil answers
 	// unknown, so SelfLocation refuses rather than guesses.
 	Self func(ctx context.Context) (SelfFacts, error)
