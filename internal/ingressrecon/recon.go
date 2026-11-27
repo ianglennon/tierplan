@@ -59,6 +59,11 @@ type Deps struct {
 	// OnRender, when set, is told the environment, the bundle ID and whether the ID is new after every render
 	// attempt that produced a bundle. It is a test seam; production leaves it nil.
 	OnRender func(envID, id string, changed bool)
+	// Self is TierPlan's own route and trust for the environment that carries TierPlan (D-14): the self
+	// input, the own version it was built at (it moves whenever TierPlan's own certificate does) and ok.
+	// It is called for every environment rendered and, through the version poll, every PollInterval, so it
+	// must be cheap. Nil, or ok false, renders no self input and own version 0.
+	Self func(ctx context.Context, envID string) (ingressrender.SelfInput, int64, bool)
 }
 
 // envState is what the reconciler holds of one environment.
@@ -71,8 +76,9 @@ type envState struct {
 	bundle  ingressbundle.Bundle
 	have    bool
 	skipped []ingressrender.Skipped
-	// config and certs are the version pair the current bundle's last render read.
-	config, certs int64
+	// config and certs are the version pair the current bundle's last render read, and own the own version
+	// it was rendered at (0 when the environment does not carry TierPlan).
+	config, certs, own int64
 }
 
 // Reconciler keeps the current bundle of every environment, in memory only (D-20).
@@ -192,7 +198,11 @@ func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) e
 			Hostname: c.Hostname, ChainPEM: c.ChainPEM, KeyPEM: c.KeyPEM, Reason: ingressrender.SkipReason(c.Reason),
 		})
 	}
-	res, err := r.render(ingressrender.Input{Snapshot: snap, Certs: certs, CertsVersion: certsVersion, OwnVersion: 0})
+	in := ingressrender.Input{Snapshot: snap, Certs: certs, CertsVersion: certsVersion}
+	if self, own, ok := r.self(ctx, envID); ok {
+		in.Self, in.OwnVersion = &self, own
+	}
+	res, err := r.render(in)
 	if err != nil {
 		return err
 	}
@@ -206,7 +216,7 @@ func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) e
 		s.bundle.Version = res.Bundle.Version
 	}
 	s.skipped = res.Skipped
-	s.config, s.certs = snap.Settings.ConfigVersion, certsVersion
+	s.config, s.certs, s.own = snap.Settings.ConfigVersion, certsVersion, in.OwnVersion
 	s.mu.Unlock()
 
 	if changed {
@@ -218,11 +228,19 @@ func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) e
 	return nil
 }
 
+// self is Deps.Self for the environment, or nothing when it is unset.
+func (r *Reconciler) self(ctx context.Context, envID string) (ingressrender.SelfInput, int64, bool) {
+	if r.d.Self == nil {
+		return ingressrender.SelfInput{}, 0, false
+	}
+	return r.d.Self(ctx, envID)
+}
+
 // drop forgets the environment's bundle and tells Changes, but only if there was one.
 func (r *Reconciler) drop(envID string, s *envState) {
 	s.mu.Lock()
 	existed := s.have
-	s.bundle, s.have, s.skipped, s.config, s.certs = ingressbundle.Bundle{}, false, nil, 0, 0
+	s.bundle, s.have, s.skipped, s.config, s.certs, s.own = ingressbundle.Bundle{}, false, nil, 0, 0, 0
 	s.mu.Unlock()
 	if existed {
 		r.changes.Notify(envID)
