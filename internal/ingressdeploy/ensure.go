@@ -388,8 +388,10 @@ func (s *Service) repair(ctx context.Context, envID string, state ingressstore.D
 		return false, err
 	}
 	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) (err error) {
-		sp.net, err = s.ensureSelfNetwork(ctx, c, sp.info, sp.wantNow(l))
-		return err
+		if sp.net, err = s.ensureSelfNetwork(ctx, c, sp.info, sp.wantNow(l)); err != nil {
+			return err
+		}
+		return s.removeSelfNetwork(ctx, c, sp, l)
 	}); err != nil {
 		return false, err
 	}

@@ -44,6 +44,9 @@ type selfNet struct {
 	id string
 	// foreign is a network of the reserved name that is not TierPlan's: it is never attached, adopted or removed.
 	foreign bool
+	// keptInUse is TierPlan's own network left in place though not wanted: TierPlan is on it, or the engine refused its
+	// removal because something still is.
+	keptInUse bool
 }
 
 // selfPass is what one ensure pass knows of the self network before it reads the swarm.
@@ -104,13 +107,58 @@ func (sp *selfPass) attachWanted(l live) bool {
 	return sp.wanted
 }
 
-// selfWork is whether the self network has a write waiting: it is wanted and missing.
+// selfWork is whether the self network has a write waiting: it is wanted and missing, or it is TierPlan's, not wanted and
+// ready to go (removable).
 func (sp *selfPass) selfWork(l live) bool {
-	if !sp.known || !sp.wanted {
+	if !sp.known {
 		return false
 	}
-	_, ok := selfNetworkRowOf(l.networks)
-	return !ok
+	if sp.wanted {
+		_, ok := selfNetworkRowOf(l.networks)
+		return !ok
+	}
+	return sp.removable(l)
+}
+
+// removable is whether TierPlan's own self network, not wanted, may be removed now (A-06): the proxy as read no longer names
+// it, so the update that dropped it has been written, and TierPlan's own container is not on it. A network TierPlan's service
+// still names is the person's to take out of the stack file; TierPlan never updates its own service (D-03).
+func (sp *selfPass) removable(l live) bool {
+	if !sp.known || sp.wanted || sp.place.Attached {
+		return false
+	}
+	row, ok := ownSelfNetwork(l.networks)
+	if !ok {
+		return false
+	}
+	return l.service == nil || !specNamesNetwork(l.service.Spec, row)
+}
+
+// removeSelfNetwork removes TierPlan's own self network when it is not wanted and removable as l was read under the lock.
+// While TierPlan is on it, it is kept (KeptInUse) and nothing is tried; an engine that answers the network is still in use is
+// the same, never a failed pass. c is a manager's client, inside one write.
+func (s *Service) removeSelfNetwork(ctx context.Context, c *dockerx.Client, sp *selfPass, l live) error {
+	if !sp.known || sp.wanted || sp.net.id == "" || sp.net.foreign {
+		return nil
+	}
+	if sp.place.Attached {
+		sp.net.keptInUse = true
+		return nil
+	}
+	if !sp.removable(l) {
+		// The proxy still names it: this pass's update takes it off, and a later pass removes the network.
+		return nil
+	}
+	err := c.NetworkRemove(ctx, sp.net.id)
+	switch {
+	case err == nil, dockerx.IsNotFound(err):
+		sp.net.id = ""
+		return nil
+	case dockerx.IsNetworkInUse(err):
+		sp.net.keptInUse = true
+		return nil
+	}
+	return fmt.Errorf("remove the self network: %w", err)
 }
 
 // selfNetworkRowOf is the network of the reserved name among rows, TierPlan's or not.
@@ -313,6 +361,7 @@ func (s *Service) observeSelf(ctx context.Context, sp *selfPass) {
 		return
 	}
 	o.Attached = o.Exists && sp.place.Attached
+	o.KeptInUse = o.Exists && sp.known && !sp.wanted && (sp.place.Attached || sp.net.keptInUse)
 	s.publishSelf(o)
 }
 
@@ -343,6 +392,10 @@ func (s *Service) publishSelf(o SelfObservation) {
 	if o.Foreign && o.Wanted && (!had || !prev.Foreign || !prev.Wanted) {
 		s.log().Warn("a network named "+ingress.SelfNetworkName+" exists that is not TierPlan's, so the proxy is not attached to it: remove or rename it",
 			"environment", o.EnvID, "code", CodeSelfNetworkForeign)
+	}
+	if o.KeptInUse && (!had || !prev.KeptInUse) {
+		s.log().Info("TierPlan's own network "+ingress.SelfNetworkName+" is no longer needed but is kept while something is still on it. "+
+			"If TierPlan's stack file names it, take those lines out and redeploy TierPlan; a later pass removes the network", "environment", o.EnvID)
 	}
 	if cb != nil {
 		cb(o)

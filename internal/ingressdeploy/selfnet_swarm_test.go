@@ -373,3 +373,75 @@ func TestEnsureAdoptsOrRefusesAnExistingTierPlanSelf(t *testing.T) {
 		}
 	})
 }
+
+// TestEnsureLeavesTierPlanSelfWhileTierPlanIsOnIt: once the self network is no longer wanted the proxy drops it first; the
+// network stays, KeptInUse, while TierPlan's own container is on it; an engine that answers it is still in use keeps it too,
+// and the pass is not a failure; then a pass removes it (A-06, Pitfall 5).
+func TestEnsureLeavesTierPlanSelfWhileTierPlanIsOnIt(t *testing.T) {
+	var base *dockertest.FakeConfig
+	r, facts := newSelfRig(t, selfRigOptions{config: func(c *dockertest.FakeConfig) {
+		c.RemoveErrors = map[string]string{ingress.SelfNetworkName: "error while removing network: network has active endpoints"}
+		base = c
+	}})
+	observed := func() ingressdeploy.SelfObservation {
+		t.Helper()
+		o, ok := r.svc.SelfObservationOf(r.envID)
+		if !ok {
+			t.Fatal("no observation after a pass")
+		}
+		return o
+	}
+	wantOK := func(when string) {
+		t.Helper()
+		if _, class := r.ensureState(); class != ingressdeploy.EnsureOK {
+			t.Errorf("%s: pass class = %q, want ok", when, class)
+		}
+	}
+
+	r.claimSelf()
+	r.round()
+	if got := r.proxyNetworks(); !slices.Equal(got, []string{ingress.NetworkName, ingress.SelfNetworkName}) {
+		t.Fatalf("proxy networks with the claim held = %v, want both", got)
+	}
+	facts.setAttached(true)
+	r.unclaimSelf()
+
+	for i := range 2 {
+		r.round()
+		if got := r.proxyNetworks(); !slices.Equal(got, []string{ingress.NetworkName}) {
+			t.Errorf("pass %d after the claim went: proxy networks = %v, want the self network dropped", i+1, got)
+		}
+		if _, ok := r.selfNetwork(); !ok {
+			t.Fatalf("pass %d removed the self network while TierPlan is on it", i+1)
+		}
+		if o := observed(); !o.KeptInUse || !o.Exists || !o.Attached || o.Wanted {
+			t.Errorf("pass %d: observation = %+v, want kept in use, existing, TierPlan attached, not wanted", i+1, o)
+		}
+		wantOK("TierPlan on the network")
+	}
+
+	facts.setAttached(false)
+	r.round()
+	if _, ok := r.selfNetwork(); !ok {
+		t.Fatal("the network was removed although the engine said it is in use")
+	}
+	if o := observed(); !o.KeptInUse || !o.Exists || o.Attached {
+		t.Errorf("after an in-use refusal: observation = %+v, want kept in use, existing, TierPlan not attached", o)
+	}
+	wantOK("an in-use refusal")
+
+	cfg := *base
+	cfg.RemoveErrors = nil
+	r.fake.Reconfigure(cfg)
+	r.round()
+	if _, ok := r.selfNetwork(); ok {
+		t.Fatal("the self network is still there with nothing on it")
+	}
+	if o := observed(); o.KeptInUse || o.Exists || o.Subnet.IsValid() {
+		t.Errorf("after the removal: observation = %+v, want not kept, not existing, no subnet", o)
+	}
+	wantOK("the removal")
+	if got := r.proxyNetworks(); !slices.Equal(got, []string{ingress.NetworkName}) {
+		t.Errorf("proxy networks after the removal = %v, want only %s", got, ingress.NetworkName)
+	}
+}
