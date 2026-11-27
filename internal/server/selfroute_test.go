@@ -400,3 +400,65 @@ func TestHolderLogsTrustedSetChanges(t *testing.T) {
 		t.Fatalf("trusted-set log lines = %v, want %v", got, want)
 	}
 }
+
+func TestHolderReadyGate(t *testing.T) {
+	t.Run("no claim: ready once read", func(t *testing.T) {
+		h, _, _ := newHolderRig(t, false, nil)
+		if h.Ready() {
+			t.Fatal("before Reload: ready, want not ready")
+		}
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if !h.Ready() {
+			t.Fatal("after Reload with no claim: not ready, want ready")
+		}
+	})
+	t.Run("a claim: ready on its environment's first observation", func(t *testing.T) {
+		h, _, _ := newHolderRig(t, true, nil)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if h.Ready() {
+			t.Fatal("with a claim and no observation: ready, want not ready")
+		}
+		h.Observe(attachedObs("env-2"))
+		if h.Ready() {
+			t.Fatal("after another environment's observation: ready, want not ready")
+		}
+		o := attachedObs(holderEnv)
+		o.Attached = false // observed, though TierPlan is not on the network yet: the set is known, and empty
+		h.Observe(o)
+		if !h.Ready() {
+			t.Fatal("after the claim's environment's observation: not ready, want ready")
+		}
+	})
+	t.Run("a claim and no observation: ready after the fallback", func(t *testing.T) {
+		h, _, clk := newHolderRig(t, true, nil)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		clk.advance(selfReadyTimeout - time.Second)
+		if h.Ready() {
+			t.Fatal("a second before the fallback: ready, want not ready")
+		}
+		clk.advance(time.Second)
+		if !h.Ready() {
+			t.Fatal("at the fallback: not ready, want ready so the bell is not held forever")
+		}
+	})
+	t.Run("a claim never read: ready after the fallback", func(t *testing.T) {
+		h, src, clk := newHolderRig(t, true, nil)
+		src.fail(errors.New("database is locked"))
+		if err := h.Reload(context.Background()); err == nil {
+			t.Fatal("Reload with a failing read: want the error")
+		}
+		if h.Ready() {
+			t.Fatal("after a failed read: ready, want not ready")
+		}
+		clk.advance(selfReadyTimeout)
+		if !h.Ready() {
+			t.Fatal("at the fallback after a failed read: not ready, want ready")
+		}
+	})
+}

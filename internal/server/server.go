@@ -963,7 +963,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The proxy observer notices a reverse proxy that is misconfigured from the
 	// requests it carries and from agent endpoint requests that are not upgrades,
 	// remembers it for an hour and tells the open bells when a kind appears (D-53).
-	proxyObs := httpx.NewProxyObserver(inst.PublicURL, nil).OnNew(broker.PublishProxyWarning)
+	// It looks at no request until the live trusted set is known, so a proxy on TierPlan's own network is not reported
+	// as untrusted in the first minutes after a restart (A-08).
+	proxyObs := httpx.NewProxyObserver(inst.PublicURL, nil).OnNew(broker.PublishProxyWarning).HoldUntil(selfRt.Ready)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
 		WithNotifier(broker).
 		OnUpgradeFailure(proxyObs.RecordUpgradeFailure).
@@ -1409,7 +1411,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
 		ServiceLogs:   api.ServiceLogsDeps{Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Stats:         api.StatsDeps{Aggregator: aggregator, Clusters: clusters, Hub: statsHub, Log: log},
-		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, SelfContainerID: selfID, Store: st, Log: log},
+		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, ExtraOrigins: selfRt.ExtraOrigins, SelfContainerID: selfID, Store: st, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
