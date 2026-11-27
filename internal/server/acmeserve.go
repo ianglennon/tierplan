@@ -44,6 +44,13 @@ type acmeInstaller struct {
 
 	// cert is the Let's Encrypt pair being served. A handshake loads this pointer and nothing else.
 	cert atomic.Pointer[tls.Certificate]
+
+	// ownStaging (its trust and applied) stages every certificate this installer is about to serve into the proxies'
+	// trust and waits, bounded, for them to apply it (A-03). The zero value stages nothing and waits for nothing.
+	ownStaging
+	// stageCtx is the server's running context, set by waitIn. Until then (the install at start, before the reconciler
+	// and the ingress hub run, so no proxy could apply anything) an install stages without waiting.
+	stageCtx atomic.Pointer[context.Context]
 }
 
 var _ acme.Installer = (*acmeInstaller)(nil)
@@ -65,6 +72,9 @@ func (i *acmeInstaller) ServeACME(chainPEM, keyPEM []byte) error {
 		return fmt.Errorf("read the Let's Encrypt certificate: %w", err)
 	}
 	pair.Leaf = leaf
+	// The proxies trust the incoming chain before it is served, so TierPlan's own route never answers a verification
+	// failure across the swap (A-03). Not under the source's lock: the wait may take up to ownTrustStageWait.
+	i.stageIncoming(certChain(pair))
 	// The mirror first: a failed write returns here and the current certificate stays. The
 	// self-signed source's lock keeps its name re-sign from writing the mirror between this write
 	// and the flag that tells it the mirror is no longer its own.
@@ -87,6 +97,12 @@ func (i *acmeInstaller) ServeSelfSigned() error {
 	if i.files {
 		return errACMECertFiles
 	}
+	// The self-signed leaf is the trust set's anchor, so staging it normally changes nothing; it is staged all the same so
+	// the fallback keeps the order every other change keeps (A-03). A re-sign that lands after this read stages its own
+	// certificate through the source's beforeSet.
+	if cur := i.self.cert.Load(); cur != nil && len(cur.Certificate) > 0 {
+		i.stageIncoming(certChain(*cur))
+	}
 	// Under the source's lock, so a name re-sign in progress has finished and the certificate read
 	// here is the one it serves.
 	i.self.mu.Lock()
@@ -103,6 +119,24 @@ func (i *acmeInstaller) ServeSelfSigned() error {
 	i.rt.Install(tlsKindSelfSigned, i.self.GetCertificate)
 	i.log.Info("serving the self-signed certificate again")
 	return nil
+}
+
+// waitIn makes every later install wait for the proxies to apply the staged trust, until ctx ends (the server stops).
+func (i *acmeInstaller) waitIn(ctx context.Context) {
+	i.stageCtx.Store(&ctx)
+}
+
+// stageIncoming stages chain through the installer's ownStaging, waiting only once waitIn was called.
+func (i *acmeInstaller) stageIncoming(chain []*x509.Certificate) {
+	st := i.ownStaging
+	if st.log == nil {
+		st.log = i.log
+	}
+	ctx, wait := context.Background(), false
+	if p := i.stageCtx.Load(); p != nil {
+		ctx, wait = *p, true
+	}
+	st.stage(ctx, chain, wait)
 }
 
 // get answers a handshake with the Let's Encrypt pair: a pointer load, no clock, lock or disk.

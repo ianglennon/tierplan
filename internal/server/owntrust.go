@@ -4,14 +4,21 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
+	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 // ownTrustGrace is how long the chain TierPlan served before a change stays in the trust set. A
@@ -19,10 +26,21 @@ import (
 // long (A-03); the self-signed anchor never leaves, because it is always a current member.
 const ownTrustGrace = time.Hour
 
+// ownTrustStageWait bounds how long a certificate change waits for the proxies to apply the trust set that holds the
+// incoming certificate before TierPlan serves it (A-03). A proxy that is stuck or slow must not hold a renewal for ever:
+// once ownTrustStageWait has passed the certificate is served anyway and the wait is logged.
+const ownTrustStageWait = 15 * time.Second
+
+// ownTrustStagePoll is how often the wait asks whether the proxies have applied the staged trust.
+const ownTrustStagePoll = 500 * time.Millisecond
+
+// errOwnTrustStageTimeout is waitApplied's answer when ownTrustStageWait passed before the proxies applied the trust.
+var errOwnTrustStageTimeout = errors.New("the proxies did not apply the staged trust set in time")
+
 // ownTrust is the set of certificates a proxy must trust to verify TierPlan itself, as one PEM
 // with a version (D-14, A-02). The members are, in a fixed order: TierPlan's own self-signed leaf
-// (the stable anchor), the chain served now (leaf first), then any chain served within the grace
-// period. The version is a fingerprint of the PEM content, not a counter, so it is equal across
+// (the stable anchor), the chain served now (leaf first), any chain staged to be served next (Stage),
+// then any chain served within the grace period. The version is a fingerprint of the PEM content, not a counter, so it is equal across
 // restarts for the same certificates and changes on every certificate change: a Let's Encrypt
 // install, the fallback to self-signed, a self-signed re-sign for new names (the old leaf does not
 // trust the new one) and a replaced supplied pair. The proxy then trusts a set, never one
@@ -36,6 +54,8 @@ type ownTrust struct {
 	// anchor is the self-signed source's current leaf, nil when TierPlan has none.
 	anchor func() *x509.Certificate
 	now    func() time.Time
+	// after is the clock the staged wait polls on (ownTrustStagePoll), the same clock as now.
+	after func(time.Duration) <-chan time.Time
 
 	mu      sync.Mutex
 	started bool
@@ -43,9 +63,12 @@ type ownTrust struct {
 	cur []*x509.Certificate
 	// prev is the members that left cur, each kept until its own time.
 	prev []ownTrustPrev
-	sig  string
-	pem  []byte
-	ver  int64
+	// incoming is the certificates staged before they are served (Stage), each kept until it is served or until its
+	// own time, whichever comes first. A staged certificate that is never served (a failed install) leaves at its time.
+	incoming []ownTrustPrev
+	sig      string
+	pem      []byte
+	ver      int64
 }
 
 type ownTrustPrev struct {
@@ -59,7 +82,120 @@ func newOwnTrust(served func() (tlsKind, []*x509.Certificate), anchor func() *x5
 	if now == nil {
 		now = time.Now
 	}
-	return &ownTrust{served: served, anchor: anchor, now: now}
+	return &ownTrust{served: served, anchor: anchor, now: now, after: time.After}
+}
+
+// useClock puts the trust set and its staged wait on c. The server calls it once, before anything reads the set.
+func (t *ownTrust) useClock(c stackops.Clock) *ownTrust {
+	if c != nil {
+		t.now, t.after = c.Now, c.After
+	}
+	return t
+}
+
+// Stage adds chain, a certificate TierPlan is about to serve (leaf first), to the trust set as incoming and returns the
+// set's version with it (A-03). Once the chain is served it is an ordinary member and the served/previous rule applies; a
+// chain that is never served leaves after ownTrustGrace. Staging a certificate the set already holds changes nothing.
+func (t *ownTrust) Stage(chain []*x509.Certificate) int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	until := t.now().Add(ownTrustGrace)
+	for _, c := range chain {
+		if c == nil {
+			continue
+		}
+		if i := slices.IndexFunc(t.incoming, func(p ownTrustPrev) bool { return c.Equal(p.cert) }); i >= 0 {
+			t.incoming[i].until = until
+			continue
+		}
+		t.incoming = append(t.incoming, ownTrustPrev{cert: c, until: until})
+	}
+	t.observeLocked()
+	return t.ver
+}
+
+// waitApplied waits until applied(version) is true, asking every ownTrustStagePoll on the trust set's clock, for at most
+// ownTrustStageWait. It answers nil once applied, errOwnTrustStageTimeout when the bound passed first and ctx's error when
+// ctx ended first. A nil applied is applied at once.
+func (t *ownTrust) waitApplied(ctx context.Context, version int64, applied func(version int64) bool) error {
+	if applied == nil || applied(version) {
+		return nil
+	}
+	deadline := t.now().Add(ownTrustStageWait)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.after(ownTrustStagePoll):
+		}
+		if applied(version) {
+			return nil
+		}
+		if !t.now().Before(deadline) {
+			return errOwnTrustStageTimeout
+		}
+	}
+}
+
+// ownStaging is how TierPlan stages a certificate change into the proxies' trust before it serves the certificate
+// (A-02, A-03): the Let's Encrypt installer and the certificate sources' beforeSet share it. Every field may be nil: a
+// nil trust stages nothing and a nil applied waits for nothing.
+type ownStaging struct {
+	trust *ownTrust
+	// applied reports whether the proxies of TierPlan's own environment hold a bundle with the given own version. It is
+	// true at once when no environment carries TierPlan's route or carve-out.
+	applied func(version int64) bool
+	// env names the environment whose proxies carry TierPlan's trust, "" for none; it is used for the wake and the log.
+	env func() string
+	// wake asks the environment's reconciler to render now rather than on its next poll.
+	wake func(envID string)
+	log  *slog.Logger
+}
+
+// stage adds chain to the trust set and, when wait is true, waits for the proxies to apply it, bounded by
+// ownTrustStageWait. A timeout is logged at warn and the caller serves the certificate anyway; an ended ctx (the server
+// is stopping) returns at once. It must be called with no lock held that a handshake, an install hook or the reconciler
+// takes.
+func (s *ownStaging) stage(ctx context.Context, chain []*x509.Certificate, wait bool) {
+	if s == nil || s.trust == nil || len(chain) == 0 {
+		return
+	}
+	ver := s.trust.Stage(chain)
+	if !wait || s.applied == nil {
+		return
+	}
+	env := ""
+	if s.env != nil {
+		env = s.env()
+	}
+	if env != "" && s.wake != nil {
+		s.wake(env)
+	}
+	log := s.log
+	if log == nil {
+		log = slog.Default()
+	}
+	switch err := s.trust.waitApplied(ctx, ver, s.applied); {
+	case errors.Is(err, errOwnTrustStageTimeout):
+		log.Warn("the proxies did not apply the trust for TierPlan's new certificate in time; serving it anyway",
+			"environment", env, "version", ver, "waited", ownTrustStageWait)
+	case err != nil:
+		log.Debug("stopped waiting for the proxies to trust TierPlan's new certificate", "environment", env, "version", ver, "error", err)
+	}
+}
+
+// certChain is the parsed chain of a pair, leaf first, leaving out a certificate that does not parse.
+func certChain(cert tls.Certificate) []*x509.Certificate {
+	out := make([]*x509.Certificate, 0, len(cert.Certificate))
+	for _, der := range cert.Certificate {
+		if c, err := x509.ParseCertificate(der); err == nil {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // PEM is the trust set as PEM and its version, after looking at what is served now. It is cheap when
@@ -85,6 +221,26 @@ func (t *ownTrust) observeLocked() bool {
 	now := t.now()
 	next := t.members()
 
+	// A staged certificate that is served now is an ordinary member; one whose time is over and was never served leaves
+	// without a grace period, because no proxy ever verified TierPlan against it.
+	var dropped []*x509.Certificate
+	staged := t.incoming[:0:0]
+	for _, in := range t.incoming {
+		switch {
+		case containsCert(next, in.cert):
+		case !now.Before(in.until):
+			dropped = append(dropped, in.cert)
+		default:
+			staged = append(staged, in)
+		}
+	}
+	t.incoming = staged
+	for _, in := range staged {
+		if !containsCert(next, in.cert) {
+			next = append(next, in.cert)
+		}
+	}
+
 	if t.started && fingerprints(next) != fingerprints(t.cur) {
 		// What left the set is kept for the grace period; what came back is current again.
 		kept := t.prev[:0:0]
@@ -94,7 +250,7 @@ func (t *ownTrust) observeLocked() bool {
 			}
 		}
 		for _, c := range t.cur {
-			if !containsCert(next, c) && !containsPrev(kept, c) {
+			if !containsCert(next, c) && !containsPrev(kept, c) && !containsCert(dropped, c) {
 				kept = append(kept, ownTrustPrev{cert: c, until: now.Add(ownTrustGrace)})
 			}
 		}
@@ -133,7 +289,7 @@ func (t *ownTrust) observeLocked() bool {
 	return changed
 }
 
-// members is the current set: the anchor, then the served chain, each certificate once.
+// members is the current set without what is staged: the anchor, then the served chain, each certificate once.
 func (t *ownTrust) members() []*x509.Certificate {
 	var all []*x509.Certificate
 	if t.anchor != nil {
