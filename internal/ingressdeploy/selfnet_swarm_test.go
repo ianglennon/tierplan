@@ -6,6 +6,7 @@ package ingressdeploy_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"net/netip"
@@ -36,11 +37,16 @@ const (
 type selfFacts struct {
 	mu    sync.Mutex
 	facts ingressdeploy.SelfFacts
+	// err makes the read fail, as a busy local socket does.
+	err error
 }
 
 func (f *selfFacts) read(context.Context) (ingressdeploy.SelfFacts, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.err != nil {
+		return ingressdeploy.SelfFacts{}, f.err
+	}
 	out := f.facts
 	out.Networks = slices.Clone(f.facts.Networks)
 	return out, nil
@@ -526,5 +532,39 @@ func TestRemovedSelfNetworkIsNotTrustedAfterAFailedRead(t *testing.T) {
 	}
 	if p := ingress.SelfTrustedPrefixes(o.Facts()); len(p) != 0 {
 		t.Errorf("the observation still trusts %v", p)
+	}
+}
+
+// TestSelfReadFailurePublishesNothing (WR-03): a pass that cannot read TierPlan's own container does not know whether TierPlan
+// is on the network, so it publishes nothing and the last observation stands: a busy local socket must not drop the route
+// and the trusted set for a pass.
+func TestSelfReadFailurePublishesNothing(t *testing.T) {
+	r, facts := newSelfRig(t, selfRigOptions{})
+	facts.setAttached(true)
+	var mu sync.Mutex
+	published := 0
+	r.svc.OnSelfObserved(func(ingressdeploy.SelfObservation) {
+		mu.Lock()
+		defer mu.Unlock()
+		published++
+	})
+	r.claimSelf()
+	r.round()
+	before, ok := r.svc.SelfObservationOf(r.envID)
+	if !ok || !before.Attached || before.Kind != ingressdeploy.SelfKindSwarmService {
+		t.Fatalf("observation = %+v, %v; want TierPlan attached as a swarm service", before, ok)
+	}
+	facts.mu.Lock()
+	facts.err = errors.New("the local socket did not answer in time")
+	facts.mu.Unlock()
+	r.round()
+	after, _ := r.svc.SelfObservationOf(r.envID)
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("observation after a failed self read =\n%+v\nwant the last one kept\n%+v", after, before)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if published != 1 {
+		t.Errorf("observations published = %d, want 1: the pass that could not read TierPlan's container publishes none", published)
 	}
 }

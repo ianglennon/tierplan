@@ -332,7 +332,9 @@ func (s *Service) SelfStackNamespace(envID string) string {
 }
 
 // observeSelf reads the self network, the ingress networks and the node's bridges on a manager and publishes what it found. A
-// read that fails publishes nothing, so the last observation stands rather than one with a part missing.
+// read that fails publishes nothing, so the last observation stands rather than one with a part missing; so does a pass that
+// could not tell where TierPlan runs (its own container or the local engine did not answer), which does not know whether
+// TierPlan is on the network (WR-03).
 func (s *Service) observeSelf(ctx context.Context, sp *selfPass) {
 	s.observeSelfOn(ctx, sp, func(fn func(*dockerx.Client) error) error { return s.d.Engine.ClusterRead(ctx, sp.info.ID, fn) })
 }
@@ -341,6 +343,12 @@ func (s *Service) observeSelf(ctx context.Context, sp *selfPass) {
 // swarm's manager, or a standalone host's one engine. It returns whether it published.
 func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(func(*dockerx.Client) error) error) (SelfObservation, bool) {
 	envID := sp.info.ID
+	if sp.place.Here == SelfHereUnknown && !sp.net.removed {
+		// "Not attached" would be a guess: it would drop the route and the trusted set until the next pass. A pass that
+		// removed the network still publishes, since that is known whatever TierPlan's container says.
+		s.log().Debug("the ingress ensure loop could not tell where TierPlan runs; the last observation of its own network stands", "environment", envID)
+		return SelfObservation{}, false
+	}
 	o := SelfObservation{EnvID: envID, Wanted: sp.known && sp.wanted, Kind: sp.place.Kind, Observed: true}
 	switch sp.place.Kind {
 	case SelfKindSwarmService:
