@@ -24,7 +24,9 @@ to [On a standalone host](#on-a-standalone-host) describe a swarm; that section 
 - [Nodes that were away](#nodes-that-were-away)
 - [DNS](#dns)
 - [Certificate Transparency](#certificate-transparency)
+- [Let's Encrypt limits](#lets-encrypt-limits)
 - [Virtual IP](#virtual-ip)
+- [Where the virtual IP will not work](#where-the-virtual-ip-will-not-work)
 
 ## What switching on creates
 
@@ -317,6 +319,49 @@ search those logs, and they cannot be edited afterwards. This includes a name th
 uses it: if you add a hostname to a domain, or a stack asks for one, the certificate for it is logged as soon as it is
 issued, whether or not anything ever serves it. Do not put a name you need to keep private in a hostname, and do not
 request one to try it out.
+
+## Let's Encrypt limits
+
+Let's Encrypt limits how often an account can ask. These are the limits as Let's Encrypt states them on 2026-08-05, for the
+production service. They can change, so check [Let's Encrypt's rate limits page](https://letsencrypt.org/docs/rate-limits/).
+[https.md](https.md#lets-encrypt-rate-limits) lists the same limits for TierPlan's own certificate.
+
+- 300 new orders per account per 3 hours.
+- 50 new certificates per registered domain per 7 days.
+- 5 certificates for the same exact set of names per 7 days.
+- 5 authorization failures per name per account per hour.
+- A renewal that Let's Encrypt itself coordinates (ARI) is exempt from all of them.
+
+TierPlan stops before the limit, because it cannot see the certificates that other tools issue under the same registered
+domain. It starts no new-name order past these caps. A renewal is exempt from them, as it is from Let's Encrypt's own:
+
+| What is counted | Let's Encrypt's limit | TierPlan stops at | Why it is lower |
+|---|---|---|---|
+| New certificates per registered domain in 7 days | 50 | 40 | Leaves room for other tools that order under the same domain. |
+| Certificates for one hostname in 7 days | 5 | 4 | Keeps one certificate in hand for a name that has to be replaced. |
+| Orders started by the account in 3 hours | 300 | 240 | Leaves room for orders the account starts that TierPlan does not count. |
+
+A failed order backs off before it is tried again: 1 minute, 10 minutes, 100 minutes, then 24 hours for every later
+failure, and a Retry-After from the certificate authority is honoured, up to a week. See
+[https.md](https.md#backoff). After 3 failed runs in 1 hour a manual attempt is refused until the hour is up.
+
+Certificates from Let's Encrypt's staging directory are only for testing that your DNS and token work. A browser does not
+trust them, and TierPlan never serves one on a live route. A hostname whose certificate is from staging shows "DNS proven on
+staging", which says only that the DNS challenge worked.
+
+### Why a certificate is waiting
+
+A certificate that is not ordered yet carries one of these reason codes, with the figures and the next slot when TierPlan
+knows them:
+
+| Code | Meaning |
+|---|---|
+| `no_account` | There is no ACME account yet: accept the terms of service first. |
+| `rate_limit_new` | The registered domain has used TierPlan's cap of new certificates for the week. |
+| `rate_limit_duplicate` | The hostname has been issued 4 times in the week. |
+| `rate_limit_orders` | The account has started its cap of orders in the last 3 hours. |
+| `ca_rate_limited` | Let's Encrypt answered a new-name order of the registered domain with a rate limit and a Retry-After, so TierPlan waits for it. |
+| `concurrency` | Two certificates are already being ordered, the most TierPlan runs at once. The next one starts when a slot is free. |
 
 ## Virtual IP
 
@@ -658,3 +703,22 @@ manager.
 - **The address check is not proven on a real LAN yet**, as above.
 
 The threat model lists the same risks with their mitigations: see [threat-model.md](threat-model.md#what-phase-26-adds-the-virtual-ip).
+
+## Where the virtual IP will not work
+
+The [virtual IP](#virtual-ip) needs the nodes to share one network segment and to be free to announce an address on it. It
+will not work, or will not work reliably, in these places:
+
+- **Cloud networks without layer 2 or multicast.** Most public clouds route traffic between instances and do not let an
+  instance claim an extra address with ARP. They also drop multicast, so VRRP adverts to 224.0.0.18 never arrive. Use the
+  provider's own floating address or load balancer there.
+- **Hypervisors and switches that filter MAC or ARP.** Port security, MAC or ARP filtering and anti-spoofing rules drop the
+  virtual address's ARP answers and its gratuitous ARP. On a virtual switch, allow promiscuous mode, MAC address changes and
+  forged transmits for the nodes' ports, or turn the filtering off for them.
+- **Wi-Fi.** A node on Wi-Fi often cannot announce an address that is not its own, and access points commonly drop multicast
+  or ARP between clients. Put the nodes on wired ports.
+- **Nodes on different subnets.** VRRP and ARP stay inside one segment, and every node's address must be inside the virtual
+  address's prefix. Nodes in different subnets, or behind a router, cannot share the address.
+
+When the nodes cannot hear each other's adverts, each elects itself and the address is answered by more than one node: see
+[Not supported yet](#not-supported-yet) and the [residual risks](#residual-risks).
