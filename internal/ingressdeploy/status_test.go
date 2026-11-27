@@ -75,6 +75,60 @@ func TestStatusCounts(t *testing.T) {
 	}
 }
 
+// TestStatusProxyGone (28-UAT 9f): with the proxy service removed out of band, the nodes' last-said health is stale. A node
+// counts as ready only while its session is live, and no node is ready while the swarm is read and holds no proxy service,
+// so the status says 0 of 3 rather than 3 of 3 until the ensure loop makes the service again.
+func TestStatusProxyGone(t *testing.T) {
+	nodes := fakeNodeLister{nodes: []ingresshub.Node{
+		{ID: "n1", Status: "active", Health: "ok", AppliedBundleID: "bundle-2"},
+		{ID: "n2", Status: "active", Health: "ok", AppliedBundleID: "bundle-2"},
+		{ID: "n3", Status: "active", Health: "ok", AppliedBundleID: "bundle-2"},
+	}}
+	live := map[string]bool{"n1": true, "n2": true, "n3": true}
+	r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
+		d.Nodes = nodes
+		d.CurrentBundle = func(string) (string, bool) { return "bundle-2", true }
+		d.Live = func(id string) bool { return live[id] }
+	}})
+	r.envs.set(func(i *ingressdeploy.EnvInfo) {
+		i.Nodes = append(i.Nodes,
+			ingressdeploy.NodeInfo{SwarmNodeID: "node-2", AgentID: "agent-2", Name: "worker-1", Role: "worker", Connected: true},
+			ingressdeploy.NodeInfo{SwarmNodeID: "node-3", AgentID: "agent-3", Name: "worker-2", Role: "worker", Connected: true})
+	})
+	ctx := testsupport.Context(t)
+	wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+
+	st, err := r.svc.Status(ctx, r.envID)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.Nodes != (ingressdeploy.StatusNodes{Expected: 3, Enrolled: 3, Ready: 3}) {
+		t.Fatalf("nodes = %+v, want 3 of 3 ready with the service there and every node live", st.Nodes)
+	}
+
+	// One proxy's session ended: it is enrolled, its last health was ok, and it is not ready.
+	live["n2"] = false
+	if st, err = r.svc.Status(ctx, r.envID); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.Nodes != (ingressdeploy.StatusNodes{Expected: 3, Enrolled: 3, Ready: 2}) {
+		t.Errorf("nodes = %+v, want 2 ready with one node not connected", st.Nodes)
+	}
+
+	// The proxy service is gone. Even a session that has not timed out yet does not make a node ready.
+	live["n2"] = true
+	r.removeService()
+	if st, err = r.svc.Status(ctx, r.envID); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !st.ObjectsKnown || st.Objects.Service {
+		t.Fatalf("objects = %+v (known %t), want the service missing", st.Objects, st.ObjectsKnown)
+	}
+	if st.Nodes != (ingressdeploy.StatusNodes{Expected: 3, Enrolled: 3, Ready: 0}) {
+		t.Errorf("nodes = %+v, want none ready while the proxy service is gone", st.Nodes)
+	}
+}
+
 // TestStatusWithoutManagerOrNodes: no manager connected means the objects are not known; no node lister and no current
 // bundle count nobody as ready; a standalone environment is read like a swarm, with one node expected.
 func TestStatusWithoutManagerOrNodes(t *testing.T) {

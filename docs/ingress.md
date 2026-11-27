@@ -420,8 +420,10 @@ is off. Take the lines out, deploy, and then remove it on a manager with `docker
 
 `GET /api/env/{envId}/ingress/status` says whether ingress is on and paused, whether the access log is on, which of the
 network, the service and the secret the swarm holds, and how many proxies are expected (one per node), enrolled and
-ready (enrolled, healthy and running the current configuration). It also reports the result of the last pass that checks
-the objects, the number of certificate cache volumes still waiting to be wiped (see below) and the stacks to redeploy.
+ready (enrolled, connected now, healthy and running the current configuration). While the proxy service, or on a standalone
+host the proxy container, is missing, no proxy is ready, whatever health the nodes last reported, until the next pass makes it
+again. It also reports the result of the last pass that checks the objects, the number of certificate cache volumes still
+waiting to be wiped (see below) and the stacks to redeploy.
 
 TierPlan checks the objects once a minute and whenever the ingress state changes, and puts right what differs: a
 missing secret, network or service, or a service that runs a different image than TierPlan's version. It writes only

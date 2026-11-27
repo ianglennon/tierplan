@@ -60,15 +60,19 @@ type StatusObjects struct {
 // StatusNodes counts the proxy nodes.
 type StatusNodes struct {
 	// Expected is the swarm's nodes, each of which runs a proxy. Enrolled is the proxies that enrolled and were not
-	// revoked. Ready is the enrolled proxies whose health is ok and whose applied bundle is the current one.
+	// revoked. Ready is the enrolled proxies that are connected now, whose health is ok and whose applied bundle is the
+	// current one; none is ready while the environment is read and holds no proxy service (or, on a standalone host, no
+	// proxy container).
 	Expected, Enrolled, Ready int
 }
 
-// proxyReady is the one rule for a ready proxy node: enrolled and not revoked, its health ok and its applied bundle the
-// environment's current one. have is false when the environment has no current bundle, so no node is ready. The ingress
-// status counts nodes with it and the virtual IP status marks each candidate with it.
-func proxyReady(n ingresshub.Node, current string, have bool) bool {
-	return n.Status == nodeActive && have && n.Health == "ok" && n.AppliedBundleID == current
+// proxyReady is the one rule for a ready proxy node: enrolled and not revoked, connected now (Deps.Live), its health ok and
+// its applied bundle the environment's current one. have is false when the environment has no current bundle, so no node is
+// ready. The health is what the node last said, so a node whose session ended is not ready on its strength (28-UAT 9f). The
+// ingress status counts nodes with it and the virtual IP status marks each candidate with it.
+func (s *Service) proxyReady(n ingresshub.Node, current string, have bool) bool {
+	return n.Status == nodeActive && have && n.Health == "ok" && n.AppliedBundleID == current &&
+		(s.d.Live == nil || s.d.Live(n.ID))
 }
 
 // Status reads the ingress state of an environment. A swarm or a standalone host that cannot be read leaves ObjectsKnown
@@ -110,7 +114,7 @@ func (s *Service) Status(ctx context.Context, envID string) (Status, error) {
 				continue
 			}
 			st.Nodes.Enrolled++
-			if have && n.Health == "ok" && n.AppliedBundleID == current {
+			if s.proxyReady(n, current, have) {
 				st.Nodes.Ready++
 			}
 		}
@@ -134,6 +138,11 @@ func (s *Service) Status(ctx context.Context, envID string) (Status, error) {
 			st.Objects.Secret = len(staleSecrets(l.secrets, envID, "")) > 0
 			s.markLeftovers(&st, state.EnsureError, st.Objects.Network || st.Objects.Service || st.Objects.Secret)
 		}
+	}
+	// A proxy service (or container) that is gone runs no proxy, whatever the nodes last said and before their sessions time
+	// out: none is ready until the ensure loop makes it again (28-UAT 9f).
+	if st.ObjectsKnown && !st.Objects.Service && !st.Objects.Container {
+		st.Nodes.Ready = 0
 	}
 
 	if s.d.Stacks != nil {

@@ -74,6 +74,14 @@ type ingressDeployDeps struct {
 	Clock        stackops.Clock
 }
 
+// hubLive is the hub's Live, or nil (no check) without a hub.
+func hubLive(h *ingresshub.Hub) func(nodeID string) bool {
+	if h == nil {
+		return nil
+	}
+	return h.Live
+}
+
 // newIngressDeploy builds the deployer from the server's parts. A nil Stacks leaves the deployer listing no stacks to
 // redeploy.
 func newIngressDeploy(d ingressDeployDeps) *ingressdeploy.Service {
@@ -126,6 +134,7 @@ func ingressDeployOf(d ingressDeployDeps) ingressdeploy.Deps {
 		Nodes:          d.Tokens,
 		Stacks:         d.Stacks,
 		CurrentBundle:  d.CurrentBundle,
+		Live:           hubLive(d.Hub),
 		Jobs:           d.Jobs,
 		Locks:          d.Locks,
 		Audit:          d.Audit,

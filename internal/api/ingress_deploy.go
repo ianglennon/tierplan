@@ -52,7 +52,7 @@ type IngressStatusObjects struct {
 type IngressStatusNodes struct {
 	Expected int `json:"expected" doc:"The swarm's nodes, each of which runs a proxy"`
 	Enrolled int `json:"enrolled" doc:"The proxies that enrolled and were not revoked"`
-	Ready    int `json:"ready" doc:"The enrolled proxies whose health is ok and whose applied bundle is the current one"`
+	Ready    int `json:"ready" doc:"The enrolled proxies that are connected now, whose health is ok and whose applied bundle is the current one. None while the environment is read and holds no proxy service (or proxy container on a standalone host)"`
 }
 
 // IngressStatusEnsure is the last pass of the loop that keeps the ingress objects as wanted.

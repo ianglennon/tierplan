@@ -165,6 +165,9 @@ type Deps struct {
 	// CurrentBundle is the environment's current ingress bundle ID and whether it has one, for the status; nil
 	// reads none, so no node counts as ready.
 	CurrentBundle func(envID string) (string, bool)
+	// Live says whether a proxy node has a live session now (ingresshub.Hub.Live). A node that is not live is not ready,
+	// whatever health it last reported. Nil does not check.
+	Live func(nodeID string) bool
 	// Kicker closes an environment's proxy sessions when ingress is switched off; nil closes none.
 	Kicker Kicker
 	// NodeRows removes the environment's proxy node rows at the end of a switch-off; nil removes none.

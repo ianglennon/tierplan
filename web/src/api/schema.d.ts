@@ -11283,7 +11283,7 @@ export interface components {
             expected: number;
             /**
              * Format: int64
-             * @description The enrolled proxies whose health is ok and whose applied bundle is the current one
+             * @description The enrolled proxies that are connected now, whose health is ok and whose applied bundle is the current one. None while the environment is read and holds no proxy service (or proxy container on a standalone host)
              */
             ready: number;
         };
