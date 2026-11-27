@@ -584,15 +584,25 @@ function SelfHarness({
   );
 }
 
+const TITLES: Partial<Record<ReviewKind, string>> = {
+  selfEnable: "Turn on TierPlan's own route?",
+  selfDisable: "Turn off TierPlan's own route?",
+  disable: "Turn off ingress?",
+  vipEnable: "Turn on virtual IP?",
+};
+
 async function openSelf(kind: ReviewKind, items: ReviewItem[], withForm = false) {
   render(
     <QueryClientProvider client={client}>
       <SelfHarness kind={kind} items={items} withForm={withForm} />
     </QueryClientProvider>,
   );
-  const title =
-    kind === "selfEnable" ? "Turn on TierPlan's own route?" : "Turn off TierPlan's own route?";
-  return waitUnderFakeClock(() => screen.getByRole("dialog", { name: title }));
+  return waitUnderFakeClock(() => screen.getByRole("dialog", { name: TITLES[kind] }));
+}
+
+// openVip opens a kind that has no check label of its own, with a form, to see the fallback.
+function openVip() {
+  return openSelf("vipEnable", [], true);
 }
 
 function headingsOf(dialog: HTMLElement): string[] {
@@ -636,5 +646,87 @@ describe("an ordered self route preview", () => {
     const list = within(dialog).getByRole("list");
     expect(within(list).getAllByRole("listitem")).toHaveLength(4);
     expect(within(dialog).queryByText("Port 80 for TierPlan's certificate")).toBeNull();
+  });
+});
+
+describe("an ordered preview that refuses, and the self route's words", () => {
+  const REFUSED: ReviewItem[] = [
+    {
+      code: "self_hostname",
+      state: "ok",
+      message: "tp.example.com is free and under example.com.",
+    },
+    {
+      code: "self_network",
+      state: "refused",
+      message: "TierPlan runs as a plain container. Deploy it as a swarm service, then try again.",
+    },
+  ];
+
+  it("blocks once: one destructive alert, the refused sentence drawn once, the confirm off", async () => {
+    const dialog = await openSelf("selfDisable", REFUSED);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    const alerts = within(dialog).getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(within(alerts[0] as HTMLElement).getByText("This can't go ahead")).toBeTruthy();
+    expect(
+      within(alerts[0] as HTMLElement).getByText(
+        "Fix the item marked Refused. Nothing has been changed.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getAllByText(/Deploy it as a swarm service/)).toHaveLength(1);
+    expect(confirmOf(dialog, "Turn off own route").disabled).toBe(true);
+  });
+
+  it("lets a warning through: the confirm is on when nothing is refused", async () => {
+    const dialog = await openSelf("selfDisable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(within(dialog).queryByText("This can't go ahead")).toBeNull();
+    expect(confirmOf(dialog, "Turn off own route").disabled).toBe(false);
+  });
+
+  it("returns to the form with the blocked list above it when a checked hostname is refused", async () => {
+    const dialog = await openSelf("selfEnable", REFUSED, true);
+    expect(within(dialog).queryByRole("list")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Check hostname" }));
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(within(dialog).getByLabelText("Hostname")).toBeTruthy();
+    expect(within(dialog).getByText("This can't go ahead")).toBeTruthy();
+    expect(within(dialog).getAllByText(/Deploy it as a swarm service/)).toHaveLength(1);
+  });
+
+  it("names the form's check button for the kind, and falls back to the shared one", async () => {
+    const self = await openSelf("selfEnable", [], true);
+    expect(within(self).getByRole("button", { name: "Check hostname" })).toBeTruthy();
+    cleanup();
+    const vip = await openVip();
+    expect(within(vip).getByRole("button", { name: "Check address" })).toBeTruthy();
+    expect(within(vip).queryByRole("button", { name: "Check hostname" })).toBeNull();
+  });
+
+  it("draws a snippet under its item in a copyable block, with the title", async () => {
+    const dialog = await openSelf("selfEnable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(within(dialog).getByText("Add TierPlan to the self network")).toBeTruthy();
+    const block = within(dialog).getByRole("region", { name: "the stack file lines" });
+    expect(block.querySelector("code")?.textContent).toBe("services:\n  tierplan:");
+    expect(within(dialog).getByRole("button", { name: /Copy the stack file lines/i })).toBeTruthy();
+    expect(within(dialog).getByText(/If the service has no/)).toBeTruthy();
+  });
+
+  it("confirms the self kinds with the primary button and a disable with the destructive one", async () => {
+    const off = await openSelf("selfDisable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(off).getByRole("list"));
+    expect(confirmOf(off, "Turn off own route").className).not.toContain("bg-destructive");
+    cleanup();
+    const on = await openSelf("selfEnable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(on).getByRole("list"));
+    expect(confirmOf(on, "Turn on own route").className).not.toContain("bg-destructive");
+    cleanup();
+    const plain = await openSelf("disable", []);
+    await waitUnderFakeClock(() =>
+      expect(confirmOf(plain, "Turn off ingress").disabled).toBe(false),
+    );
+    expect(confirmOf(plain, "Turn off ingress").className).toContain("bg-destructive");
   });
 });
