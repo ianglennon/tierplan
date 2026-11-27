@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
@@ -185,6 +186,21 @@ func (s *ownStaging) stage(ctx context.Context, chain []*x509.Certificate, wait 
 	case err != nil:
 		log.Debug("stopped waiting for the proxies to trust TierPlan's new certificate", "environment", env, "version", ver, "error", err)
 	}
+}
+
+// proxiesApplied is whether every connected, active proxy node reports current as its applied bundle: the per-node rule
+// the ingress status counts ready nodes by. A node whose schema the server cannot render for keeps its last bundle for
+// good, so it is not waited for; a node that is not connected cannot apply anything and is not waited for either.
+func proxiesApplied(nodes []ingresshub.Node, current string, live func(nodeID string) bool) bool {
+	for _, n := range nodes {
+		if n.Status != "active" || n.Incompatible || (live != nil && !live(n.ID)) {
+			continue
+		}
+		if n.AppliedBundleID != current {
+			return false
+		}
+	}
+	return true
 }
 
 // certChain is the parsed chain of a pair, leaf first, leaving out a certificate that does not parse.

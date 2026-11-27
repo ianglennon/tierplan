@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -447,9 +448,10 @@ func TestEveryCertificatePathIsStaged(t *testing.T) {
 
 	t.Run("a self-signed re-sign for a new public URL", func(t *testing.T) {
 		f := newSSFixture(t)
-		var public atomic.Value
-		public.Store("https://a.example.test")
-		src, _, err := newCertSource(context.Background(), f.cfg, f.store, func() string { return public.Load().(string) }, str(""), nowFn(fixedNow))
+		var public atomic.Pointer[string]
+		first, next := "https://a.example.test", "https://new.example.test"
+		public.Store(&first)
+		src, _, err := newCertSource(context.Background(), f.cfg, f.store, func() string { return *public.Load() }, str(""), nowFn(fixedNow))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -464,7 +466,7 @@ func TestEveryCertificatePathIsStaged(t *testing.T) {
 		updates := f.store.updates
 		f.store.mu.Unlock()
 
-		public.Store("https://new.example.test")
+		public.Store(&next)
 		// Neither the row nor the mirror may name the new certificate while the old one is served.
 		still := func(t *testing.T) {
 			t.Helper()
@@ -511,4 +513,24 @@ func TestEveryCertificatePathIsStaged(t *testing.T) {
 			t.Errorf("beforeSet was called %d times for an unchanged certificate", n)
 		}
 	})
+}
+
+func TestProxiesAppliedCountsConnectedActiveNodes(t *testing.T) {
+	live := func(id string) bool { return id != "gone" }
+	nodes := []ingresshub.Node{
+		{ID: "a", Status: "active", AppliedBundleID: "b2"},
+		{ID: "gone", Status: "active", AppliedBundleID: "b1"},
+		{ID: "old", Status: "active", AppliedBundleID: "b1", Incompatible: true},
+		{ID: "revoked", Status: "revoked", AppliedBundleID: "b0"},
+	}
+	if !proxiesApplied(nodes, "b2", live) {
+		t.Error("a node that is not connected, an incompatible node or a revoked node held the wait")
+	}
+	nodes = append(nodes, ingresshub.Node{ID: "c", Status: "active", AppliedBundleID: "b1"})
+	if proxiesApplied(nodes, "b2", live) {
+		t.Error("a connected active node on the previous bundle did not hold the wait")
+	}
+	if !proxiesApplied(nil, "b2", live) {
+		t.Error("an environment with no proxy node must not wait")
+	}
 }

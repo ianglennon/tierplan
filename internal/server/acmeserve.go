@@ -191,6 +191,9 @@ func refuseACMEOffUnderHSTS(ctx context.Context, cfg config.Config, st *store.St
 type acmeWiring struct {
 	mgr        *acme.Manager
 	challenges *acme.Challenges
+	// installer is the manager's installer, so Build can give it the staging of TierPlan's own trust (A-03) once the
+	// reconciler and the ingress hub exist.
+	installer *acmeInstaller
 }
 
 // defaultDNSProviders is the one place the real DNS provider factories are built. The Let's Encrypt manager and the
@@ -258,5 +261,5 @@ func wireACME(cfg config.Config, log *slog.Logger, st *store.Store, vlt *vault.V
 		// them. Nothing here is on the request path.
 		HSTSHold: hsts.WithToggleLocked,
 	})
-	return acmeWiring{mgr: mgr, challenges: challenges}, nil
+	return acmeWiring{mgr: mgr, challenges: challenges, installer: installer}, nil
 }

@@ -1115,7 +1115,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// chain served now, and the holder builds the reconciler's self input from it, the instance's URLs, TIERPLAN_LISTEN's port
 	// and whether TierPlan's own certificate renews over HTTP-01. The same URL reader feeds the deployer.
 	selfURLs := instanceSelfURLs(inst, cfg.Listen)
-	ownTr := newOwnTrust(rt.servedChain, tlsSrc.Leaf, tlsClock.Now)
+	ownTr := newOwnTrust(rt.servedChain, tlsSrc.Leaf, tlsClock.Now).useClock(tlsClock)
 	selfRt.wire(selfInputs{trust: ownTr, urls: selfURLs, http01: ownHTTP01InUse(acmeWire.mgr), notify: ingressNotifier.Notify})
 	// A certificate install (Let's Encrypt, or the fallback to self-signed) moves the trust set and wakes TierPlan's own
 	// environment's reconciler in the same step (D-14).
@@ -1178,6 +1178,42 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, err
 	}
+	// TierPlan's own certificate changes are staged (A-03): before an install, a fallback, a re-sign or a replaced
+	// supplied pair is served, the incoming certificate joins the trust set and the change waits, bounded by
+	// ownTrustStageWait, until the proxies of TierPlan's own environment applied it: the reconciler rendered that own
+	// version and every connected proxy node reports the current bundle. With no route and no carve-out nothing waits.
+	ownTrustEnv := func() string {
+		in := selfRt.in.Load()
+		if in == nil {
+			return ""
+		}
+		return selfRt.wakeEnv(in)
+	}
+	ownStage := &ownStaging{
+		trust: ownTr, env: ownTrustEnv, wake: ingressNotifier.Notify, log: log.With("component", "tls"),
+		applied: func(version int64) bool {
+			env := ownTrustEnv()
+			if env == "" {
+				return true
+			}
+			if ingressRecon.RenderedOwn(env) != version {
+				return false
+			}
+			b, ok := ingressRecon.Current(env)
+			if !ok {
+				return false
+			}
+			rctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			nodes, err := ingressSvc.ListNodes(rctx, env)
+			if err != nil {
+				return false
+			}
+			return proxiesApplied(nodes, b.ID, ingressHub.Live)
+		},
+	}
+	acmeWire.installer.ownStaging = *ownStage
+	tlsSrc.beforeSet = func(ctx context.Context, cert tls.Certificate) { ownStage.stage(ctx, certChain(cert), true) }
 	ingressHubRef.Store(ingressHub)
 	envSvc.WithIngressSessions(ingressHub)
 	// Image update checks: the registries are asked through the same clients and egress policy as every other
@@ -1543,6 +1579,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// A renewed self-signed certificate and a replaced cert-file pair are picked up here, off
 	// the handshake path, so a handshake never waits on the disk.
 	srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
+	// From now on a Let's Encrypt install or a fallback waits for the proxies to trust it; the one at start did not,
+	// because nothing was rendered or pushed yet. The wait ends with the server.
+	acmeWire.installer.waitIn(bg)
 	// Renewals, the expiry fallback and the resume of an open order run on the ACME clock.
 	srv.background.Go(func() { acmeWire.mgr.Run(bg) })
 	// The per-hostname certificates are ordered and renewed by their own manager, on the same clock.
