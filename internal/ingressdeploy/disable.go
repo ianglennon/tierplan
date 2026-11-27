@@ -800,7 +800,7 @@ func (e *disableRun) selfNetwork(ctx context.Context) error {
 		switch {
 		case !ok:
 			return nil
-		case !ingress.OwnsSelfNetwork(row.Name, row.Labels):
+		case !ownsSelfNetworkRow(row, true):
 			sp.net.foreign = true
 			return nil
 		}

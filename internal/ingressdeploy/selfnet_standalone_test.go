@@ -318,3 +318,24 @@ func TestStandaloneSelfNetworkForeignMembersAreReported(t *testing.T) {
 		t.Fatalf("observation = %+v, want the foreign member shop-web-1 only", o)
 	}
 }
+
+// TestStandaloneSelfNetworkOfTheWrongShapeIsForeign (WR-05): on a standalone host, a tierplan-self with both labels that is not
+// a bridge is foreign: TierPlan's container is not connected to it and nothing of it is trusted.
+func TestStandaloneSelfNetworkOfTheWrongShapeIsForeign(t *testing.T) {
+	r, self := newStandaloneSelfRig(t, standaloneSelfOptions{})
+	r.sys.mu.Lock()
+	r.sys.base.Networks = append(r.sys.base.Networks, dockertest.FakeNetwork{
+		ID: "self-macvlan", Name: ingress.SelfNetworkName, Driver: "macvlan", Scope: "local", Labels: ingress.SelfNetworkLabels(),
+		Subnets: []string{"10.200.10.0/24"}, Gateways: []string{"10.200.10.1"},
+	})
+	r.sys.reconfigure()
+	r.sys.mu.Unlock()
+	r.claimSelf()
+	r.round()
+	if connects, _ := self.calls(); len(connects) != 0 {
+		t.Errorf("connects = %+v, want none to a network of the wrong shape", connects)
+	}
+	if o := r.observation(); !o.Foreign || o.Exists || o.Attached {
+		t.Errorf("observation = %+v, want foreign, not existing, not attached", o)
+	}
+}

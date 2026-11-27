@@ -277,8 +277,9 @@ as an external network or names it as a network mode is refused with `self_netwo
 exception is the swarm stack TierPlan's own service runs in, which may name it as an external network (the lines below).
 Each ensure pass also lists what is on the network. Anything other than the proxies and TierPlan, a service or container
 someone joined by hand, is named on the card and in the server log with `self_network_foreign_member`, and while it is
-there TierPlan believes no forwarded address from the network. A network called `tierplan-self` without both labels is not
-TierPlan's: TierPlan never attaches, adopts or trusts it, and logs `self_network_foreign`.
+there TierPlan believes no forwarded address from the network. A network called `tierplan-self` without both labels, or not of
+that shape (on a swarm an overlay of swarm scope that is not attachable, on a standalone host a bridge), is not TierPlan's:
+TierPlan never attaches, adopts or trusts it, and logs `self_network_foreign` with the reason.
 
 The network is what lets TierPlan believe the client address the proxy sends. While TierPlan is on it, its subnet, minus its
 gateway, is added to the trusted proxies, without `TIERPLAN_TRUSTED_PROXIES`. The connection TierPlan sees comes from inside
@@ -959,7 +960,7 @@ The codes of switching ingress itself on and off are in the sections above.
 | `not_observed` | The reason of the route's network condition before an ensure pass has looked at `tierplan-self`. The route's state reads `unknown` until the next pass, within a minute. |
 | `self_network_reserved` | A stack's check refuses its compose file: it declares a network called `tierplan-self`, points at it as an external network, or names it as a network mode. Every member of that network can send TierPlan a client address it believes and answer the name the proxies reach TierPlan by, so only TierPlan and the proxies are on it. Use another network. Only the swarm stack TierPlan's own service runs in may name it, as an external network. |
 | `self_network_foreign_member` | On the card and in the server log: a service or container other than the ingress proxy and TierPlan is on `tierplan-self`. Until it leaves, TierPlan believes no client address forwarded over the network, so sign-in throttling and the audit log record the proxy's address. Take it off the network. |
-| `self_network_foreign` | In the server log: a network called `tierplan-self` exists without both of TierPlan's labels (`tierplan.component=ingress` and `tierplan.ingress.role=self`). TierPlan never attaches, adopts or trusts it. Remove or rename it. |
+| `self_network_foreign` | In the server log: a network called `tierplan-self` exists without both of TierPlan's labels (`tierplan.component=ingress` and `tierplan.ingress.role=self`), or of another shape than TierPlan makes (on a swarm it must be a swarm-scoped overlay that is not attachable, on a standalone host a bridge); the log line gives the reason. TierPlan never attaches, adopts or trusts it. Remove or rename it. |
 | `ingress_render_self_input` | The proxies' configuration for TierPlan's own route or the carve-out could not be made from what TierPlan knows of itself (a base path in the public URL, or no address of TierPlan's on the network). The proxies keep the configuration they had, and the server log names the field. |
 | `self_network_peer` | An agent's or an ingress proxy's connect reached TierPlan through its own route and was refused. The agent's or the proxy's log names the code. Point the agent at the agent URL, which must not be an ingress hostname. |
 | `ingress_http01_conflict` | Switching ingress on is refused: TierPlan runs in this environment, its own certificate uses HTTP-01, and the carve-out cannot reach it. See [TierPlan's own certificate and HTTP-01](#tierplans-own-certificate-and-http-01). |

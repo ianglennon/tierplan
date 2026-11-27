@@ -568,3 +568,41 @@ func TestSelfReadFailurePublishesNothing(t *testing.T) {
 		t.Errorf("observations published = %d, want 1: the pass that could not read TierPlan's container publishes none", published)
 	}
 }
+
+// TestEnsureRefusesATierPlanSelfOfTheWrongShape (WR-05): a tierplan-self that carries both of TierPlan's labels but is
+// attachable, or is not a swarm-scoped overlay, is not one TierPlan made: it is foreign, never attached, adopted or trusted,
+// and the pass logs self_network_foreign. An attachable one would let any docker run --network join the trusted set.
+func TestEnsureRefusesATierPlanSelfOfTheWrongShape(t *testing.T) {
+	for name, shape := range map[string]func(*dockertest.FakeNetwork){
+		"attachable":     func(n *dockertest.FakeNetwork) { n.Attachable = true },
+		"a local bridge": func(n *dockertest.FakeNetwork) { n.Driver, n.Scope = "bridge", "local" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := &logBuffer{}
+			r, facts := newSelfRig(t, selfRigOptions{
+				config: func(c *dockertest.FakeConfig) {
+					n := premadeSelf(ingress.SelfNetworkLabels(), "10.200.9.0/24", "10.200.9.1")
+					shape(&n)
+					c.Networks = append(c.Networks, n)
+				},
+				deps: func(d *ingressdeploy.Deps) { d.Log = slog.New(slog.NewTextHandler(logs, nil)) },
+			})
+			facts.setAttached(true)
+			r.claimSelf()
+			r.round()
+			if got := r.proxyNetworks(); !slices.Equal(got, []string{ingress.NetworkName}) {
+				t.Errorf("proxy networks = %v, want only %s", got, ingress.NetworkName)
+			}
+			if n := r.selfCreates(); n != 0 {
+				t.Errorf("self network creates = %d, want 0 beside a foreign one", n)
+			}
+			o, ok := r.svc.SelfObservationOf(r.envID)
+			if !ok || !o.Foreign || o.Exists || o.Attached || o.Subnet.IsValid() {
+				t.Errorf("observation = %+v, %v; want foreign, not existing, not attached", o, ok)
+			}
+			if !strings.Contains(logs.String(), ingressdeploy.CodeSelfNetworkForeign) {
+				t.Errorf("the log does not carry %s:\n%s", ingressdeploy.CodeSelfNetworkForeign, logs.String())
+			}
+		})
+	}
+}

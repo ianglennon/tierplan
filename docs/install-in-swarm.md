@@ -103,7 +103,7 @@ Do not use the command for a service deployed from a stack file: the next `docke
 docker network create --driver overlay --label tierplan.component=ingress --label tierplan.ingress.role=self tierplan-self
 ```
 
-Then add the lines above, deploy again, and turn ingress on. TierPlan takes the network over as its own when ingress is switched on. A network called `tierplan-self` without both labels is not TierPlan's: it is never used (`self_network_foreign`). The other way is to switch TierPlan's own certificate to DNS-01 (see [https.md](https.md)), which does not need port 80 or these lines.
+Then add the lines above, deploy again, and turn ingress on. TierPlan takes the network over as its own when ingress is switched on. Do not add `--attachable`. A network called `tierplan-self` without both labels, or one that is attachable or is not a swarm overlay, is not TierPlan's: it is never used (`self_network_foreign`, with the reason in the log). The other way is to switch TierPlan's own certificate to DNS-01 (see [https.md](https.md)), which does not need port 80 or these lines.
 
 ## Deploy
 

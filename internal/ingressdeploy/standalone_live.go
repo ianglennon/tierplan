@@ -100,7 +100,7 @@ func (s *Service) readStandaloneLive(ctx context.Context, info EnvInfo) (standal
 				if l.network == nil {
 					l.network = &nets[i]
 				}
-			case ingress.OwnsSelfNetwork(nets[i].Name, nets[i].Labels):
+			case ownsSelfNetworkRow(nets[i], false):
 				l.self = &nets[i]
 			case nets[i].Name == ingress.SelfNetworkName:
 				l.selfForeign = true

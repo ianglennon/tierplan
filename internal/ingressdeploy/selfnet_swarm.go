@@ -196,7 +196,7 @@ func (s *Service) ensureSelfNetwork(ctx context.Context, c *dockerx.Client, info
 		if row.Name != ingress.SelfNetworkName {
 			continue
 		}
-		if !ingress.OwnsSelfNetwork(row.Name, row.Labels) {
+		if !ownsSelfNetworkRow(row, true) {
 			return selfNet{foreign: true}, nil
 		}
 		return selfNet{attach: wanted, id: row.ID}, nil
@@ -218,14 +218,40 @@ func (s *Service) ensureSelfNetwork(ctx context.Context, c *dockerx.Client, info
 	return selfNet{attach: true, id: id}, nil
 }
 
-// ownSelfNetwork is TierPlan's own self network among rows.
+// ownSelfNetwork is TierPlan's own self network among the rows of a swarm.
 func ownSelfNetwork(rows []dockerx.NetworkRow) (dockerx.NetworkRow, bool) {
 	for _, row := range rows {
-		if ingress.OwnsSelfNetwork(row.Name, row.Labels) {
+		if ownsSelfNetworkRow(row, true) {
 			return row, true
 		}
 	}
 	return dockerx.NetworkRow{}, false
+}
+
+// ownsSelfNetworkRow is whether a network is TierPlan's own self network (WR-05): the name and both labels
+// (ingress.OwnsSelfNetwork), and the shape TierPlan makes it in, since labels are anyone's to set. On a swarm that is an
+// overlay of swarm scope that is not attachable (D-02): an attachable one would let any plain container join the trusted set,
+// and a local bridge of the name could not be put in the proxy's spec. On a standalone host it is a bridge.
+func ownsSelfNetworkRow(row dockerx.NetworkRow, swarm bool) bool {
+	return ingress.OwnsSelfNetwork(row.Name, row.Labels) && selfShapeReason(row, swarm) == ""
+}
+
+// selfShapeReason says what is wrong with the shape of a network named tierplan-self, for the log, "" when it is the shape
+// TierPlan makes and its labels are TierPlan's.
+func selfShapeReason(row dockerx.NetworkRow, swarm bool) string {
+	switch {
+	case !ingress.OwnsSelfNetwork(row.Name, row.Labels):
+		return "it lacks TierPlan's labels"
+	case swarm && row.Driver != "overlay":
+		return "it is not an overlay network"
+	case swarm && row.Scope != dockerx.ScopeSwarm:
+		return "it is not swarm-scoped"
+	case swarm && row.Attachable:
+		return "it is attachable"
+	case !swarm && row.Driver != dockerx.DriverBridge:
+		return "it is not a bridge network"
+	}
+	return ""
 }
 
 // specNamesNetwork is whether a stored service spec attaches to the network, which swarm stores by ID and a spec may name.
@@ -283,8 +309,10 @@ type SelfObservation struct {
 	// BackendHost is the name the proxy reaches TierPlan by on the network: TierPlan's swarm service name, or on a standalone
 	// host the alias TierPlan connects itself with (SelfBackendAlias).
 	BackendHost string
-	// Foreign is a network of the reserved name that is not TierPlan's.
-	Foreign bool
+	// Foreign is a network of the reserved name that is not TierPlan's, and ForeignReason what makes it so (its labels or its
+	// shape), for the log.
+	Foreign       bool
+	ForeignReason string
 	// ForeignMembers name, sorted, the services (on a swarm) or containers (on a standalone host) on TierPlan's own self
 	// network that are neither the proxy nor TierPlan's own (CR-02). While there is one, the trusted-proxy set is withheld:
 	// such a member could send any client address and have it believed. Empty unless Exists.
@@ -357,7 +385,7 @@ func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(fun
 		o.BackendHost = SelfBackendAlias
 	}
 	err := read(func(c *dockerx.Client) error {
-		o.Exists, o.NetworkID, o.Subnet, o.Gateway, o.Foreign = false, "", netip.Prefix{}, netip.Addr{}, false
+		o.Exists, o.NetworkID, o.Subnet, o.Gateway, o.Foreign, o.ForeignReason = false, "", netip.Prefix{}, netip.Addr{}, false, ""
 		o.IngressSubnets, o.BridgeGateways, o.ForeignMembers = nil, nil, nil
 		rows, err := c.Networks(ctx)
 		if err != nil {
@@ -373,8 +401,8 @@ func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(fun
 			}
 		}
 		if row, ok := selfNetworkRowOf(rows); ok {
-			if !ingress.OwnsSelfNetwork(row.Name, row.Labels) {
-				o.Foreign = true
+			if !ownsSelfNetworkRow(row, sp.info.Swarm) {
+				o.Foreign, o.ForeignReason = true, selfShapeReason(row, sp.info.Swarm)
 			} else {
 				d, _, err := c.NetworkDetail(ctx, row.ID, false)
 				if err != nil {
@@ -501,7 +529,7 @@ func (s *Service) publishSelf(o SelfObservation) {
 	s.selfMu.Unlock()
 	if o.Foreign && o.Wanted && (!had || !prev.Foreign || !prev.Wanted) {
 		s.log().Warn("a network named "+ingress.SelfNetworkName+" exists that is not TierPlan's, so the proxy is not attached to it: remove or rename it",
-			"environment", o.EnvID, "code", CodeSelfNetworkForeign)
+			"environment", o.EnvID, "code", CodeSelfNetworkForeign, "reason", o.ForeignReason)
 	}
 	if len(o.ForeignMembers) > 0 && (!had || !slices.Equal(prev.ForeignMembers, o.ForeignMembers)) {
 		s.log().Warn("something other than the proxy and TierPlan is on "+ingress.SelfNetworkName+", so TierPlan believes no client address "+
