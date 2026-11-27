@@ -232,3 +232,32 @@ func CheckRequest(host string, w World) (dom Domain, p Problem, bad bool) {
 	}
 	return dom, Problem{}, false
 }
+
+// CheckSystemClaim judges a hostname TierPlan would serve itself on, the self route (D-09). It applies the rules a stack's
+// claim is judged by, so the stack and system paths cannot disagree, and one more: a name held by anyone is refused,
+// including a stack of the environment the domain belongs to, which CheckRequest would let go ahead for a certificate. The
+// refusals are the ones of CheckRequest (an invalid name, a name under no domain registered for the environment, a
+// domain's own suffix, a reserved name, a name held by a stack of another environment or by the system) and
+// CodeHostIsAgentURL for a host agents and proxies dial (D-10). host is normalized here, so a name in any case is judged
+// as its lower-case form. It returns the domain the host is under; bad is false when the claim may go ahead.
+//
+// It is pure and reads no ingress switch. The switch preview calls it to show the answer, and the store judges the holder
+// again inside its own write transaction, so a claim that landed since the preview is still caught there.
+func CheckSystemClaim(host string, w World) (dom Domain, p Problem, bad bool) {
+	host = NormalizeHost(host)
+	dom, p, bad = CheckRequest(host, w)
+	if bad {
+		return Domain{}, p, true
+	}
+	if c, held := w.Claims[host]; held {
+		p = Problem{Severity: SeverityError, Code: CodeHostTaken}
+		c.Hostname = host
+		p.Message = DescribeHolder(c, w.CanView)
+		if c.OwnerKind == OwnerStack {
+			p.Message += " A name has one owner across TierPlan."
+		}
+		p.Message += " Choose another name."
+		return Domain{}, p, true
+	}
+	return dom, Problem{}, false
+}
