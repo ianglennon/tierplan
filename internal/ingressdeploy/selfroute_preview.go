@@ -5,6 +5,7 @@ package ingressdeploy
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"slices"
 	"strings"
@@ -294,4 +295,97 @@ func selfURLHosts(urls SelfURLs) []string {
 		}
 	}
 	return out
+}
+
+// ErrSelfRouteNotEnabled is a switch-off of TierPlan's own route in an environment it is not on in.
+var ErrSelfRouteNotEnabled = errors.New("ingressdeploy: TierPlan's own route is not on in this environment")
+
+// PreviewSelfRouteOff says what switching TierPlan's own route off in envID would do, and writes nothing (D-11, UI-SPEC
+// S1c): the origin that is no longer accepted, then whether the self network stays for the port-80 carve-out or goes. It
+// never refuses: no state of the route, the engine or the environment stops a release. With no route on in envID it is
+// ErrSelfRouteNotEnabled.
+func (s *Service) PreviewSelfRouteOff(ctx context.Context, envID string) (SelfRoutePreview, error) {
+	claim, held, err := s.d.Store.SystemClaim(ctx)
+	if err != nil {
+		return SelfRoutePreview{}, err
+	}
+	if !held || claim.EnvID != envID {
+		return SelfRoutePreview{}, ErrSelfRouteNotEnabled
+	}
+	// The claim names the environment, so it exists: a read of it or of where TierPlan runs that fails only leaves the place
+	// unknown, which keeps no carve-out, and never stops the release.
+	place := s.selfUnknown()
+	if info, err := s.d.Envs.Info(ctx, envID); err != nil {
+		s.log().Warn("could not read the environment for the self route's switch-off preview", "environment", envID, "error", err)
+	} else if p, _, err := s.SelfLocation(ctx, info); err == nil {
+		place = p
+	}
+	network := SelfRouteItem{Code: ItemSelfNetworkRemoved, State: SelfItemOK, Message: selfNetworkRemovedText}
+	// The carve-out keeps the network exactly when the ensure loop would still want it without the claim (selfWanted).
+	if place.Here == SelfHereYes && s.ownHTTP01(ctx) {
+		network.Message = selfNetworkKeptText
+	}
+	return SelfRoutePreview{
+		Host:   claim.Hostname,
+		Direct: directAddress(s.selfURLs(), claim.Hostname),
+		Items: []SelfRouteItem{
+			{Code: ItemSelfOriginRemoved, State: SelfItemOK, Message: selfOriginRemovedText(claim.Hostname)},
+			network,
+		},
+	}, nil
+}
+
+// SelfRouteFacts are what the card of TierPlan's own route draws, from one call (UI-SPEC A-01, A-03, A-04).
+type SelfRouteFacts struct {
+	// Here is whether TierPlan runs in the environment; the card is not drawn when it is no.
+	Here SelfHere
+	// On is TierPlan's own route held in this environment, and Host its hostname ("" when off).
+	On   bool
+	Host string
+	// Direct is the address that keeps reaching TierPlan (directAddress), "" for the page's own origin.
+	Direct string
+	// Kind is where TierPlan runs (SelfPlace.Kind), "" unless Here is yes.
+	Kind string
+	// Attached is TierPlan being on the self network. AttachedKnown is true when it comes from an ensure pass's observation,
+	// false when no pass has read it since start and it comes from TierPlan's own container.
+	Attached, AttachedKnown bool
+	// CarveOut is TierPlan's own certificate renewing over HTTP-01, so the proxy carries the challenge to it (D-12).
+	CarveOut bool
+	// Refusal is the reason the route cannot be switched on here, known before the switch is pressed; nil for none.
+	Refusal *Finding
+	// Snippet is the D-03 next step while TierPlan's swarm service is not on the self network; nil otherwise.
+	Snippet *SelfSnippet
+}
+
+// SelfRouteFacts reads the facts of TierPlan's own route in envID. A read of where TierPlan runs that fails is an unknown
+// place with its refusal, never an error.
+func (s *Service) SelfRouteFacts(ctx context.Context, envID string) (SelfRouteFacts, error) {
+	info, err := s.d.Envs.Info(ctx, envID)
+	if err != nil {
+		return SelfRouteFacts{}, err
+	}
+	claim, held, err := s.d.Store.SystemClaim(ctx)
+	if err != nil {
+		return SelfRouteFacts{}, err
+	}
+	place, findings, err := s.SelfLocation(ctx, info)
+	if err != nil {
+		return SelfRouteFacts{}, err
+	}
+	f := SelfRouteFacts{Here: place.Here, Kind: place.Kind, Attached: place.Attached}
+	if held && claim.EnvID == envID {
+		f.On, f.Host = true, claim.Hostname
+	}
+	f.Direct = directAddress(s.selfURLs(), f.Host)
+	if o, ok := s.SelfObservationOf(envID); ok && o.Observed {
+		f.Attached, f.AttachedKnown = o.Attached, true
+	}
+	if r, ok := firstError(findings); ok {
+		f.Refusal = &r
+	}
+	if !f.Attached {
+		f.Snippet = selfSnippet(place)
+	}
+	f.CarveOut = place.Here == SelfHereYes && s.ownHTTP01(ctx)
+	return f, nil
 }
