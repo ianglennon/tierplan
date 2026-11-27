@@ -104,6 +104,7 @@ func (s *Service) previewDisableStandalone(ctx context.Context, info EnvInfo, ca
 		return DisablePreview{}, err
 	}
 	res := DisablePreview{Findings: findings, Removes: DisableRemoves{Secrets: []string{}, Volumes: []NodeName{}}, Unreachable: []string{}}
+	res.Notice, res.SelfRouteHost = s.selfReleaseNotice(ctx, info.ID)
 	for _, n := range info.Nodes {
 		res.Removes.Volumes = append(res.Removes.Volumes, NodeName{ID: n.AgentID, Name: n.Name})
 	}

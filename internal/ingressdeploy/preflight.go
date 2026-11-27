@@ -113,6 +113,25 @@ func (e *PreflightError) Error() string {
 	return "ingress was not enabled: " + strings.Join(codes, ", ")
 }
 
+// splitNotices takes the findings of severity notice out of fs and returns the rest, in order, and the notices' sentences
+// joined with a space, "" when there are none. A preview carries them as its Notice, a neutral note beside the findings
+// (UI-SPEC S4): nothing is wrong, the person is told how something will work.
+func splitNotices(fs []Finding) ([]Finding, string) {
+	var notices []string
+	rest := make([]Finding, 0, len(fs))
+	for _, f := range fs {
+		if f.Severity == SeverityNotice {
+			notices = append(notices, f.Message)
+			continue
+		}
+		rest = append(rest, f)
+	}
+	if fs == nil {
+		rest = nil
+	}
+	return rest, strings.Join(notices, " ")
+}
+
 // hasErrors reports whether any finding refuses.
 func hasErrors(fs []Finding) bool {
 	for _, f := range fs {

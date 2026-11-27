@@ -99,8 +99,12 @@ type Plan struct {
 
 // PreviewResult is what Preview tells a person before they enable.
 type PreviewResult struct {
+	// Findings are the refusals and the warnings; the notices are in Notice.
 	Findings []Finding
-	Plan     Plan
+	// Notice is the neutral note of the preview, such as the HTTP-01 carve-out that keeps TierPlan's own certificate renewing
+	// (SELF-04), "" for none.
+	Notice string
+	Plan   Plan
 	// Redeploy lists the stacks that hold routes and have to be redeployed to join the ingress network. The
 	// enable never changes a stack (D-14); it only lists them.
 	Redeploy []StackRef
@@ -189,7 +193,8 @@ func (s *Service) Preview(ctx context.Context, envID string, req EnableRequest) 
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	res := PreviewResult{Findings: findings, Redeploy: redeploy}
+	findings, notice := splitNotices(findings)
+	res := PreviewResult{Findings: findings, Notice: notice, Redeploy: redeploy}
 	res.Plan.Network.Name = ingress.NetworkName
 	res.Plan.Service.Name = ingress.ServiceName
 	res.Plan.Service.Image = IngressImage(s.d.ServerVersion)

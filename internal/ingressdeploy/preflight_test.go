@@ -365,20 +365,21 @@ func TestPreflightHTTP01Conflict(t *testing.T) {
 				t.Fatalf("Preview: %v", err)
 			}
 			conflict, isRefused := findingOf(res.Findings, ingressdeploy.CodeHTTP01Conflict)
-			carve, isNotice := findingOf(res.Findings, ingressdeploy.CodeHTTP01CarveOut)
+			// The carve-out is the preview's notice, never one of its findings (UI-SPEC S4).
+			if f, ok := findingOf(res.Findings, ingressdeploy.CodeHTTP01CarveOut); ok {
+				t.Errorf("the carve-out is a finding %+v; it belongs in the notice", f)
+			}
+			isNotice := res.Notice != ""
 			_, isWarned := findingOf(res.Findings, ingressdeploy.CodeHTTP01Unknown)
 			switch tc.want {
 			case notice:
-				if isRefused || isWarned || !isNotice || carve.Severity != ingressdeploy.SeverityNotice {
-					t.Fatalf("findings = %+v, want only the carve-out notice", res.Findings)
+				if isRefused || isWarned || !isNotice {
+					t.Fatalf("findings = %+v, notice %q, want only the carve-out notice", res.Findings, res.Notice)
 				}
 				wantMsg := "TierPlan's own certificate uses the HTTP-01 challenge. The ingress sends only /.well-known/acme-challenge/ requests for " +
 					"tierplan.example.org and tierplan.internal to TierPlan, over the tierplan-self network, so the certificate keeps renewing."
-				if carve.Message != wantMsg {
-					t.Errorf("message = %q, want %q", carve.Message, wantMsg)
-				}
-				if want := []string{"tierplan.example.org", "tierplan.internal"}; !slices.Equal(carve.Items, want) {
-					t.Errorf("items = %q, want %q", carve.Items, want)
+				if res.Notice != wantMsg {
+					t.Errorf("notice = %q, want %q", res.Notice, wantMsg)
 				}
 				wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
 			case refused, plainRefused:
@@ -420,9 +421,8 @@ func TestPreflightHTTP01Conflict(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Preview: %v", err)
 		}
-		f, ok := findingOf(res.Findings, ingressdeploy.CodeHTTP01CarveOut)
-		if !ok || !strings.Contains(f.Message, "requests for tierplan.example.org to TierPlan") || !slices.Equal(f.Items, []string{"tierplan.example.org"}) {
-			t.Errorf("finding = %+v, want the one host named once", f)
+		if !strings.Contains(res.Notice, "requests for tierplan.example.org to TierPlan") || strings.Count(res.Notice, "tierplan.example.org") != 1 {
+			t.Errorf("notice = %q, want the one host named once", res.Notice)
 		}
 	})
 

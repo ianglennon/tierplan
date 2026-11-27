@@ -35,7 +35,8 @@ func (s *Service) previewStandalone(ctx context.Context, info EnvInfo, req Enabl
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	res := PreviewResult{Findings: findings, Redeploy: redeploy}
+	findings, notice := splitNotices(findings)
+	res := PreviewResult{Findings: findings, Notice: notice, Redeploy: redeploy}
 	res.Plan.Standalone = true
 	res.Plan.Network.Name = ingress.NetworkName
 	res.Plan.Service.Name = ingress.ProjectName

@@ -292,14 +292,18 @@ func TestStandalonePreflightHTTP01(t *testing.T) {
 			res := previewStandalone(t, r, ingressdeploy.EnableRequest{})
 			conflict, isRefused := findingOf(res.Findings, ingressdeploy.CodeHTTP01Conflict)
 			unknown, isWarned := findingOf(res.Findings, ingressdeploy.CodeHTTP01Unknown)
-			carve, isNotice := findingOf(res.Findings, ingressdeploy.CodeHTTP01CarveOut)
+			// The carve-out is the preview's notice, never one of its findings (UI-SPEC S4).
+			if f, ok := findingOf(res.Findings, ingressdeploy.CodeHTTP01CarveOut); ok {
+				t.Errorf("the carve-out is a finding %+v; it belongs in the notice", f)
+			}
+			isNotice := res.Notice != ""
 			switch tc.want {
 			case notice:
-				if isRefused || isWarned || !isNotice || carve.Severity != ingressdeploy.SeverityNotice {
-					t.Fatalf("findings = %+v, want only the carve-out notice", res.Findings)
+				if isRefused || isWarned || !isNotice {
+					t.Fatalf("findings = %+v, notice %q, want only the carve-out notice", res.Findings, res.Notice)
 				}
-				if !strings.Contains(carve.Message, "requests for box.example.org and box.lan to TierPlan, over the tierplan-self network") {
-					t.Errorf("message = %q, want the notice naming both hosts", carve.Message)
+				if !strings.Contains(res.Notice, "requests for box.example.org and box.lan to TierPlan, over the tierplan-self network") {
+					t.Errorf("notice = %q, want the notice naming both hosts", res.Notice)
 				}
 			case refused:
 				if !isRefused || isWarned || isNotice || conflict.Severity != ingressdeploy.SeverityError {

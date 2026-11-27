@@ -140,6 +140,32 @@ type DisablePreview struct {
 	// Unreachable are the nodes whose agent is not connected now: their cache volume is queued and wiped when the agent
 	// connects (D-27).
 	Unreachable []string
+	// Notice is the neutral note of the preview: when TierPlan's own route is on in the environment, that it is released
+	// first and where TierPlan stays reachable (UI-SPEC S4); "" otherwise.
+	Notice string
+	// SelfRouteHost is the hostname of TierPlan's own route when it is on in the environment, "" otherwise, so the web can warn
+	// a person who reaches TierPlan through it.
+	SelfRouteHost string
+}
+
+// selfReleaseNotice is the disable preview's notice and the hostname of TierPlan's own route when it is on in envID (D-11,
+// UI-SPEC S4), with the direct address that keeps reaching TierPlan (directAddress). A claim that cannot be read gives no
+// notice and never fails the preview: the switch-off releases the route whatever the preview said.
+func (s *Service) selfReleaseNotice(ctx context.Context, envID string) (notice, host string) {
+	claim, held, err := s.d.Store.SystemClaim(ctx)
+	if err != nil {
+		s.log().Warn("could not read TierPlan's own route for a switch-off preview", "environment", envID, "error", err)
+		return "", ""
+	}
+	if !held || claim.EnvID != envID {
+		return "", ""
+	}
+	direct := directAddress(s.selfURLs(), claim.Hostname)
+	where := "on " + direct
+	if direct == "" {
+		where = "on TierPlan's own address"
+	}
+	return "TierPlan's own route on " + claim.Hostname + " is released first. Direct access " + where + " keeps working.", claim.Hostname
 }
 
 // DisableRefusedError is a switch-off that was refused: at least one finding, each an error. Nothing was written.
@@ -275,6 +301,7 @@ func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func
 		return DisablePreview{}, err
 	}
 	res := DisablePreview{Findings: findings, Removes: DisableRemoves{Secrets: []string{}, Volumes: []NodeName{}}, Unreachable: []string{}}
+	res.Notice, res.SelfRouteHost = s.selfReleaseNotice(ctx, envID)
 	for _, n := range info.Nodes {
 		res.Removes.Volumes = append(res.Removes.Volumes, NodeName{ID: n.AgentID, Name: n.Name})
 		if !n.Connected {
