@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -346,5 +347,44 @@ func TestOneRequestCanRecordSeveralKinds(t *testing.T) {
 	slices.Sort(got)
 	if !slices.Equal(got, []string{SignalUntrustedForwarded, SignalURLMismatch}) {
 		t.Fatalf("kinds = %v, want url_mismatch and untrusted_forwarded", got)
+	}
+}
+
+func TestProxyObserverHeldUntilReady(t *testing.T) {
+	t.Parallel()
+	var ready atomic.Bool
+	r := newObserverRig(observedTrusted, observedPublicURL)
+	r.obs.HoldUntil(ready.Load)
+	// An untrusted peer carrying a forwarded header, and a request for another host: both are
+	// things the observer would raise a signal for.
+	untrusted := probe{peer: "198.51.100.7:4000", host: "tierplan.example.com", tls: true, headers: map[string]string{"X-Forwarded-For": "203.0.113.9"}}
+	otherHost := probe{peer: "198.51.100.7:4000", host: "elsewhere.example.com", tls: true}
+
+	r.send(untrusted)
+	r.send(otherHost)
+	if got := r.appeared(); len(got) != 0 {
+		t.Fatalf("callbacks while held = %v, want none", got)
+	}
+	if got := r.obs.Signals(); len(got) != 0 {
+		t.Fatalf("signals while held = %v, want none", kinds(got))
+	}
+
+	ready.Store(true)
+	r.send(untrusted)
+	if got := r.appeared(); !slices.Equal(got, []string{SignalUntrustedForwarded}) {
+		t.Errorf("callbacks once ready = %v, want [%s]", got, SignalUntrustedForwarded)
+	}
+	if got := kinds(r.obs.Signals()); !slices.Equal(got, []string{SignalUntrustedForwarded}) {
+		t.Errorf("signals once ready = %v, want [%s]", got, SignalUntrustedForwarded)
+	}
+}
+
+func TestProxyObserverNilGateIsAlwaysReady(t *testing.T) {
+	t.Parallel()
+	r := newObserverRig(observedTrusted, observedPublicURL)
+	r.obs.HoldUntil(nil)
+	r.send(probe{peer: "198.51.100.7:4000", host: "tierplan.example.com", tls: true, headers: map[string]string{"X-Forwarded-For": "203.0.113.9"}})
+	if got := r.appeared(); !slices.Equal(got, []string{SignalUntrustedForwarded}) {
+		t.Errorf("callbacks with a nil gate = %v, want [%s]", got, SignalUntrustedForwarded)
 	}
 }

@@ -173,3 +173,53 @@ func TestRouterInstallsTheLiveTrustedProxies(t *testing.T) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
+
+func TestLiveTrustedSetRefreshUnderLoad(t *testing.T) {
+	t.Parallel()
+	const (
+		workers  = 8
+		requests = 200
+		flips    = 100
+	)
+	subnet := []netip.Prefix{netip.MustParsePrefix("10.9.0.0/24")}
+	var cur atomic.Pointer[[]netip.Prefix]
+	empty := []netip.Prefix{}
+	cur.Store(&empty)
+	live := func() []netip.Prefix { return *cur.Load() }
+	mw := ClientIPMiddlewareLive(nil, live)
+
+	var wg sync.WaitGroup
+	wrong := make(chan string, workers*requests)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range requests {
+				got := derive(mw, "10.9.0.5:4000", "203.0.113.7")
+				// Either derivation is right; a mix of the two is not.
+				switch {
+				case got.ip == "203.0.113.7" && got.trusted && got.onSelfNet:
+				case got.ip == "10.9.0.5" && !got.trusted && !got.onSelfNet:
+				default:
+					wrong <- got.ip
+				}
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range flips {
+			if i%2 == 0 {
+				cur.Store(&subnet)
+			} else {
+				cur.Store(&empty)
+			}
+		}
+	}()
+	wg.Wait()
+	close(wrong)
+	for ip := range wrong {
+		t.Errorf("an answer that is neither derivation: %q", ip)
+	}
+}

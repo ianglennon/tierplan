@@ -65,6 +65,8 @@ type ProxyObserver struct {
 	mu    sync.Mutex
 	sigs  map[signalKey]*Signal
 	onNew func(kind string)
+	// ready gates Observe: nil is always ready (A-08).
+	ready func() bool
 }
 
 // NewProxyObserver returns an observer that compares requests with publicURL,
@@ -90,6 +92,15 @@ func (o *ProxyObserver) OnNew(f func(kind string)) *ProxyObserver {
 	return o
 }
 
+// HoldUntil makes the observer look at no request while ready reports false (A-08). The trusted set
+// has a live part, the self network's subnet, that the server reads some time after it starts; until
+// it has, a proxy on that network would be seen as an untrusted peer and raise a warning that is
+// not true. Nil is always ready. Call it before the observer serves.
+func (o *ProxyObserver) HoldUntil(ready func() bool) *ProxyObserver {
+	o.ready = ready
+	return o
+}
+
 // Observe is the middleware. It belongs right after the client-address
 // middleware, which says whether the TCP peer is a trusted proxy and which scheme
 // the request effectively used. It never changes the request or the response.
@@ -102,6 +113,9 @@ func (o *ProxyObserver) Observe(next http.Handler) http.Handler {
 
 // look applies the two checks that need a request.
 func (o *ProxyObserver) look(req *http.Request) {
+	if o.ready != nil && !o.ready() {
+		return
+	}
 	peer := peerOf(req.RemoteAddr)
 	ctx := req.Context()
 	if !peerTrusted(ctx) && hasForwardedHeader(req.Header) {
