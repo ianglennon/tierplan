@@ -769,6 +769,117 @@ describe("General tab: agent URL", () => {
   });
 });
 
+// The two refusals of a URL that would send agents and proxies through ingress (plan 28-39, D-10,
+// UI-SPEC S3): each lands under its own field, focus goes to the first, and nothing else speaks.
+describe("General tab: ingress hostnames", () => {
+  const ROUTE = "https://tp.apps.example.org";
+  const PUBLIC_REFUSED =
+    "This is the hostname of TierPlan's own route. With no agent URL set, agents and proxies dial the public URL, and they must never go through ingress. Set an agent URL that isn't an ingress hostname first, then save.";
+  const AGENT_REFUSED =
+    "Ingress serves this hostname. Agents and proxies connect straight to TierPlan and never through ingress. Use a hostname that reaches TierPlan directly, such as https://tierplan.internal:7480.";
+
+  function refuse(errors: { location: string; message: string }[]) {
+    patchAnswer = () =>
+      Response.json(
+        { type: "validation_failed", status: 422, errors },
+        { status: 422, headers: { "Content-Type": "application/problem+json" } },
+      );
+  }
+
+  // A public URL on another origin asks first (D-04); the refusal arrives from the save after it.
+  async function confirmPublicURL() {
+    const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Change public URL" }));
+  }
+
+  // Neither a toast nor a form-level alert says anything about a field refusal.
+  function nothingElseSpeaks() {
+    expect(document.querySelector("[data-sonner-toast]")).toBeNull();
+    expect(within(instanceForm()).queryByRole("alert")).toBeNull();
+    expect(instanceForm().querySelector("[data-slot=alert]")).toBeNull();
+  }
+
+  it("routes the public URL refusal to its field", async () => {
+    refuse([{ location: "body.publicUrl", message: "public_url_is_ingress_host" }]);
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: ROUTE } });
+    fireEvent.click(saveButton());
+    await confirmPublicURL();
+
+    const error = await screen.findByText(PUBLIC_REFUSED);
+    expect(urlField().getAttribute("aria-invalid")).toBe("true");
+    expect(urlField().getAttribute("aria-describedby")).toContain(error.id);
+    await waitFor(() => expect(document.activeElement).toBe(urlField()));
+    expect(agentField().getAttribute("aria-invalid")).toBe("false");
+    nothingElseSpeaks();
+  });
+
+  it("routes the public URL refusal to its field when clearing the agent URL caused it", async () => {
+    settings.publicUrl = ROUTE;
+    settings.agentUrl = "https://tierplan.internal:7480";
+    refuse([{ location: "body.publicUrl", message: "public_url_is_ingress_host" }]);
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: "" } });
+    fireEvent.click(saveButton());
+
+    expect(await screen.findByText(PUBLIC_REFUSED)).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(urlField()));
+    expect(screen.queryByText(AGENT_REFUSED)).toBeNull();
+    nothingElseSpeaks();
+  });
+
+  it("routes the agent URL refusal to its field", async () => {
+    refuse([{ location: "body.agentUrl", message: "agent_url_is_ingress_host" }]);
+    await openGeneral();
+    fireEvent.change(agentField(), { target: { value: ROUTE } });
+    fireEvent.click(saveButton());
+
+    const error = await screen.findByText(AGENT_REFUSED);
+    expect(agentField().getAttribute("aria-invalid")).toBe("true");
+    expect(agentField().getAttribute("aria-describedby")).toContain(error.id);
+    await waitFor(() => expect(document.activeElement).toBe(agentField()));
+    expect(urlField().getAttribute("aria-invalid")).toBe("false");
+    // Not the generic full-address message the agent URL's location used to draw.
+    expect(
+      screen.queryByText("Enter a full https address such as https://tierplan.example.com."),
+    ).toBeNull();
+    nothingElseSpeaks();
+  });
+
+  it("both at once focus the first refused field", async () => {
+    refuse([
+      { location: "body.agentUrl", message: "agent_url_is_ingress_host" },
+      { location: "body.publicUrl", message: "public_url_is_ingress_host" },
+    ]);
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: ROUTE } });
+    fireEvent.change(agentField(), { target: { value: "https://shop.apps.example.org" } });
+    fireEvent.click(saveButton());
+    await confirmPublicURL();
+
+    expect(await screen.findByText(PUBLIC_REFUSED)).toBeTruthy();
+    expect(screen.getByText(AGENT_REFUSED)).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(urlField()));
+    nothingElseSpeaks();
+  });
+
+  it("saves the public URL as the route host with a free agent URL in the same save", async () => {
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: ROUTE } });
+    fireEvent.change(agentField(), { target: { value: "https://tierplan.internal:7480" } });
+    fireEvent.click(saveButton());
+    await confirmPublicURL();
+
+    expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
+    expect(patches()).toHaveLength(1);
+    expect(patches()[0]?.body).toEqual({
+      publicUrl: ROUTE,
+      agentUrl: "https://tierplan.internal:7480",
+    });
+    expect(screen.queryByText(PUBLIC_REFUSED)).toBeNull();
+  });
+});
+
 describe("About tab", () => {
   it("shows the version, the commit linked to its source tree, the licence and the source link", async () => {
     renderAt("/settings/about");
