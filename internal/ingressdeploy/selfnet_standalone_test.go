@@ -5,9 +5,11 @@ package ingressdeploy_test
 
 import (
 	"context"
+	"log/slog"
 	"maps"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -225,4 +227,69 @@ func TestAuditProofSelfNetworkAttached(t *testing.T) {
 		t.Errorf("details = %v, want %v", row.Details, want)
 	}
 	audittest.AssertNoSecrets(t, rows, token)
+}
+
+// TestStandaloneEnsureRemovesTheBridgeWhenUnwanted (D-02, D-04): once neither TierPlan's own route nor the carve-out wants
+// the self network, one pass disconnects TierPlan's container through SelfDisconnect, brings the proxy up without the
+// network and removes the bridge; the observation says it is gone, and the next pass is quiet. Without a local socket
+// (nil SelfConnect) no connect is tried, TierPlan is not attached, and the pass says why.
+func TestStandaloneEnsureRemovesTheBridgeWhenUnwanted(t *testing.T) {
+	t.Run("removed", func(t *testing.T) {
+		r, self := newStandaloneSelfRig(t, standaloneSelfOptions{})
+		r.claimSelf()
+		r.round()
+		n, ok := r.selfNetwork()
+		if !ok {
+			t.Fatal("no tierplan-self network after the first pass")
+		}
+		deploys := r.sys.deployCount()
+
+		r.unclaimSelf()
+		r.round()
+		_, disconnects := self.calls()
+		if len(disconnects) != 1 || disconnects[0] != (selfCall{network: n.ID, container: "c1"}) {
+			t.Fatalf("disconnects = %+v, want one of c1 from %s", disconnects, n.ID)
+		}
+		if got := r.sys.deployCount(); got != deploys+1 {
+			t.Fatalf("deploys = %d, want %d: the proxy is brought up off the self network", got, deploys+1)
+		}
+		if got, want := r.lastProjectNetworks(), []string{ingress.NetworkName}; !slices.Equal(got, want) {
+			t.Errorf("proxy networks = %v, want %v", got, want)
+		}
+		if _, ok := r.selfNetwork(); ok {
+			t.Error("the tierplan-self bridge is still there")
+		}
+		if o := r.observation(); o.Exists || o.Attached || o.Wanted || o.KeptInUse {
+			t.Errorf("observation = %+v, want the network gone", o)
+		}
+
+		r.round()
+		if _, disconnects := self.calls(); len(disconnects) != 1 {
+			t.Errorf("a pass after the removal disconnected again: %+v", disconnects)
+		}
+		if got := r.sys.deployCount(); got != deploys+1 {
+			t.Errorf("a pass after the removal redeployed (%d deploys)", got)
+		}
+	})
+
+	t.Run("no local socket", func(t *testing.T) {
+		logs := &logBuffer{}
+		r, self := newStandaloneSelfRig(t, standaloneSelfOptions{noSocket: true, deps: func(d *ingressdeploy.Deps) {
+			d.Log = slog.New(slog.NewTextHandler(logs, nil))
+		}})
+		r.claimSelf()
+		r.round()
+		if _, ok := r.selfNetwork(); !ok {
+			t.Fatal("no tierplan-self network after the pass")
+		}
+		if connects, _ := self.calls(); len(connects) != 0 {
+			t.Errorf("connects = %+v, want none without a local socket", connects)
+		}
+		if o := r.observation(); !o.Exists || o.Attached {
+			t.Errorf("observation = %+v, want the network there and TierPlan not attached", o)
+		}
+		if !strings.Contains(logs.String(), "TierPlan cannot connect its own container") {
+			t.Errorf("the pass did not say TierPlan cannot connect itself; logs:\n%s", logs)
+		}
+	})
 }
