@@ -40,8 +40,11 @@ var errOwnTrustStageTimeout = errors.New("the proxies did not apply the staged t
 
 // ownTrust is the set of certificates a proxy must trust to verify TierPlan itself, as one PEM
 // with a version (D-14, A-02). The members are, in a fixed order: TierPlan's own self-signed leaf
-// (the stable anchor), the chain served now (leaf first), any chain staged to be served next (Stage),
-// then any chain served within the grace period. The version is a fingerprint of the PEM content, not a counter, so it is equal across
+// (the stable anchor), the leaf served now, any leaf staged to be served next (Stage), then any leaf
+// served within the grace period. Only leaves, never an issuer of the served chain (WR-06): a proxy
+// trusts every member as an anchor, and an issuer as an anchor would make it accept any certificate
+// that issuer gives out for TierPlan's name. A leaf in the roots is accepted as it is (Go's verifier,
+// which Traefik's rootCAs uses, ends the chain at a root that is the leaf itself). The version is a fingerprint of the PEM content, not a counter, so it is equal across
 // restarts for the same certificates and changes on every certificate change: a Let's Encrypt
 // install, the fallback to self-signed, a self-signed re-sign for new names (the old leaf does not
 // trust the new one) and a replaced supplied pair. The proxy then trusts a set, never one
@@ -94,14 +97,15 @@ func (t *ownTrust) useClock(c stackops.Clock) *ownTrust {
 	return t
 }
 
-// Stage adds chain, a certificate TierPlan is about to serve (leaf first), to the trust set as incoming and returns the
-// set's version with it (A-03). Once the chain is served it is an ordinary member and the served/previous rule applies; a
-// chain that is never served leaves after ownTrustGrace. Staging a certificate the set already holds changes nothing.
+// Stage adds the leaf of chain, a certificate TierPlan is about to serve (leaf first), to the trust set as incoming and
+// returns the set's version with it (A-03). The rest of the chain is never added (WR-06). Once the leaf is served it is an
+// ordinary member and the served/previous rule applies; a leaf that is never served leaves after ownTrustGrace. Staging a
+// certificate the set already holds changes nothing.
 func (t *ownTrust) Stage(chain []*x509.Certificate) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	until := t.now().Add(ownTrustGrace)
-	for _, c := range chain {
+	for _, c := range servedLeafOf(chain) {
 		if c == nil {
 			continue
 		}
@@ -305,7 +309,8 @@ func (t *ownTrust) observeLocked() bool {
 	return changed
 }
 
-// members is the current set without what is staged: the anchor, then the served chain, each certificate once.
+// members is the current set without what is staged: the anchor, then the served leaf, each certificate once. The issuers
+// of the served chain are never members (WR-06).
 func (t *ownTrust) members() []*x509.Certificate {
 	var all []*x509.Certificate
 	if t.anchor != nil {
@@ -315,7 +320,7 @@ func (t *ownTrust) members() []*x509.Certificate {
 	}
 	if t.served != nil {
 		_, chain := t.served()
-		all = append(all, chain...)
+		all = append(all, servedLeafOf(chain)...)
 	}
 	out := make([]*x509.Certificate, 0, len(all))
 	for _, c := range all {
@@ -324,6 +329,14 @@ func (t *ownTrust) members() []*x509.Certificate {
 		}
 	}
 	return out
+}
+
+// leafOf is the leaf of a chain (its first certificate) as a set of at most one.
+func servedLeafOf(chain []*x509.Certificate) []*x509.Certificate {
+	if len(chain) == 0 || chain[0] == nil {
+		return nil
+	}
+	return chain[:1]
 }
 
 func containsCert(set []*x509.Certificate, c *x509.Certificate) bool {

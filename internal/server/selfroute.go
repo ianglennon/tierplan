@@ -81,7 +81,7 @@ type selfRoute struct {
 
 // selfInputs are the server's facts SelfInput builds TierPlan's own route from, besides the claim and the observation.
 type selfInputs struct {
-	// trust is TierPlan's own trust set: the self-signed anchor and the served chain (D-14).
+	// trust is TierPlan's own trust set: the self-signed anchor and the served leaf, never its issuer (D-14, WR-06).
 	trust *ownTrust
 	// urls are the instance's own addresses and TIERPLAN_LISTEN's port, read on every call.
 	urls func() ingressdeploy.SelfURLs

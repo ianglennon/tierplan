@@ -149,8 +149,8 @@ func TestStagedInstallWaitsForTheProxies(t *testing.T) {
 				t.Errorf("call %d asked about version %d, want the staged version %d throughout", i, v.version, views[0].version)
 			}
 		}
-		if !r.tr.has(t, le) || !r.tr.has(t, issuer) || !r.tr.has(t, r.src.Leaf()) {
-			t.Error("after the install the set must hold the anchor and the served chain")
+		if !r.tr.has(t, le) || r.tr.has(t, issuer) || !r.tr.has(t, r.src.Leaf()) {
+			t.Error("after the install the set must hold the anchor and the served leaf, and never its issuer")
 		}
 	})
 

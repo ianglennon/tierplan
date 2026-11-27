@@ -5,11 +5,16 @@ package server
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"io"
 	"log/slog"
+	"math/big"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -84,8 +89,8 @@ func TestOwnTrustPEMOrderAndVersion(t *testing.T) {
 
 	r := newTrustRig(s, l, i)
 	data, ver := r.trust.PEM()
-	if got := pemCerts(t, data); !sameCerts(got, s, l, i) {
-		t.Errorf("PEM holds %d certificates, want the anchor, then the served leaf, then its issuer, in that order", len(got))
+	if got := pemCerts(t, data); !sameCerts(got, s, l) {
+		t.Errorf("PEM holds %d certificates, want the anchor, then the served leaf, in that order, and never its issuer", len(got))
 	}
 	if ver <= 0 {
 		t.Errorf("version = %d, want a positive number", ver)
@@ -206,8 +211,8 @@ func TestOwnTrustFollowsEveryChange(t *testing.T) {
 			t.Fatal(err)
 		}
 		v1 := requireChange(t, tr, v0, le, self)
-		if !tr.has(t, issuer) {
-			t.Error("the issuer of the served chain is not in the set")
+		if tr.has(t, issuer) {
+			t.Error("the issuer of the served chain is in the set: t-self would trust every certificate it issues (WR-06)")
 		}
 
 		// The fallback serves the anchor, which was in the set all along, and the Let's Encrypt chain
@@ -220,8 +225,8 @@ func TestOwnTrustFollowsEveryChange(t *testing.T) {
 		if data, v := tr.PEM(); v != v1 {
 			t.Errorf("version = %d after the fallback, want %d: the trust set holds the same certificates; PEM serials %v", v, v1, serialsOf(t, data))
 		}
-		if !tr.has(t, self) || !tr.has(t, le) || !tr.has(t, issuer) {
-			t.Error("after the fallback the set must hold the anchor and the Let's Encrypt chain as previous")
+		if !tr.has(t, self) || !tr.has(t, le) || tr.has(t, issuer) {
+			t.Error("after the fallback the set must hold the anchor and the Let's Encrypt leaf as previous, and never its issuer")
 		}
 		now = fixedNow.Add(ownTrustGrace)
 		requireChange(t, tr, v1, self, self)
@@ -359,4 +364,90 @@ func TestOnInstallStillReachesHSTS(t *testing.T) {
 // tlsCertOf is a tls.Certificate that serves only c's DER, enough for servedChain.
 func tlsCertOf(c *x509.Certificate) tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{c.Raw}}
+}
+
+// caIssued is a CA and two leaves it issued for the same host, as two Let's Encrypt certificates for one name are.
+func caIssued(t *testing.T, host string) (ca, a, b *x509.Certificate) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1_000_001), Subject: pkix.Name{CommonName: "Test Intermediate"},
+		NotBefore: fixedNow.Add(-time.Hour), NotAfter: fixedNow.Add(24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca, err = x509.ParseCertificate(caDER); err != nil {
+		t.Fatal(err)
+	}
+	leaf := func(serial int64) *x509.Certificate {
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: host}, DNSNames: []string{host},
+			NotBefore: fixedNow.Add(-time.Hour), NotAfter: fixedNow.Add(24 * time.Hour),
+			KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &k.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	return ca, leaf(1_000_002), leaf(1_000_003)
+}
+
+// TestOwnTrustTrustsTierPlansLeavesOnly (WR-06, D-14): the trust set holds TierPlan's own leaves and never an issuer of the
+// served chain, so a proxy that verifies against it accepts the certificate TierPlan serves, and refuses another certificate
+// the same issuer gave out for the same name: the one a stack that answered TierPlan's challenge could have ordered. A staged
+// chain and a previous one add their leaves only.
+func TestOwnTrustTrustsTierPlansLeavesOnly(t *testing.T) {
+	const host = "tierplan.example.org"
+	ca, served, other := caIssued(t, host)
+	anchor := trustCert(t, host)
+	r := newTrustRig(anchor, served, ca)
+	data, _ := r.trust.PEM()
+	if got := pemCerts(t, data); !sameCerts(got, anchor, served) {
+		t.Fatalf("PEM holds %v, want the anchor and the served leaf only", serialsOf(t, data))
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(data) {
+		t.Fatal("the trust PEM does not load into a pool")
+	}
+	inter := x509.NewCertPool()
+	inter.AddCert(ca) // the chain the backend sends with its leaf
+	verify := func(c *x509.Certificate) error {
+		_, err := c.Verify(x509.VerifyOptions{DNSName: host, Roots: pool, Intermediates: inter, CurrentTime: fixedNow})
+		return err
+	}
+	if err := verify(served); err != nil {
+		t.Errorf("the served leaf does not verify against the trust set: %v", err)
+	}
+	if err := verify(anchor); err != nil {
+		t.Errorf("the self-signed anchor does not verify against the trust set: %v", err)
+	}
+	if err := verify(other); err == nil {
+		t.Error("another leaf of the same issuer for the same name verifies: the set trusts the issuer")
+	}
+
+	_, next, _ := caIssued(t, host)
+	r.trust.Stage([]*x509.Certificate{next, ca})
+	if r.trust.has(t, ca) || !r.trust.has(t, next) {
+		t.Error("a staged chain must add its leaf only")
+	}
+	r.chain = []*x509.Certificate{next, ca}
+	if r.trust.has(t, ca) || !r.trust.has(t, served) {
+		t.Error("after the change the previous leaf must stay for the grace period, and no issuer join")
+	}
 }

@@ -256,7 +256,8 @@ a stack cannot claim the name, and deleting its domain is refused with `ingress_
 the holders and ending "Turn off TierPlan's own route first."
 
 The proxies reach TierPlan on its own port 7480 over HTTPS, and they check TierPlan's certificate by name (the host of the
-public URL) against a trust bundle that follows every change of TierPlan's own certificate. The route serves only once its
+public URL) against a trust bundle that follows every change of TierPlan's own certificate. The bundle holds TierPlan's own
+certificates only, never the authority that issued them, so another certificate for the same name is refused. The route serves only once its
 certificate is valid and TierPlan is on the `tierplan-self` network. Its state is one of: off, `serving`, `pending` (rolling
 out to the proxies), `waiting_certificate`, `self_not_attached` and `unknown`. The card, the routes list (as a route whose
 owner is the system), `GET .../ingress/status` (`selfRoute`) and a read-only line on Settings > HTTPS all show it.

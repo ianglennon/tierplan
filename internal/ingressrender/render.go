@@ -124,8 +124,9 @@ type SelfInput struct {
 	// ServerName is the name the proxy verifies TierPlan's certificate against: the host of the public
 	// URL, a name both TierPlan's Let's Encrypt and its self-signed certificate carry (D-14).
 	ServerName string
-	// TrustPEM is the trust bundle the proxy verifies TierPlan against: the self-signed leaf and the
-	// served chain, concatenated as PEM CERTIFICATE blocks. It is written as one file named by its
+	// TrustPEM is the trust bundle the proxy verifies TierPlan against: TierPlan's own leaves (the
+	// self-signed one and the one served, never an issuer of the served chain), concatenated as PEM
+	// CERTIFICATE blocks. It is written as one file named by its
 	// checksum, so the bundle ID changes whenever it does.
 	TrustPEM []byte
 	// ACMEHosts are the hosts of the public URL and the agent URL, for TierPlan's own HTTP-01 carve-out

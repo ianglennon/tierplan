@@ -175,6 +175,31 @@ func TestRenderedSelfRouteRefusesAnUntrustedBackend(t *testing.T) {
 	})
 }
 
+// TestRenderedSelfRouteTrustsALeafNotItsIssuer proves WR-06 on the pinned Traefik: t-self's trust file holds TierPlan's own
+// leaves and never their issuer, as for a Let's Encrypt certificate. With the stub serving a CA-issued leaf and its issuer,
+// a trust file holding that leaf alone serves 200: Traefik's rootCAs accepts a leaf that is itself in the pool. The control
+// holds another leaf the same CA issued for the same name: the route answers a server error and Traefik logs x509, so a
+// certificate the same issuer gave someone else for TierPlan's name is not trusted.
+func TestRenderedSelfRouteTrustsALeafNotItsIssuer(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	issuer := traefiktest.NewCA(t)
+	leaf, key := issuer.Leaf(t, selfServerName)
+	served := append(append([]byte(nil), leaf...), issuer.PEM()...)
+
+	t.Run("the served leaf alone", func(t *testing.T) {
+		s := startSelfSite(t, served, key, leaf, nil)
+		body := s.awaitGet(t, selfFront, "/")
+		t.Logf("with the served leaf alone as the trust file, GET / answered 200 from the stub: %q", strings.TrimSpace(body))
+	})
+
+	t.Run("another leaf of the same issuer", func(t *testing.T) {
+		sibling, _ := issuer.Leaf(t, selfServerName)
+		s := startSelfSite(t, served, key, sibling, nil)
+		status := s.awaitFailure(t, "/")
+		t.Logf("with a sibling leaf as the trust file, GET / answered %d and Traefik logged x509", status)
+	})
+}
+
 // TestRenderedCarveOutReachesThePlainListener proves D-12 and SELF-04 through the rendered bundle: with
 // selfServerName as an ACME host, the challenge path on that name reaches the stub's plain listener on
 // port 80 (it answers "<token>.stub"), ahead of the redirect to https, while the same path on
