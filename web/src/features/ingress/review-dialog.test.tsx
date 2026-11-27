@@ -358,6 +358,65 @@ describe("turning ingress on", () => {
     expect(writes).toHaveLength(0);
   });
 
+  it("links the HTTP-01 refusals to HTTPS settings", async () => {
+    previewAnswer = () =>
+      Response.json(
+        enablePreview({
+          findings: [
+            {
+              code: "ingress_http01_conflict",
+              severity: "error",
+              message: "TierPlan runs on this swarm and its own certificate uses HTTP-01.",
+              items: [],
+            },
+            {
+              code: "ingress_http01_unknown",
+              severity: "error",
+              message: "TierPlan can't tell where it runs.",
+              items: [],
+            },
+            {
+              code: "ingress_no_manager",
+              severity: "error",
+              message: "No manager node is connected.",
+              items: [],
+            },
+          ],
+        }),
+      );
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    await waitUnderFakeClock(() => expect(screen.getByText("This can't go ahead")).toBeTruthy());
+    const links = within(dialog).getAllByRole("link", { name: "Open HTTPS settings" });
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(link.getAttribute("href")).toBe("/settings/https");
+    const conflict = within(dialog)
+      .getByText("TierPlan runs on this swarm and its own certificate uses HTTP-01.")
+      .closest("li") as HTMLElement;
+    expect(within(conflict).getByRole("link", { name: "Open HTTPS settings" })).toBeTruthy();
+    const unknown = within(dialog)
+      .getByText("TierPlan can't tell where it runs.")
+      .closest("li") as HTMLElement;
+    expect(within(unknown).getByRole("link", { name: "Open HTTPS settings" })).toBeTruthy();
+    const other = within(dialog)
+      .getByText("No manager node is connected.")
+      .closest("li") as HTMLElement;
+    expect(within(other).queryByRole("link")).toBeNull();
+  });
+
+  it("shows the carve-out note on enable", async () => {
+    const note =
+      "TierPlan's own certificate uses the HTTP-01 challenge. The ingress sends only /.well-known/acme-challenge/ requests for tp.example.com to TierPlan, over the tierplan-self network, so the certificate keeps renewing.";
+    previewAnswer = () => Response.json(enablePreview({ notice: note }));
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    const text = await waitUnderFakeClock(() => within(dialog).getByText(note));
+    const alert = text.closest("[data-slot=alert]") as HTMLElement;
+    expect(alert).toBeTruthy();
+    // Neutral: not a warning and not a refusal.
+    expect(alert.className).not.toContain("border-status-warning");
+    expect(alert.className).not.toContain("text-destructive");
+    expect(confirmOf(dialog, "Turn on ingress").disabled).toBe(false);
+  });
+
   it("shows the sentence of a refused preview in the dialog, naming who holds the environment, and no toast", async () => {
     const sentence = "ana is deploying a stack to this environment.";
     previewAnswer = () => problem(409, "operation_locked", sentence);
@@ -490,6 +549,55 @@ describe("turning ingress off", () => {
     const dialog = await open("Turn off ingress", "Turn off ingress?");
     await waitUnderFakeClock(() => expect(screen.getByText("This can't go ahead")).toBeTruthy());
     expect(confirmOf(dialog, "Turn off ingress").disabled).toBe(true);
+  });
+});
+
+describe("turning ingress off while TierPlan's own route is on", () => {
+  const release =
+    "TierPlan's own route on tp.example.com is released first. Direct access on https://tierplan.internal:7480 keeps working.";
+
+  function selfRoute(host: string): Json {
+    return {
+      here: "yes",
+      on: true,
+      host,
+      state: "serving",
+      reason: "",
+      directAddress: "https://tierplan.internal:7480",
+      kind: "standalone",
+      attached: true,
+      network: "tierplan-self",
+      carveOut: false,
+    };
+  }
+
+  beforeEach(() => {
+    previewAnswer = () =>
+      Response.json({ findings: [], removes: {}, unreachable: [], notice: release });
+    job = jobBody({ kind: "ingress_disable" });
+  });
+
+  it("shows the release-first note and the route warning on disable", async () => {
+    status = statusBody({ enabled: true, selfRoute: selfRoute(window.location.host) });
+    const dialog = await open("Turn off ingress", "Turn off ingress?");
+    const note = await waitUnderFakeClock(() => within(dialog).getByText(release));
+    const neutral = note.closest("[data-slot=alert]") as HTMLElement;
+    expect(neutral.className).not.toContain("border-status-warning");
+    const warning = within(dialog).getByText(
+      "You're using TierPlan through this route. This page may stop answering as the route goes. The change still goes through. Open https://tierplan.internal:7480 to see the result.",
+    );
+    expect((warning.closest("[data-slot=alert]") as HTMLElement).className).toContain(
+      "border-status-warning",
+    );
+    // The warning never holds the switch back (D-11).
+    expect(confirmOf(dialog, "Turn off ingress").disabled).toBe(false);
+  });
+
+  it("draws the note but no warning when the page came another way", async () => {
+    status = statusBody({ enabled: true, selfRoute: selfRoute("tp.example.com") });
+    const dialog = await open("Turn off ingress", "Turn off ingress?");
+    await waitUnderFakeClock(() => expect(within(dialog).getByText(release)).toBeTruthy());
+    expect(within(dialog).queryByText(/You're using TierPlan through this route/)).toBeNull();
   });
 });
 
