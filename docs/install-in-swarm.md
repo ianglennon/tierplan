@@ -4,6 +4,7 @@ TierPlan can run as a service in a Docker Swarm, on a manager node or on a worke
 
 - [Before you start](#before-you-start)
 - [The stack file](#the-stack-file)
+  - [TierPlan's own ingress route (optional)](#tierplans-own-ingress-route-optional)
 - [Deploy](#deploy)
 - [Add the swarm](#add-the-swarm)
 - [Fold this host into the swarm](#fold-this-host-into-the-swarm)
@@ -61,6 +62,48 @@ What each part is for:
 | `mode: host` on the port | The port is opened on the node itself instead of on the swarm's routing mesh. TierPlan then sees the real address of each client, which its sign-in limit needs, and agent connections do not pass through the mesh. |
 | `stop_grace_period: 30s` | Gives TierPlan time to close its database cleanly when the task stops. |
 | `restart_policy.condition: any` | Swarm starts the task again whenever it stops. |
+
+### TierPlan's own ingress route (optional)
+
+Skip this part unless you use TierPlan's managed ingress in this swarm and want it to serve TierPlan itself on a host name, or TierPlan's own Let's Encrypt certificate uses HTTP-01 (see the end of this part). [TierPlan's own route](ingress.md#tierplans-own-route) in the ingress guide says what the route does.
+
+The proxies reach TierPlan over a network of its own, `tierplan-self`, which TierPlan makes when you turn the route on. TierPlan can't put its own service on that network: an update would stop the task that asked for it. You add these lines to `tierplan.yml` instead: the `networks:` entry goes under the `tierplan` service, and the `networks:` block at the top level, beside `volumes:`.
+
+```yaml
+services:
+  tierplan:
+    networks:
+      - tierplan-self
+networks:
+  tierplan-self:
+    external: true
+```
+
+A service with a `networks:` entry leaves the stack's default network. The service in the stack file above has no `networks:` entry yet, so it is on that default network now. If the service already has a `networks:` entry, or something else in the stack talks to TierPlan over the default network, list those networks as well (`- default` for the default one). TierPlan's own port is published in host mode, so direct access on 7480 does not need any of these networks.
+
+The order matters, because a stack deploy fails when an external network it names does not exist:
+
+1. Turn the route on in TierPlan first. TierPlan makes the `tierplan-self` network, and the route waits in the state "Not attached" (`self_not_attached`). The card shows the same lines.
+2. Then add the lines and run `docker stack deploy -c tierplan.yml tierplan` again on a manager. The task restarts, as for an update, and the route starts serving.
+3. To stop, turn the route off first. While TierPlan's service is still on `tierplan-self`, the network stays. Then take the lines out and deploy again before any other deploy of the stack, so the stack file never names a network that is gone. A later pass removes the network. If the switch-off review says the network stays because the port-80 carve-out uses it, keep the lines.
+
+If you switch ingress off while TierPlan is still on `tierplan-self`, the network also stays. Take the lines out, deploy, then remove the network on a manager with `docker network rm tierplan-self`.
+
+If TierPlan runs as a service you made with `docker service create`, not from a stack file, run this on a manager instead, with your service's name in place of `tierplan`:
+
+```sh
+docker service update --network-add tierplan-self tierplan
+```
+
+Do not use the command for a service deployed from a stack file: the next `docker stack deploy` takes the network off again.
+
+**TierPlan's own certificate with HTTP-01, before ingress is on.** The ingress proxies take port 80 on every node, so when TierPlan's own Let's Encrypt certificate uses HTTP-01, the ingress sends only the `/.well-known/acme-challenge/` requests for TierPlan's own host names to TierPlan, over `tierplan-self`. Ingress is refused (`ingress_http01_conflict`) until TierPlan's service is on that network, and TierPlan only makes the network once ingress is on. So make the network yourself first, on a manager, with the labels that tell TierPlan it is its own:
+
+```sh
+docker network create --driver overlay --label tierplan.component=ingress --label tierplan.ingress.role=self tierplan-self
+```
+
+Then add the lines above, deploy again, and turn ingress on. TierPlan takes the network over as its own when ingress is switched on. A network called `tierplan-self` without both labels is not TierPlan's: it is never used (`self_network_foreign`). The other way is to switch TierPlan's own certificate to DNS-01 (see [https.md](https.md)), which does not need port 80 or these lines.
 
 ## Deploy
 
