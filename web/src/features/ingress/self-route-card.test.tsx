@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -690,5 +690,129 @@ describe("loading and errors", () => {
     await button("Turn on own route");
     expect(statusCalls).toBe(before + 1);
     expect(within(region).queryByText("Couldn't read the route status.")).toBeNull();
+  });
+});
+
+// reasonOf is what a reader is told about a control they cannot use: the text NeedsTooltip points at with
+// aria-describedby. Undefined when the control is usable.
+function reasonOf(control: HTMLElement): string | undefined {
+  if (control.getAttribute("aria-disabled") !== "true") return undefined;
+  const id = control.getAttribute("aria-describedby") ?? "";
+  return document.getElementById(id)?.textContent ?? "";
+}
+
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+const HELPER =
+  "Turning this on changes which origins and proxy addresses TierPlan trusts, so it needs an instance admin.";
+
+describe("who can switch it", () => {
+  const readers: { who: string; me: () => ReturnType<typeof makeMe>; reason?: string }[] = [
+    { who: "Viewer", me: () => makeMe({ envs: { [ENV]: "viewer" } }), reason: "Needs Admin" },
+    { who: "Operator", me: () => makeMe({ envs: { [ENV]: "operator" } }), reason: "Needs Admin" },
+    {
+      who: "environment Admin",
+      me: () => makeMe({ envs: { [ENV]: "admin" } }),
+      reason: "Only an instance admin can do this",
+    },
+    { who: "instance Admin", me: () => makeMe({ instanceAdmin: true }) },
+  ];
+
+  it("gives each reader the right reason, in the order ingress.manage first", async () => {
+    const seen: (string | undefined)[] = [];
+    for (const reader of readers) {
+      me = reader.me();
+      selfRoute = route({
+        on: true,
+        host: HOST,
+        state: "self_not_attached",
+        reason: "self_not_attached",
+        snippet: { kind: "service_update", text: COMMAND },
+      });
+      const view = mountCard();
+      const region = await card();
+      const turnOff = await button("Turn off own route");
+      // Everyone sees the whole card: the state, the hostname, the direct address, the snippet and the helper line.
+      expect(within(region).getByText(HOST)).toBeTruthy();
+      expect(within(region).getByText(DIRECT)).toBeTruthy();
+      expect(
+        within(region).getByRole("region", { name: "the service update command" }),
+      ).toBeTruthy();
+      expect(within(region).getByText(HELPER)).toBeTruthy();
+      await waitUnderFakeClock(() => expect(reasonOf(turnOff)).toBe(reader.reason));
+      seen.push(reasonOf(turnOff));
+      if (reader.reason) {
+        // A disabled control is never answered with a dialog.
+        fireEvent.click(turnOff);
+        expect(screen.queryByRole("dialog")).toBeNull();
+      }
+      view.unmount();
+      client.clear();
+    }
+    expect(seen).toEqual([
+      "Needs Admin",
+      "Needs Admin",
+      "Only an instance admin can do this",
+      undefined,
+    ]);
+    expect(writes).toEqual([]);
+  });
+
+  it("is disabled while ingress is off, with a plain reason", async () => {
+    ingressOn = false;
+    mountCard();
+    const region = await card();
+    const turnOn = await button("Turn on own route");
+    expect(reasonOf(turnOn)).toBe("Turn ingress on first. The route is served by the proxies.");
+    expect(within(region).getByText(HELPER)).toBeTruthy();
+  });
+
+  it("puts a permission reason before the ingress-off one", async () => {
+    ingressOn = false;
+    me = makeMe({ envs: { [ENV]: "viewer" } });
+    mountCard();
+    await card();
+    const turnOn = await button("Turn on own route");
+    await waitUnderFakeClock(() => expect(reasonOf(turnOn)).toBe("Needs Admin"));
+  });
+
+  it("never holds the release back by the route's state or ingress", async () => {
+    ingressOn = false;
+    selfRoute = route({ on: true, host: HOST, state: "unknown", attached: false });
+    mountCard();
+    await card();
+    const turnOff = await button("Turn off own route");
+    expect(reasonOf(turnOff)).toBeUndefined();
+    expect(turnOff.disabled).toBe(false);
+  });
+});
+
+describe("how often it reads", () => {
+  beforeEach(() => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  });
+
+  it("refetches faster while settling: waiting for a certificate reads again within 10 s", async () => {
+    selfRoute = route({ on: true, host: HOST, state: "waiting_certificate", attached: true });
+    mountCard();
+    await card();
+    const before = statusCalls;
+    await advance(10_000);
+    expect(statusCalls).toBeGreaterThan(before);
+  });
+
+  it("reads every 30 s while serving", async () => {
+    selfRoute = route({ on: true, host: HOST, state: "serving", attached: true });
+    mountCard();
+    await card();
+    const before = statusCalls;
+    await advance(15_000);
+    expect(statusCalls).toBe(before);
+    await advance(16_000);
+    expect(statusCalls).toBe(before + 1);
   });
 });
