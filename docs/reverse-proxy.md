@@ -4,6 +4,8 @@ TierPlan serves HTTPS only: it listens on port 7480 and answers with its own cer
 
 The configurations on this page are the files in [`docs/proxy/`](proxy/). `make proxy-smoke` runs the built image behind all three, at both places, and checks what is listed under [Checking a setup](#checking-a-setup).
 
+**Using TierPlan's managed ingress?** When ingress is on in the environment TierPlan runs in, the ingress can serve TierPlan itself on a host name you choose, with a certificate of its own. That replaces a hand-written proxy file such as the Traefik one below. See [TierPlan's own route](ingress.md#tierplans-own-route). Direct access on port 7480 keeps working either way.
+
 ## Proxy or TierPlan's own HTTPS?
 
 You do not always need a proxy. TierPlan can get a free certificate that browsers trust from Let's Encrypt and serve it itself, over HTTP-01 or, with Cloudflare DNS, DNS-01. [HTTPS and Let's Encrypt](https.md) says how.
@@ -39,9 +41,9 @@ TierPlan serves HTTPS and nothing else, on its own port, with its own certificat
 
 ## The public URL decides everything
 
-TierPlan takes its host name, its base path and the origin it accepts changes from, from the public URL and from nothing else. Whatever a proxy or a client puts in a header cannot change them. This is deliberate: a header that could widen the set of accepted origins would let any page on the internet change things as an admin.
+TierPlan takes its host name, its base path and the origin it accepts changes from, from the public URL and from nothing else. The one addition is the origin of [TierPlan's own route](ingress.md#tierplans-own-route) while that route is on, and it too comes from TierPlan's own settings. Whatever a proxy or a client puts in a header cannot change them. This is deliberate: a header that could widen the set of accepted origins would let any page on the internet change things as an admin.
 
-- **Origin and CSRF.** Every change a browser makes must come from the public URL's origin. A request from another origin is refused.
+- **Origin and CSRF.** Every change a browser makes must come from the public URL's origin, or from the origin of TierPlan's own route while it is on. A request from another origin is refused.
 - **Base path.** The path of the public URL (`/tierplan` in `https://example.com/tierplan`) is the base path. TierPlan serves the app, the API, the event streams and the agent endpoint under it.
 - **Cookies.** The session cookie is scoped to that host and path. See [Root or subpath](#root-or-subpath).
 
@@ -57,6 +59,8 @@ TierPlan believes forwarded headers only from the addresses in `TIERPLAN_TRUSTED
 | `X-Forwarded-Proto` | The scheme the client used, for the links and cookies TierPlan builds. It never makes a plain connection count as secure: the connection from the proxy to TierPlan must itself be TLS. With several values, the last one counts. |
 
 TierPlan **ignores** `X-Forwarded-Host`, `X-Forwarded-Prefix` and the standard `Forwarded` header, from every peer. It also ignores `X-Forwarded-For` and `X-Forwarded-Proto` from any peer that is not trusted. Traefik adds `X-Forwarded-Prefix` when it strips a prefix; that is harmless.
+
+TierPlan's own ingress route does not change these rules. The extra origin it accepts while the route is on, `https://` and the route's host name, is added from the route TierPlan stores, never from a header, so a header still cannot widen the accepted origins. The route's proxies reach TierPlan over the `tierplan-self` network, and TierPlan believes their forwarded headers from that network's own range, read from Docker without its gateway, only while TierPlan is on it. You add nothing to `TIERPLAN_TRUSTED_PROXIES` for the route.
 
 Keep the list short. Everything in it can choose the client address of every request. For a proxy in a Docker network, use the network's range (`docker network inspect <name>` shows it as `Subnet`) or the proxy container's address. Do not list a whole private range that other machines can reach.
 

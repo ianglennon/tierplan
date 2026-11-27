@@ -77,6 +77,8 @@ Before it orders anything, TierPlan checks the names and refuses to start an ord
 
 The certificate covers the host of the public URL, plus the host of the agent URL when it differs. IP addresses and wildcards cannot be used. Connected agents must reach TierPlan at a host the certificate covers (see `agent_dial_host` above), so set `TIERPLAN_AGENT_URL` to a covered host if they use another.
 
+Switching TierPlan's managed ingress on in the environment TierPlan runs in gives port 80 to the ingress proxies, so TierPlan cannot publish it any more: a TierPlan that still publishes port 80 (`-p 80:7480` above) makes the switch refuse with `ingress_port_in_use`. Take that port off TierPlan just before you switch ingress on. TierPlan's renewals keep working, because the ingress sends only the `/.well-known/acme-challenge/` requests for TierPlan's own host names to TierPlan. [TierPlan's own certificate and HTTP-01](ingress.md#tierplans-own-certificate-and-http-01) says when that applies and what to do when it does not, and [Running TierPlan inside a swarm](install-in-swarm.md#tierplans-own-ingress-route-optional) gives the steps for a swarm.
+
 ## Let's Encrypt with DNS-01 through Cloudflare
 
 With DNS-01, TierPlan adds a TXT record at `_acme-challenge.<your host>` in your Cloudflare zone, waits for it to appear, lets Let's Encrypt check it and deletes it. No port needs to be open, and the host name may point at a private address.
