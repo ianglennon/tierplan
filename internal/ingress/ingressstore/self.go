@@ -177,3 +177,44 @@ func systemInsertError(ctx context.Context, q *sqlc.Queries, host string, err er
 	}
 	return fmt.Errorf("ingressstore: claim %q for TierPlan: %w", host, err)
 }
+
+// ClearSystemClaim removes TierPlan's own route from environment envID: the claim and its route go in
+// one transaction (the route by cascade), the environment's config_version is raised and hook, which may
+// be nil, runs in the same transaction with the claim as it was. An error of the hook rolls the removal
+// back. With no system claim in envID it returns ok=false and writes nothing: no version change, no
+// notification, no hook.
+func (s *Store) ClearSystemClaim(ctx context.Context, envID, actor string, now time.Time, hook SystemClaimHook) (SystemClaim, bool, error) {
+	if now.IsZero() {
+		now = s.now()
+	}
+	now = now.UTC()
+	var cleared SystemClaim
+	var ok bool
+	err := s.write(ctx, envID, actor, now, func(tx *sql.Tx, q *sqlc.Queries) (bool, error) {
+		row, err := q.GetSystemClaim(ctx)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("ingressstore: read TierPlan's own route: %w", err)
+		}
+		if row.EnvID != envID {
+			return false, nil // the install's claim sits in another environment: nothing of this one's to clear
+		}
+		if _, err := q.DeleteSystemClaim(ctx, envID); err != nil {
+			return false, fmt.Errorf("ingressstore: clear TierPlan's own route: %w", err)
+		}
+		c := systemClaimOf(row)
+		if hook != nil {
+			if err := hook(ctx, tx, c); err != nil {
+				return false, err
+			}
+		}
+		cleared, ok = c, true
+		return true, nil
+	})
+	if err != nil {
+		return SystemClaim{}, false, err
+	}
+	return cleared, ok, nil
+}

@@ -250,3 +250,196 @@ func TestTwoSystemClaimsAtOnceLeaveOne(t *testing.T) {
 		t.Fatalf("the loser's environment config_version = %d, want %d unchanged", v, versions[loser.in.EnvID])
 	}
 }
+
+func TestClearSystemClaim(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "e1", "One")
+	seedEnv(t, st, "e2", "Two")
+	d1 := registerDomain(t, s, "e1", "apps.example.org")
+
+	// With nothing held: ok=false, nothing written, the hook does not run.
+	before := configVersion(t, st, "e1")
+	ran := 0
+	count0 := func(context.Context, *sql.Tx, SystemClaim) error { ran++; return nil }
+	if c, ok, err := s.ClearSystemClaim(ctx, "e1", "u2", fixedNow, count0); err != nil || ok || c != (SystemClaim{}) {
+		t.Fatalf("ClearSystemClaim with nothing held = %+v, %v, %v; want zero, false, nil", c, ok, err)
+	}
+	if ran != 0 || configVersion(t, st, "e1") != before {
+		t.Fatalf("an empty clear ran the hook %d times and moved config_version %d -> %d", ran, before, configVersion(t, st, "e1"))
+	}
+
+	if err := s.SetSystemClaim(ctx, selfClaim("e1", selfHost, d1.ID), nil); err != nil {
+		t.Fatal(err)
+	}
+	set := configVersion(t, st, "e1")
+
+	// Another environment's clear leaves the claim alone.
+	if _, ok, err := s.ClearSystemClaim(ctx, "e2", "u2", fixedNow, count0); err != nil || ok {
+		t.Fatalf("clear from the wrong environment = ok %v, err %v; want ok=false", ok, err)
+	}
+	if _, ok, _ := s.SystemClaim(ctx); !ok || ran != 0 || configVersion(t, st, "e1") != set {
+		t.Fatalf("a clear from another environment changed something: ok %v, hook runs %d", ok, ran)
+	}
+
+	// A hook error leaves the claim, its route and the version in place.
+	boom := errors.New("audit write failed")
+	if _, ok, err := s.ClearSystemClaim(ctx, "e1", "u2", fixedNow, func(context.Context, *sql.Tx, SystemClaim) error { return boom }); !errors.Is(err, boom) || ok {
+		t.Fatalf("clear with a failing hook = ok %v, err %v; want the hook's error", ok, err)
+	}
+	if _, ok, _ := s.SystemClaim(ctx); !ok {
+		t.Fatal("the claim was lost although the hook failed")
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_routes`); n != 1 {
+		t.Fatalf("%d route rows after a rolled-back clear, want 1", n)
+	}
+	if v := configVersion(t, st, "e1"); v != set {
+		t.Fatalf("config_version %d -> %d across a rolled-back clear", set, v)
+	}
+
+	// The clear: the claim and its route go, the version goes up by one, the hook saw the cleared claim.
+	var seen []SystemClaim
+	got, ok, err := s.ClearSystemClaim(ctx, "e1", "u2", fixedNow, func(_ context.Context, tx *sql.Tx, c SystemClaim) error {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM ingress_hostnames`).Scan(&n); err != nil || n != 0 {
+			t.Errorf("hostname rows visible to the hook = %d, %v; want 0 (it runs after the delete)", n, err)
+		}
+		seen = append(seen, c)
+		return nil
+	})
+	if err != nil || !ok {
+		t.Fatalf("ClearSystemClaim = ok %v, err %v", ok, err)
+	}
+	want := SystemClaim{EnvID: "e1", Hostname: selfHost, DomainID: d1.ID, Service: "tierplan", Port: 7480, ClaimedBy: "u1", ClaimedAt: fixedNow}
+	if got != want || len(seen) != 1 || seen[0] != want {
+		t.Fatalf("cleared %+v, hook saw %+v; want %+v once", got, seen, want)
+	}
+	if _, ok, _ := s.SystemClaim(ctx); ok {
+		t.Fatal("SystemClaim still reports a claim after the clear")
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_routes`); n != 0 {
+		t.Fatalf("%d route rows after the clear, want 0 (cascade)", n)
+	}
+	if v := configVersion(t, st, "e1"); v != set+1 {
+		t.Fatalf("config_version = %d after the clear, want %d", v, set+1)
+	}
+
+	// The claim can be made again once cleared, anywhere.
+	if err := s.SetSystemClaim(ctx, selfClaim("e1", selfHost, d1.ID), nil); err != nil {
+		t.Fatalf("a claim after the clear: %v", err)
+	}
+}
+
+func TestSystemClaimRacingDomainDelete(t *testing.T) {
+	ctx := context.Background()
+
+	// check judges one finished run: exactly one of the two allowed end states.
+	check := func(t *testing.T, s *Store, setErr, delErr error) {
+		t.Helper()
+		_, held, err := s.SystemClaim(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case held && setErr == nil && delErr != nil:
+			// The claim exists and the domain delete was refused.
+			var inUse *DomainInUseError
+			if !errors.As(delErr, &inUse) {
+				t.Fatalf("claim in place but the delete said %v, want *DomainInUseError", delErr)
+			}
+		case !held && setErr != nil && delErr == nil:
+			// The domain is gone and the claim was refused with nothing written.
+			if !errors.Is(setErr, ErrDomainNotFound) {
+				t.Fatalf("domain gone but SetSystemClaim said %v, want ErrDomainNotFound", setErr)
+			}
+		default:
+			t.Fatalf("inconsistent end state: claim held %v, SetSystemClaim %v, DeleteDomain %v", held, setErr, delErr)
+		}
+	}
+	fresh := func(t *testing.T) (*Store, string) {
+		t.Helper()
+		s, st, _ := newTestStore(t)
+		seedEnv(t, st, "e1", "One")
+		d := registerDomain(t, s, "e1", "apps.example.org")
+		return s, d.ID
+	}
+
+	// Both orders, run in sequence: the two states are always exercised.
+	t.Run("claim first", func(t *testing.T) {
+		s, id := fresh(t)
+		setErr := s.SetSystemClaim(ctx, selfClaim("e1", selfHost, id), nil)
+		check(t, s, setErr, s.DeleteDomain(ctx, "e1", id, nil))
+	})
+	t.Run("delete first", func(t *testing.T) {
+		s, id := fresh(t)
+		delErr := s.DeleteDomain(ctx, "e1", id, nil)
+		check(t, s, s.SetSystemClaim(ctx, selfClaim("e1", selfHost, id), nil), delErr)
+	})
+
+	// And at once, 20 times on fresh stores.
+	for i := 0; i < 20; i++ {
+		s, id := fresh(t)
+		var setErr, delErr error
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			setErr = s.SetSystemClaim(ctx, selfClaim("e1", selfHost, id), nil)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			delErr = s.DeleteDomain(ctx, "e1", id, nil)
+		}()
+		close(start)
+		wg.Wait()
+		check(t, s, setErr, delErr)
+	}
+}
+
+func TestStackCannotTakeTheSystemHostname(t *testing.T) {
+	ctx := context.Background()
+	s, st, _ := newTestStore(t)
+	seedEnv(t, st, "e1", "One")
+	seedEnv(t, st, "e2", "Two")
+	seedStack(t, st, "stack-1", "e1", "web")
+	seedStack(t, st, "stack-2", "e2", "api")
+	d1 := registerDomain(t, s, "e1", "apps.example.org")
+	registerDomain(t, s, "e2", "apps.example.org")
+	if err := s.SetSystemClaim(ctx, selfClaim("e1", selfHost, d1.ID), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct{ env, stack string }{{"e1", "stack-1"}, {"e2", "stack-2"}} {
+		before := configVersion(t, st, c.env)
+		decl := ingress.Declaration{Service: "web", Host: selfHost, Label: "tierplan.ingress.host", Port: 8080}
+		_, err := s.ReplaceStackRoutes(ctx, ReplaceInput{EnvID: c.env, StackID: c.stack, Actor: "alice", Decls: []ingress.Declaration{decl}})
+		var refused *RefusedError
+		if !errors.As(err, &refused) {
+			t.Fatalf("stack %s taking the system hostname = %v, want a *RefusedError", c.stack, err)
+		}
+		var taken bool
+		for _, p := range refused.Problems {
+			taken = taken || p.Code == ingress.CodeHostTaken
+		}
+		if !taken {
+			t.Fatalf("problems %+v, want one with %s", refused.Problems, ingress.CodeHostTaken)
+		}
+		if v := configVersion(t, st, c.env); v != before {
+			t.Fatalf("config_version of %s moved %d -> %d on a refusal", c.env, before, v)
+		}
+	}
+	// Nothing changed: the host is still the system's, with its one route, and no stack holds anything.
+	got, ok, err := s.SystemClaim(ctx)
+	if err != nil || !ok || got.Hostname != selfHost || got.EnvID != "e1" {
+		t.Fatalf("SystemClaim = %+v, %v, %v; want the original claim", got, ok, err)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_hostnames`); n != 1 {
+		t.Fatalf("%d hostname rows, want 1", n)
+	}
+	if n := count(t, st, `SELECT COUNT(*) FROM ingress_routes`); n != 1 {
+		t.Fatalf("%d route rows, want 1", n)
+	}
+}
