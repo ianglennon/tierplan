@@ -13,6 +13,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/audit/audittest"
 	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -208,6 +209,140 @@ func TestIngressDisableReleasesTheSelfRouteFirst(t *testing.T) {
 		}
 		if n := r.auditCount(audit.ActionIngressSelfRouteDisabled); n != 1 {
 			t.Errorf("%d ingress.self_route_disabled rows, want 1", n)
+		}
+	})
+}
+
+// selfNetworkKept fails the test unless the job ended done with the self network kept because TierPlan is on it.
+func selfNetworkKept(t *testing.T, job jobs.Job) {
+	t.Helper()
+	if job.State != jobs.JobDone {
+		t.Fatalf("job state = %q, want done: TierPlan on tierplan-self must not fail the switch-off; items = %+v", job.State, job.Items)
+	}
+	it := itemOf(job, ingressdeploy.ItemSelfNetwork)
+	if it.State != jobs.ItemDone || it.Result["removed"] != "false" || it.Result["reason"] != "tierplan_attached" {
+		t.Errorf("self_network = %q %v, want done {removed: false, reason: tierplan_attached}", it.State, it.Result)
+	}
+}
+
+// TestIngressDisableLeavesTierPlanSelfWhileTierPlanIsOnIt is A-06 for the switch-off: self_network runs after the ingress
+// network and removes tierplan-self; while TierPlan's own task is on it, or the engine answers it is still in use, the item is
+// done with the network kept and the reason tierplan_attached, and the job does not fail. On a standalone host TierPlan takes
+// its own container off the bridge, then removes it.
+func TestIngressDisableLeavesTierPlanSelfWhileTierPlanIsOnIt(t *testing.T) {
+	swarmItems := []string{"self_route", "virtual_ip", "switch_off", "service", "volumes", "network", "self_network", "secret", "token", "nodes"}
+
+	t.Run("swarm, TierPlan attached", func(t *testing.T) {
+		r, facts := newSelfRig(t, selfRigOptions{})
+		r.claimSelf()
+		r.round()
+		if _, ok := r.selfNetwork(); !ok {
+			t.Fatal("no tierplan-self after a pass with the route on")
+		}
+		facts.setAttached(true)
+
+		id, err := r.svc.Disable(testsupport.Context(t), testActor, testOwner, r.envID, seesAll)
+		if err != nil {
+			t.Fatalf("Disable: %v", err)
+		}
+		job := r.wait(id)
+		if got := itemIDs(job); !slices.Equal(got, swarmItems) {
+			t.Fatalf("items = %v, want %v", got, swarmItems)
+		}
+		selfNetworkKept(t, job)
+		if _, ok := r.selfNetwork(); !ok {
+			t.Error("tierplan-self was removed while TierPlan is on it")
+		}
+		if o, ok := r.svc.SelfObservationOf(r.envID); !ok || !o.Exists || !o.KeptInUse {
+			t.Errorf("observation after the switch-off = %+v, want the network there and kept in use", o)
+		}
+	})
+
+	t.Run("swarm, the engine says it is in use", func(t *testing.T) {
+		r, _ := newSelfRig(t, selfRigOptions{config: func(c *dockertest.FakeConfig) {
+			c.RemoveErrors = map[string]string{ingress.SelfNetworkName: "error while removing network: network has active endpoints"}
+		}})
+		r.claimSelf()
+		r.round()
+		id, err := r.svc.Disable(testsupport.Context(t), testActor, testOwner, r.envID, seesAll)
+		if err != nil {
+			t.Fatalf("Disable: %v", err)
+		}
+		job := r.wait(id)
+		selfNetworkKept(t, job)
+		if _, ok := r.selfNetwork(); !ok {
+			t.Error("tierplan-self is gone though the engine refused its removal")
+		}
+	})
+
+	t.Run("swarm, TierPlan not attached", func(t *testing.T) {
+		r, _ := newSelfRig(t, selfRigOptions{})
+		r.claimSelf()
+		r.round()
+		id, err := r.svc.Disable(testsupport.Context(t), testActor, testOwner, r.envID, seesAll)
+		if err != nil {
+			t.Fatalf("Disable: %v", err)
+		}
+		job := r.wait(id)
+		if job.State != jobs.JobDone {
+			t.Fatalf("job state = %q, want done; items = %+v", job.State, job.Items)
+		}
+		if it := itemOf(job, ingressdeploy.ItemSelfNetwork); it.State != jobs.ItemDone || it.Result["removed"] != "true" || it.Result["reason"] != "" {
+			t.Errorf("self_network = %q %v, want done {removed: true}", it.State, it.Result)
+		}
+		if _, ok := r.selfNetwork(); ok {
+			t.Error("tierplan-self is still there with nothing on it")
+		}
+		if o, ok := r.svc.SelfObservationOf(r.envID); !ok || o.Exists || o.KeptInUse {
+			t.Errorf("observation after the switch-off = %+v, want the network gone", o)
+		}
+	})
+
+	t.Run("swarm, no self network", func(t *testing.T) {
+		r, _ := newSelfRig(t, selfRigOptions{})
+		id, err := r.svc.Disable(testsupport.Context(t), testActor, testOwner, r.envID, seesAll)
+		if err != nil {
+			t.Fatalf("Disable: %v", err)
+		}
+		job := r.wait(id)
+		if it := itemOf(job, ingressdeploy.ItemSelfNetwork); it.State != jobs.ItemDone || it.Result["removed"] != "false" || it.Result["reason"] != "" {
+			t.Errorf("self_network = %q %v, want done {removed: false}", it.State, it.Result)
+		}
+	})
+
+	t.Run("standalone", func(t *testing.T) {
+		r, self := newStandaloneSelfRig(t, standaloneSelfOptions{})
+		r.claimSelf()
+		r.round()
+		n, ok := r.selfNetwork()
+		if !ok {
+			t.Fatal("no tierplan-self bridge after a pass with the route on")
+		}
+		if o := r.observation(); !o.Attached {
+			t.Fatalf("observation = %+v, want TierPlan connected", o)
+		}
+
+		id, err := r.svc.Disable(testsupport.Context(t), testActor, testOwner, r.envID, seesAll)
+		if err != nil {
+			t.Fatalf("Disable: %v", err)
+		}
+		job := r.wait(id)
+		want := []string{"self_route", "switch_off", "proxy", "network", "self_network", "volumes", "token", "nodes"}
+		if got := itemIDs(job); !slices.Equal(got, want) {
+			t.Fatalf("items = %v, want %v", got, want)
+		}
+		if job.State != jobs.JobDone {
+			t.Fatalf("job state = %q, want done; items = %+v", job.State, job.Items)
+		}
+		_, disconnects := self.calls()
+		if len(disconnects) != 1 || disconnects[0] != (selfCall{network: n.ID, container: "c1"}) {
+			t.Errorf("disconnects = %+v, want one of c1 from %s", disconnects, n.ID)
+		}
+		if it := itemOf(job, ingressdeploy.ItemSelfNetwork); it.Result["removed"] != "true" {
+			t.Errorf("self_network result = %v, want removed", it.Result)
+		}
+		if _, ok := r.selfNetwork(); ok {
+			t.Error("the tierplan-self bridge is still there")
 		}
 	})
 }
