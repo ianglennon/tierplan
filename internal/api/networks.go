@@ -796,13 +796,13 @@ func recordRemoved(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	recordNetwork(ctx, d, p, envID, userAgent, audit.ActionNetworkRemoved, row.ID, row.Name, code, details)
 }
 
-// ingressOwnsNetwork says whether the network is TierPlan's ingress network, from a fresh inspect: the
-// component label and the exact reserved name together (D-41), never the label alone and never the list's
-// copy of it. A network of any other name is not asked about. A network the engine no longer has is not
+// ingressOwnsNetwork says whether the network is one of TierPlan's own ingress networks, the ingress network
+// or the self network (D-02), from a fresh inspect: the labels and the exact reserved name together (D-41),
+// never the label alone and never the list's copy of it. A network of any other name is not asked about. A network the engine no longer has is not
 // owned (the write that follows says it is gone); an inspect that fails any other way is an error, so a
 // write never goes ahead on a guess.
 func ingressOwnsNetwork(ctx context.Context, agg *envs.Aggregator, log *slog.Logger, envID, nodeID, networkID, name string) (bool, error) {
-	if name != ingress.NetworkName {
+	if name != ingress.NetworkName && name != ingress.SelfNetworkName {
 		return false, nil
 	}
 	var detail dockerx.NetworkDetail
@@ -815,7 +815,7 @@ func ingressOwnsNetwork(ctx context.Context, agg *envs.Aggregator, log *slog.Log
 	})
 	switch {
 	case err == nil:
-		return ingress.OwnsNetwork(detail.Name, detail.Labels), nil
+		return ingress.OwnsAnyNetwork(detail.Name, detail.Labels), nil
 	case dockerx.IsNotFound(err):
 		return false, nil
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
@@ -1030,7 +1030,7 @@ func getNetwork(ctx context.Context, d NetworksDeps, envID string, in *NetworkDe
 		ID: row.ID, Name: row.Name, Driver: row.Driver, Scope: row.Scope, Node: row.Node, NodeID: row.NodeID,
 		Created: rfc3339(detail.Created), Internal: detail.Internal, Attachable: detail.Attachable, IPv6: detail.IPv6,
 		BuiltIn: dockerx.IsBuiltinNetwork(row.Name, detail.Ingress || row.Ingress),
-		Ingress: ingress.OwnsNetwork(detail.Name, detail.Labels),
+		Ingress: ingress.OwnsAnyNetwork(detail.Name, detail.Labels),
 		Owner:   owner, OwnerKind: kind, Labels: detail.Labels, Options: detail.Options,
 		IPAM:         make([]NetworkIPAMBody, 0, len(detail.IPAM)),
 		Attachments:  []NetworkAttachmentBody{},
