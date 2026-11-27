@@ -20,6 +20,8 @@ entryPoints:
       aliasHeadersStrategy: delete
       redirections:
         entryPoint:
+          # The redirect is an ordinary router at the lowest priority, so TierPlan's own challenge router wins on its host and path (Phase 28 S12).
+          priority: 1
           to: ":443"
           scheme: https
           permanent: true
