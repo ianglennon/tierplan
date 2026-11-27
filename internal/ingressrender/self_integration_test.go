@@ -169,3 +169,41 @@ func TestRenderedSelfRouteRefusesAnUntrustedBackend(t *testing.T) {
 		}
 	})
 }
+
+// TestRenderedCarveOutReachesThePlainListener proves D-12 and SELF-04 through the rendered bundle: with
+// selfServerName as an ACME host, the challenge path on that name reaches the stub's plain listener on
+// port 80 (it answers "<token>.stub"), ahead of the redirect to https, while the same path on
+// TierPlan's routed host and another path on its own name are still the redirect's 301. The carve-out
+// opens nothing on port 80 but TierPlan's own challenge.
+func TestRenderedCarveOutReachesThePlainListener(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	cert, key := traefiktest.SelfSignedLeaf(t, selfServerName)
+	s := startSelfSite(t, cert, key, cert, func(in *Input) { in.Self.ACMEHosts = []string{selfServerName} })
+	// The route answering 200 is the sign the whole file has been read.
+	s.awaitGet(t, selfFront, "/")
+	plain := &s12Site{tr: s.tr}
+	web := func(host, target string) (status int, location, body string) {
+		t.Helper()
+		status, location, body, err := plain.get(s12WebPort, host, target)
+		if err != nil {
+			t.Fatalf("GET http://%s%s on the web entry point: %v", host, target, err)
+		}
+		t.Logf("http://%s%s answered %d (Location %q, body %q)", host, target, status, location, body)
+		return status, location, body
+	}
+
+	status, _, body := web(selfServerName, s12ChallengePath)
+	if status != http.StatusOK || body != "tok.stub" {
+		t.Errorf("http://%s%s answered %d %q, want 200 \"tok.stub\" from the stub's plain listener", selfServerName, s12ChallengePath, status, body)
+	}
+
+	status, location, _ := web(selfFront, s12ChallengePath)
+	if status != http.StatusMovedPermanently || location != "https://"+selfFront+s12ChallengePath {
+		t.Errorf("http://%s%s answered %d with Location %q, want 301 to https: the carve-out is for the ACME hosts only", selfFront, s12ChallengePath, status, location)
+	}
+
+	status, location, _ = web(selfServerName, "/")
+	if status != http.StatusMovedPermanently || location != "https://"+selfServerName+"/" {
+		t.Errorf("http://%s/ answered %d with Location %q, want 301 to https: the carve-out is for the challenge path only", selfServerName, status, location)
+	}
+}
