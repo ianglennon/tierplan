@@ -340,22 +340,30 @@ func networkNameTaken(project *types.Project, network string) bool {
 	return false
 }
 
-// CodeIngressNetworkReserved is a compose file that declares the shared ingress network's name as a
-// network of its own: the name belongs to TierPlan (WR-09), so a stack may only point at that network
-// as an external one.
+// CodeIngressNetworkReserved is a compose file that declares the shared ingress network's name, or the self
+// network's (D-02), as a network of its own: the names belong to TierPlan (WR-09), so a stack may only point at
+// those networks as an external one.
 const CodeIngressNetworkReserved = "ingress_network_reserved"
 
 // networkReservedProblems reports each top-level network whose key or resolved name is the shared
-// ingress network's, unless it is the external declaration of that network. The error is at the
-// network's key, for every target.
+// ingress network's or the self network's, unless it is the external declaration of that same network. The
+// error is at the network's key, for every target.
 func networkReservedProblems(project *types.Project, idx *PositionIndex) Problems {
 	var out Problems
 	for _, key := range sortedKeys(project.Networks) {
 		n := project.Networks[key]
-		if key != ingress.NetworkName && n.Name != ingress.NetworkName {
+		var reserved, message string
+		switch {
+		case key == ingress.NetworkName || n.Name == ingress.NetworkName:
+			reserved = ingress.NetworkName
+			message = "The network name " + ingress.NetworkName + " is TierPlan's own for the network ingress routes use. To reach it, declare it with external: true; for a network of your own, use another name."
+		case key == ingress.SelfNetworkName || n.Name == ingress.SelfNetworkName:
+			reserved = ingress.SelfNetworkName
+			message = "The network name " + ingress.SelfNetworkName + " is TierPlan's own network for its own route. To reach it, declare it with external: true; for a network of your own, use another name."
+		default:
 			continue
 		}
-		if bool(n.External) && n.Name == ingress.NetworkName {
+		if bool(n.External) && n.Name == reserved {
 			continue
 		}
 		node, file := idx.locateAny("networks."+key+".name", "networks."+key)
@@ -363,7 +371,7 @@ func networkReservedProblems(project *types.Project, idx *PositionIndex) Problem
 		out = append(out, Problem{
 			Severity: SeverityError, Code: CodeIngressNetworkReserved, File: file, Key: "networks." + key,
 			Line: line, Col: col, EndLine: endLine, EndCol: endCol,
-			Message: "The network name " + ingress.NetworkName + " is TierPlan's own for the network ingress routes use. To reach it, declare it with external: true; for a network of your own, use another name.",
+			Message: message,
 		})
 	}
 	return out

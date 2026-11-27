@@ -2133,6 +2133,14 @@ func TestTierPlanSelfNetworkIsReadOnly(t *testing.T) {
 	if d := decode[ingressFlag](t, f.get(t, e, "networks/mine0")); d.Ingress {
 		t.Errorf("detail of a user network = %+v, want the flag off", d)
 	}
+	list := decode[listBody[ingressFlag]](t, f.get(t, e, "networks"))
+	flags := map[string]bool{}
+	for _, it := range list.Items {
+		flags[it.Name] = it.Ingress
+	}
+	if !flags[ingress.SelfNetworkName] || flags["bridge"] || flags["mine"] {
+		t.Errorf("list flags = %v, want the flag on for %s only", flags, ingress.SelfNetworkName)
+	}
 
 	wantIngressOwnedRec(t, "delete", f.deleteNet(t, e, "self0"))
 	wantIngressOwnedRec(t, "connect", f.connectNet(t, e, "self0", `{"containerId":"c1"}`))

@@ -587,7 +587,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				return NetworkItem{
 					AddressesUsed: fullness[n.ID],
 					Node:          n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created),
-					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), Ingress: ingress.OwnsNetwork(n.Name, n.Labels), AttachedContainers: containers, AttachedServices: services,
+					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), Ingress: ingress.OwnsAnyNetwork(n.Name, n.Labels), AttachedContainers: containers, AttachedServices: services,
 					Owner: owner, OwnerKind: kind, Internal: n.Internal, Attachable: n.Attachable, IPv6: n.IPv6,
 				}
 			})
