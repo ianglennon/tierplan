@@ -190,7 +190,13 @@ func (s *Service) ensure(ctx context.Context, envID string, state ingressstore.D
 	if !info.ManagerConnected {
 		return EnsureUnreachable, true
 	}
-	p, class := s.survey(ctx, envID, state)
+	sp := s.selfPassOf(ctx, info)
+	return s.ensureSwarm(ctx, envID, state, sp)
+}
+
+// ensureSwarm is the pass over a swarm whose manager is connected. sp is what the pass knows of the self network.
+func (s *Service) ensureSwarm(ctx context.Context, envID string, state ingressstore.DeployState, sp *selfPass) (class string, record bool) {
+	p, class := s.survey(ctx, envID, state, sp)
 	if class != "" {
 		return class, true
 	}
@@ -207,7 +213,7 @@ func (s *Service) ensure(ctx context.Context, envID string, state ingressstore.D
 	defer release()
 	// Under the lock, which an enable, a switch-off, a stack operation and an Admin's token rotation hold too: the switches
 	// and the swarm are read again, and whatever changed since the plan decides what is written.
-	state, err = s.d.Store.DeployState(ctx, envID)
+	state, err := s.d.Store.DeployState(ctx, envID)
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not read an environment's state under the lock", "environment", envID, "error", err)
 		return EnsureWriteFailed, true
@@ -218,13 +224,13 @@ func (s *Service) ensure(ctx context.Context, envID string, state ingressstore.D
 	if state.Paused {
 		return s.observePaused(ctx, envID, state)
 	}
-	if p, class = s.survey(ctx, envID, state); class != "" {
+	if p, class = s.survey(ctx, envID, state, sp); class != "" {
 		return class, true
 	}
 	if !p.work {
 		return p.class(), true
 	}
-	held2, err := s.repair(ctx, envID, state, p.l)
+	held2, err := s.repair(ctx, envID, state, p.l, sp)
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not put the ingress objects right", "environment", envID, "error", err)
 		return EnsureWriteFailed, true
@@ -255,7 +261,7 @@ func (p ensurePlan) class() string {
 
 // survey reads the swarm and makes the plan. A class that is not empty says why it could not: the ingress URL is unusable,
 // the swarm cannot be read or the comparison failed; nothing has been written in any of them.
-func (s *Service) survey(ctx context.Context, envID string, state ingressstore.DeployState) (ensurePlan, string) {
+func (s *Service) survey(ctx context.Context, envID string, state ingressstore.DeployState, sp *selfPass) (ensurePlan, string) {
 	if !validIngressURL(s.url()) {
 		return ensurePlan{}, EnsureURLUnset
 	}
@@ -267,7 +273,7 @@ func (s *Service) survey(ctx context.Context, envID string, state ingressstore.D
 		s.log().Warn("the ingress ensure loop could not read a swarm", "environment", envID, "error", err)
 		return ensurePlan{}, EnsureUnreachable
 	}
-	p, err := s.needsWrite(ctx, envID, state, l)
+	p, err := s.needsWrite(ctx, envID, state, l, sp)
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not compare a swarm with what it wants", "environment", envID, "error", err)
 		return ensurePlan{}, EnsureWriteFailed
@@ -306,11 +312,11 @@ func (s *Service) observePaused(ctx context.Context, envID string, state ingress
 	return EnsurePaused, true
 }
 
-// needsWrite makes the plan from the swarm as read: no secret for the current token, no network, no service or one that
-// differs from what this server wants, or old token secrets to take away. It writes nothing, so a pass over a swarm that is
-// as wanted never takes the lock. A service whose update to the wanted spec was rolled back is not a thing to write (held),
-// though the old secrets may still be.
-func (s *Service) needsWrite(ctx context.Context, envID string, state ingressstore.DeployState, l live) (ensurePlan, error) {
+// needsWrite makes the plan from the swarm as read: no secret for the current token, no network, a self network wanted and
+// missing, no service or one that differs from what this server wants, or old token secrets to take away. It writes nothing,
+// so a pass over a swarm that is as wanted never takes the lock. A service whose update to the wanted spec was rolled back is
+// not a thing to write (held), though the old secrets may still be.
+func (s *Service) needsWrite(ctx context.Context, envID string, state ingressstore.DeployState, l live, sp *selfPass) (ensurePlan, error) {
 	p := ensurePlan{l: l}
 	st, err := s.d.Tokens.TokenStatus(ctx, envID)
 	if err != nil {
@@ -330,6 +336,10 @@ func (s *Service) needsWrite(ctx context.Context, envID string, state ingresssto
 		p.work = true
 		return p, nil
 	}
+	if sp.selfWork(l) {
+		p.work = true
+		return p, nil
+	}
 	if !have {
 		// A disabled token with no secret is an admin's decision, and nothing is left to run the proxy with.
 		return p, nil
@@ -338,7 +348,7 @@ func (s *Service) needsWrite(ctx context.Context, envID string, state ingresssto
 		p.work = true
 		return p, nil
 	}
-	desired := s.desiredService(serviceInput{secretID: cur.ID, secretName: cur.Name, accessLog: state.AccessLogs})
+	desired := s.desiredService(serviceInput{secretID: cur.ID, secretName: cur.Name, accessLog: state.AccessLogs, selfNetwork: sp.attachWanted(l)})
 	changes, err := serviceChanges(desired, l.service.Spec, l.networks)
 	if err != nil {
 		return p, err
@@ -355,9 +365,10 @@ func (s *Service) needsWrite(ctx context.Context, envID string, state ingresssto
 }
 
 // repair runs the shared steps one write at a time, each of which writes only on a difference, and then takes the
-// token secrets of earlier generations away. The caller holds the operation lock. held is true when the service was left
-// alone because its update to the wanted spec was rolled back already.
-func (s *Service) repair(ctx context.Context, envID string, state ingressstore.DeployState, l live) (held bool, err error) {
+// token secrets of earlier generations away. The self network step comes before the proxy spec is built, so the spec
+// attaches to the network the step found or made. The caller holds the operation lock. held is true when the service was
+// left alone because its update to the wanted spec was rolled back already.
+func (s *Service) repair(ctx context.Context, envID string, state ingressstore.DeployState, l live, sp *selfPass) (held bool, err error) {
 	var secretID, secretName string
 	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) (err error) {
 		secretID, secretName, err = s.ensureSecret(ctx, c, audit.SystemIngress, envID, false)
@@ -371,6 +382,12 @@ func (s *Service) repair(ctx context.Context, envID string, state ingressstore.D
 	}); err != nil {
 		return false, err
 	}
+	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) (err error) {
+		sp.net, err = s.ensureSelfNetwork(ctx, c, sp.info, sp.wantNow(l))
+		return err
+	}); err != nil {
+		return false, err
+	}
 	if secretName == "" {
 		// A disabled token whose secret is gone: there is nothing to run the proxy with, and the loop does not undo the disable.
 		return false, nil
@@ -379,7 +396,7 @@ func (s *Service) repair(ctx context.Context, envID string, state ingressstore.D
 	if err != nil {
 		return false, err
 	}
-	in := serviceInput{envID: envID, secretID: secretID, secretName: secretName, accessLog: state.AccessLogs, auth: auth}
+	in := serviceInput{envID: envID, secretID: secretID, secretName: secretName, accessLog: state.AccessLogs, auth: auth, selfNetwork: sp.net.attach}
 	wrote := false
 	if err := s.d.Engine.WriteOnManager(ctx, envID, func(c *dockerx.Client) (err error) {
 		wrote, err = s.ensureService(ctx, c, in)

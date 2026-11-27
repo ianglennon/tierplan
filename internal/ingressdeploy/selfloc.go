@@ -9,11 +9,8 @@ import (
 	"slices"
 
 	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
 )
-
-// selfNetworkName is the network TierPlan's own container is attached to for its route. 28-08's exported constant replaces
-// this one when the ensure loop is wired (28-22).
-const selfNetworkName = "tierplan-self"
 
 // CodeSelfRouteNotHere refuses to switch TierPlan's own route on in an environment TierPlan does not run in, or when it
 // cannot be told whether it does: a route that guesses wrong sends the hostname to a place TierPlan cannot be reached
@@ -125,7 +122,7 @@ func (s *Service) SelfLocation(ctx context.Context, info EnvInfo) (SelfPlace, []
 		s.log().Warn("could not read TierPlan's own container for its route", "error", err)
 		return s.selfUnknownHere(), selfRefusal(selfUnknownMessage), nil
 	}
-	place := SelfPlace{Here: SelfHereYes, EnvName: info.Name, Attached: slices.Contains(facts.Networks, selfNetworkName), EnvHere: true}
+	place := SelfPlace{Here: SelfHereYes, EnvName: info.Name, Attached: slices.Contains(facts.Networks, ingress.SelfNetworkName), EnvHere: true}
 	if info.Swarm {
 		if !facts.Swarm {
 			place.Kind = SelfKindSwarmContainer

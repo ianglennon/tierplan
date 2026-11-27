@@ -117,6 +117,9 @@ type SpecInput struct {
 	SecretName string
 	// AccessLog switches Traefik's access log on (D-31).
 	AccessLog bool
+	// SelfNetwork attaches the proxy to the self network as well, so it reaches TierPlan's own service there (D-02). The
+	// ensure loop sets it only while the network is TierPlan's and wanted; TierPlan's own service is never touched (D-03).
+	SelfNetwork bool
 }
 
 // ProxyServiceSpec is the global service that runs the proxy on every node: a user without
@@ -135,6 +138,10 @@ func ProxyServiceSpec(in SpecInput) swarm.ServiceSpec {
 	}
 	if in.AccessLog {
 		env = append(env, ingressbundle.EnvAccessLog+"="+accessLogOn)
+	}
+	networks := []swarm.NetworkAttachmentConfig{{Target: ingress.NetworkName}}
+	if in.SelfNetwork {
+		networks = append(networks, swarm.NetworkAttachmentConfig{Target: ingress.SelfNetworkName})
 	}
 	return swarm.ServiceSpec{
 		Annotations: swarm.Annotations{Name: ingress.ServiceName, Labels: ingress.ObjectLabels()},
@@ -164,7 +171,7 @@ func ProxyServiceSpec(in SpecInput) swarm.ServiceSpec {
 					VolumeOptions: &mount.VolumeOptions{Labels: ingress.ObjectLabels()},
 				}},
 			},
-			Networks: []swarm.NetworkAttachmentConfig{{Target: ingress.NetworkName}},
+			Networks: networks,
 			LogDriver: &swarm.Driver{
 				Name:    "json-file",
 				Options: map[string]string{"max-size": LogMaxSize, "max-file": LogMaxFile},

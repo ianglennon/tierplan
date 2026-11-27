@@ -229,6 +229,12 @@ func (s *Service) Preview(ctx context.Context, envID string, req EnableRequest) 
 
 // chooseSubnet is the lowest free block of the ingress network's size in the swarm's pools.
 func (s *Service) chooseSubnet(ctx context.Context, envID string, fresh bool) (string, error) {
+	return s.chooseSubnetSized(ctx, envID, fresh, NetworkPrefix)
+}
+
+// chooseSubnetSized is the lowest free block of the given prefix length in the swarm's pools: the one planner of the
+// ingress network and the self network.
+func (s *Service) chooseSubnetSized(ctx context.Context, envID string, fresh bool, bits int) (string, error) {
 	if s.d.AddressSpaces == nil {
 		return "", errors.New("no address spaces to choose a subnet from")
 	}
@@ -236,7 +242,7 @@ func (s *Service) chooseSubnet(ctx context.Context, envID string, fresh bool) (s
 	if err != nil {
 		return "", err
 	}
-	block, _, err := netspace.LowestFree(in.Pools, in.Occupied, in.Avoid, NetworkPrefix)
+	block, _, err := netspace.LowestFree(in.Pools, in.Occupied, in.Avoid, bits)
 	if err != nil {
 		return "", err
 	}
@@ -471,7 +477,7 @@ func (e *enableRun) service(ctx context.Context) error {
 	if err != nil {
 		return fail(CodeEnableServiceFailed, err)
 	}
-	in := serviceInput{envID: e.envID, secretID: e.secretID, secretName: e.secretName, accessLog: state.AccessLogs, auth: auth, always: true}
+	in := serviceInput{envID: e.envID, secretID: e.secretID, secretName: e.secretName, accessLog: state.AccessLogs, auth: auth, always: true, keepSelf: true}
 	err = s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
 		_, err := s.ensureService(ctx, c, in)
 		return err
@@ -627,12 +633,18 @@ type serviceInput struct {
 	// always writes the update of an existing service even when it already matches (an enable does, so a repeat
 	// brings the service to the spec); false writes it only on a difference (the ensure loop).
 	always bool
+	// selfNetwork attaches the proxy to the self network too (SpecInput.SelfNetwork).
+	selfNetwork bool
+	// keepSelf keeps the self network attachment the live service has, when the network is TierPlan's: an enable, which
+	// does not decide the self network, sets it so a repeat does not take the proxy off it until the next pass puts it back.
+	keepSelf bool
 }
 
 // desiredService is the proxy service this server wants, with the ID of its secret filled in.
 func (s *Service) desiredService(in serviceInput) swarm.ServiceSpec {
 	spec := ProxyServiceSpec(SpecInput{
 		Image: IngressImage(s.d.ServerVersion), URL: s.url(), Pin: strings.Join(s.pins(), ","), SecretName: in.secretName, AccessLog: in.accessLog,
+		SelfNetwork: in.selfNetwork,
 	})
 	spec.TaskTemplate.ContainerSpec.Secrets[0].SecretID = in.secretID
 	return spec
@@ -671,6 +683,16 @@ func (s *Service) ensureService(ctx context.Context, c *dockerx.Client, in servi
 		if !ingress.OwnsService(cur.Name, cur.Labels) {
 			return false, &stepError{code: CodeEnableServiceFailed, err: errors.New("the swarm holds a service named " + cur.Name + " that is not TierPlan's"),
 				detail: "A service named " + cur.Name + " already exists and is not TierPlan's. Remove or rename it, then enable ingress again."}
+		}
+		if in.keepSelf {
+			nets, err := c.Networks(ctx)
+			if err != nil {
+				return false, err
+			}
+			if row, ok := ownSelfNetwork(nets); ok && specNamesNetwork(cur.Spec, row) {
+				in.selfNetwork = true
+				spec = s.desiredService(in)
+			}
 		}
 		spec.TaskTemplate.ForceUpdate = liveForceUpdate(cur.Spec)
 		if !in.always {
