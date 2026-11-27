@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"slices"
 
 	"github.com/moby/moby/api/types/swarm"
 
@@ -187,4 +189,162 @@ func specNamesNetwork(stored json.RawMessage, row dockerx.NetworkRow) bool {
 		}
 	}
 	return false
+}
+
+// CodeSelfNetworkForeign is the log code of a network named tierplan-self that is not TierPlan's: it lacks the ingress label
+// or the self role. It is never attached, adopted or trusted (T-28-37); the person removes or renames it.
+const CodeSelfNetworkForeign = "self_network_foreign"
+
+// selfBridgeNetworks are the local bridges whose gateways a connection from the node itself can carry. Their gateways go into
+// the observation so the trusted set never holds them (D-06).
+var selfBridgeNetworks = []string{"bridge", "docker_gwbridge"}
+
+// SelfObservation is what one ensure pass read of an environment's self network, published to the Service's memory and to
+// the OnSelfObserved callback after every pass that could read the swarm (D-06, A-08). It carries the inputs of
+// ingress.SelfNetFacts (Facts), which the server turns into the trusted-proxy set.
+type SelfObservation struct {
+	EnvID string
+	// Exists is TierPlan's own self network (the name and the label pair) being there. A foreign one is not: Exists is false,
+	// Foreign true, and nothing of it is reported.
+	Exists bool
+	// Wanted is whether the environment wants the self network: the system claim is held in it, or TierPlan's own
+	// certificate renews over HTTP-01 and TierPlan runs here. It is false when that could not be read.
+	Wanted bool
+	// NetworkID, Subnet and Gateway are the self network's, from the engine's inspect of it; empty unless Exists.
+	NetworkID string
+	Subnet    netip.Prefix
+	Gateway   netip.Addr
+	// IngressSubnets are the subnets of every tierplan-ingress network seen, and BridgeGateways the gateways of the node's
+	// bridge and docker_gwbridge networks, as the manager read reports them.
+	IngressSubnets []netip.Prefix
+	BridgeGateways []netip.Addr
+	// Attached is TierPlan's own container being on the self network, from SelfLocation; false unless Exists.
+	Attached bool
+	// Kind is where TierPlan runs (SelfPlace.Kind), "" when it is not here or cannot be told.
+	Kind string
+	// BackendHost is the name the proxy reaches TierPlan by on the network: TierPlan's swarm service name.
+	BackendHost string
+	// Foreign is a network of the reserved name that is not TierPlan's.
+	Foreign bool
+	// KeptInUse is TierPlan's own network left in place, though not wanted, because TierPlan's service is still on it.
+	KeptInUse bool
+	// Observed is true for every observation a pass made; the zero value is "no pass has read it yet".
+	Observed bool
+}
+
+// Facts are the observation as the trusted-set builder's input. A foreign or missing network gives an invalid subnet, which
+// builds an empty set.
+func (o SelfObservation) Facts() ingress.SelfNetFacts {
+	return ingress.SelfNetFacts{
+		Subnet: o.Subnet, Gateway: o.Gateway, IngressSubnets: slices.Clone(o.IngressSubnets), BridgeGateways: slices.Clone(o.BridgeGateways),
+	}
+}
+
+// OnSelfObserved registers the function every SelfObservation is handed to, replacing any earlier one. It is called after the
+// observation is in the Service's memory, outside its locks, and may be called for two environments at once.
+func (s *Service) OnSelfObserved(f func(SelfObservation)) {
+	s.selfMu.Lock()
+	defer s.selfMu.Unlock()
+	s.selfCb = f
+}
+
+// SelfObservationOf is the last observation of the environment's self network, and whether a pass has made one since start.
+func (s *Service) SelfObservationOf(envID string) (SelfObservation, bool) {
+	s.selfMu.Lock()
+	defer s.selfMu.Unlock()
+	o, ok := s.selfObs[envID]
+	return o, ok
+}
+
+// observeSelf reads the self network, the ingress networks and the node's bridges on a manager and publishes what it found. A
+// read that fails publishes nothing, so the last observation stands rather than one with a part missing.
+func (s *Service) observeSelf(ctx context.Context, sp *selfPass) {
+	envID := sp.info.ID
+	o := SelfObservation{EnvID: envID, Wanted: sp.known && sp.wanted, Kind: sp.place.Kind, Observed: true}
+	if sp.place.Kind == SelfKindSwarmService {
+		o.BackendHost = sp.place.ServiceName
+	}
+	err := s.d.Engine.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+		o.Exists, o.NetworkID, o.Subnet, o.Gateway, o.Foreign = false, "", netip.Prefix{}, netip.Addr{}, false
+		o.IngressSubnets, o.BridgeGateways = nil, nil
+		rows, err := c.Networks(ctx)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if row.Name == ingress.NetworkName {
+				for _, sub := range row.Subnets {
+					if p, err := netip.ParsePrefix(sub); err == nil {
+						o.IngressSubnets = append(o.IngressSubnets, p.Masked())
+					}
+				}
+			}
+		}
+		if row, ok := selfNetworkRowOf(rows); ok {
+			if !ingress.OwnsSelfNetwork(row.Name, row.Labels) {
+				o.Foreign = true
+			} else {
+				d, _, err := c.NetworkDetail(ctx, row.ID, false)
+				if err != nil {
+					return err
+				}
+				o.Exists, o.NetworkID = true, d.ID
+				o.Subnet, o.Gateway = firstIPAM(d.IPAM)
+			}
+		}
+		for _, name := range selfBridgeNetworks {
+			d, _, err := c.NetworkDetail(ctx, name, false)
+			if dockerx.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			for _, r := range d.IPAM {
+				if g, err := netip.ParseAddr(r.Gateway); err == nil {
+					o.BridgeGateways = append(o.BridgeGateways, g)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		s.log().Warn("the ingress ensure loop could not read TierPlan's own network", "environment", envID, "error", err)
+		return
+	}
+	o.Attached = o.Exists && sp.place.Attached
+	s.publishSelf(o)
+}
+
+// firstIPAM is the first pool of a network with a valid subnet, and its gateway when the engine reports one.
+func firstIPAM(rows []dockerx.IPAMRow) (netip.Prefix, netip.Addr) {
+	for _, r := range rows {
+		p, err := netip.ParsePrefix(r.Subnet)
+		if err != nil {
+			continue
+		}
+		g, _ := netip.ParseAddr(r.Gateway)
+		return p.Masked(), g
+	}
+	return netip.Prefix{}, netip.Addr{}
+}
+
+// publishSelf keeps the observation and hands it to the registered function. A foreign network is logged when it is first
+// seen while the self network is wanted, not on every pass.
+func (s *Service) publishSelf(o SelfObservation) {
+	s.selfMu.Lock()
+	prev, had := s.selfObs[o.EnvID]
+	if s.selfObs == nil {
+		s.selfObs = map[string]SelfObservation{}
+	}
+	s.selfObs[o.EnvID] = o
+	cb := s.selfCb
+	s.selfMu.Unlock()
+	if o.Foreign && o.Wanted && (!had || !prev.Foreign || !prev.Wanted) {
+		s.log().Warn("a network named "+ingress.SelfNetworkName+" exists that is not TierPlan's, so the proxy is not attached to it: remove or rename it",
+			"environment", o.EnvID, "code", CodeSelfNetworkForeign)
+	}
+	if cb != nil {
+		cb(o)
+	}
 }

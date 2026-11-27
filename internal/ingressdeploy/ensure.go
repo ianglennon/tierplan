@@ -191,7 +191,12 @@ func (s *Service) ensure(ctx context.Context, envID string, state ingressstore.D
 		return EnsureUnreachable, true
 	}
 	sp := s.selfPassOf(ctx, info)
-	return s.ensureSwarm(ctx, envID, state, sp)
+	class, record = s.ensureSwarm(ctx, envID, state, sp)
+	// Every pass that could read the swarm tells the server what the self network holds, whether or not it wrote (D-06).
+	if record && ctx.Err() == nil && class != EnsureUnreachable && class != EnsurePaused {
+		s.observeSelf(ctx, sp)
+	}
+	return class, record
 }
 
 // ensureSwarm is the pass over a swarm whose manager is connected. sp is what the pass knows of the self network.

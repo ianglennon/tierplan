@@ -4,9 +4,12 @@
 package ingressdeploy_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"maps"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -226,4 +229,147 @@ func TestEnsureNeverTouchesTierPlansOwnService(t *testing.T) {
 			t.Errorf("the ensure loop wrote to TierPlan's own service: %s", w)
 		}
 	}
+}
+
+// logBuffer is a log sink the passes and the test may use at once.
+type logBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// premadeSelf is a network of the reserved name that is in the swarm before the test starts.
+func premadeSelf(labels map[string]string, subnet, gateway string) dockertest.FakeNetwork {
+	return dockertest.FakeNetwork{
+		ID: "self-net-id", Name: ingress.SelfNetworkName, Driver: "overlay", Scope: "swarm", Labels: labels,
+		Subnets: []string{subnet}, Gateways: []string{gateway},
+	}
+}
+
+// selfCreates counts the creates of a network of the reserved name.
+func (r *rig) selfCreates() int {
+	n := 0
+	for _, c := range r.fake.NetworkCreates() {
+		if c.Name == ingress.SelfNetworkName {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSelfObservationAfterAPass: one pass hands the registered function one observation with the self network's subnet and
+// gateway from the engine's inspect, the ingress network's subnet, the node's bridge gateways and TierPlan's attachment, and
+// SelfObservationOf answers the same (D-06, A-08).
+func TestSelfObservationAfterAPass(t *testing.T) {
+	r, facts := newSelfRig(t, selfRigOptions{config: func(c *dockertest.FakeConfig) {
+		c.Networks = append(c.Networks,
+			dockertest.FakeNetwork{ID: "bridge-id", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}, Gateways: []string{"172.17.0.1"}},
+			dockertest.FakeNetwork{ID: "gwbridge-id", Name: "docker_gwbridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.19.0.0/16"}, Gateways: []string{"172.19.0.1"}},
+			premadeSelf(ingress.SelfNetworkLabels(), "10.9.0.0/24", "10.9.0.1"),
+		)
+	}})
+	facts.setAttached(true)
+	if _, ok := r.svc.SelfObservationOf(r.envID); ok {
+		t.Fatal("an observation before any pass")
+	}
+	var mu sync.Mutex
+	var got []ingressdeploy.SelfObservation
+	r.svc.OnSelfObserved(func(o ingressdeploy.SelfObservation) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, o)
+	})
+	r.claimSelf()
+	r.round()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("observations after one pass = %d, want 1", len(got))
+	}
+	o := got[0]
+	ing, ok := r.network()
+	if !ok || len(ing.Subnets) != 1 {
+		t.Fatalf("the ingress network = %+v, %v; want it with one subnet", ing, ok)
+	}
+	want := ingressdeploy.SelfObservation{
+		EnvID: r.envID, Exists: true, Wanted: true, NetworkID: "self-net-id",
+		Subnet: netip.MustParsePrefix("10.9.0.0/24"), Gateway: netip.MustParseAddr("10.9.0.1"),
+		IngressSubnets: []netip.Prefix{netip.MustParsePrefix(ing.Subnets[0])},
+		BridgeGateways: []netip.Addr{netip.MustParseAddr("172.17.0.1"), netip.MustParseAddr("172.19.0.1")},
+		Attached:       true, Kind: ingressdeploy.SelfKindSwarmService, BackendHost: tpServiceName, Observed: true,
+	}
+	if !reflect.DeepEqual(o, want) {
+		t.Errorf("observation =\n%+v\nwant\n%+v", o, want)
+	}
+	if mem, ok := r.svc.SelfObservationOf(r.envID); !ok || !reflect.DeepEqual(mem, o) {
+		t.Errorf("SelfObservationOf = %+v, %v; want the observation handed to the callback", mem, ok)
+	}
+	if p := ingress.SelfTrustedPrefixes(o.Facts()); len(p) == 0 {
+		t.Error("the observation's facts build no trusted set")
+	}
+}
+
+// TestEnsureAdoptsOrRefusesAnExistingTierPlanSelf: a tierplan-self that carries the ingress label and the self role is
+// TierPlan's whatever its subnet and the proxy is attached to it; one without the role is foreign: nothing is attached or
+// made, the observation says so and the pass logs self_network_foreign (T-28-37).
+func TestEnsureAdoptsOrRefusesAnExistingTierPlanSelf(t *testing.T) {
+	t.Run("adopted", func(t *testing.T) {
+		r, _ := newSelfRig(t, selfRigOptions{config: func(c *dockertest.FakeConfig) {
+			c.Networks = append(c.Networks, premadeSelf(ingress.SelfNetworkLabels(), "10.200.7.0/24", "10.200.7.1"))
+		}})
+		r.claimSelf()
+		r.round()
+		if got := r.proxyNetworks(); !slices.Equal(got, []string{ingress.NetworkName, ingress.SelfNetworkName}) {
+			t.Errorf("proxy networks = %v, want the adopted self network attached", got)
+		}
+		if n := r.selfCreates(); n != 0 {
+			t.Errorf("self network creates = %d, want 0: the existing one is adopted", n)
+		}
+		o, ok := r.svc.SelfObservationOf(r.envID)
+		if !ok || o.Foreign || !o.Exists || o.Subnet != netip.MustParsePrefix("10.200.7.0/24") {
+			t.Errorf("observation = %+v, %v; want TierPlan's network on 10.200.7.0/24, not foreign", o, ok)
+		}
+	})
+	t.Run("foreign", func(t *testing.T) {
+		logs := &logBuffer{}
+		r, _ := newSelfRig(t, selfRigOptions{
+			config: func(c *dockertest.FakeConfig) {
+				c.Networks = append(c.Networks, premadeSelf(ingress.ObjectLabels(), "10.200.8.0/24", "10.200.8.1"))
+			},
+			deps: func(d *ingressdeploy.Deps) { d.Log = slog.New(slog.NewTextHandler(logs, nil)) },
+		})
+		r.claimSelf()
+		r.round()
+		if got := r.proxyNetworks(); !slices.Equal(got, []string{ingress.NetworkName}) {
+			t.Errorf("proxy networks = %v, want only %s: a foreign network is never attached", got, ingress.NetworkName)
+		}
+		if n := r.selfCreates(); n != 0 {
+			t.Errorf("self network creates = %d, want 0 beside a foreign one", n)
+		}
+		o, ok := r.svc.SelfObservationOf(r.envID)
+		if !ok || !o.Foreign || o.Exists || o.Subnet.IsValid() {
+			t.Errorf("observation = %+v, %v; want foreign, not existing, no subnet", o, ok)
+		}
+		if p := ingress.SelfTrustedPrefixes(o.Facts()); len(p) != 0 {
+			t.Errorf("a foreign network built the trusted set %v", p)
+		}
+		if !strings.Contains(logs.String(), ingressdeploy.CodeSelfNetworkForeign) {
+			t.Errorf("the log does not carry %s:\n%s", ingressdeploy.CodeSelfNetworkForeign, logs.String())
+		}
+		if row, ok := r.selfNetwork(); !ok || !maps.Equal(row.Labels, ingress.ObjectLabels()) {
+			t.Errorf("the foreign network = %+v, %v; want it left as it was", row, ok)
+		}
+	})
 }

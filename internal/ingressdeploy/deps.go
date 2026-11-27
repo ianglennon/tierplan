@@ -202,6 +202,15 @@ type Deps struct {
 	// SelfURLs reads the instance's own addresses, their environment locks and TIERPLAN_LISTEN's port, for the route's
 	// backend (D-07); nil means none are set.
 	SelfURLs func() SelfURLs
+	// SelfConnect connects TierPlan's own container to the self network on the local engine, under the given alias, and
+	// SelfDisconnect takes it off again. They are for a standalone host only (D-04): on a swarm TierPlan's service joins the
+	// network through its own stack file and is never updated by TierPlan (D-03). Nil means TierPlan cannot connect itself
+	// (no local socket), so the standalone pass reports TierPlan as not attached and never tries.
+	SelfConnect    func(ctx context.Context, networkID, alias string) error
+	SelfDisconnect func(ctx context.Context, networkID string) error
+	// HostCertificate is the ingress certificate manager's view of one hostname of an environment, for the self route's
+	// preview (D-09). Nil means unknown, which the preview shows as a warning and never as a valid certificate.
+	HostCertificate func(ctx context.Context, envID, host string) (HostCertState, error)
 	// ServerVersion decides the proxy image's tag (IngressImage).
 	ServerVersion string
 	// URL is the full address of the ingress channel the proxy dials, wss://host:port/ingress/connect.
@@ -210,6 +219,19 @@ type Deps struct {
 	Pins  func() []string
 	Clock stackops.Clock
 	Log   *slog.Logger
+}
+
+// HostCertState is what the ingress certificate manager knows of one hostname's certificate (Deps.HostCertificate).
+type HostCertState struct {
+	// Valid is a certificate for the hostname that is in force now.
+	Valid bool
+	// Known is false when the manager holds nothing about the hostname yet: no certificate has been ordered.
+	Known bool
+	// TermsNeeded is the CA's terms not accepted, and Paused certificate work paused, for the environment: no certificate
+	// is ordered while either holds.
+	TermsNeeded, Paused bool
+	// Reason is the manager's short code for a certificate that is not valid, "" for none.
+	Reason string
 }
 
 // Service deploys the objects of an environment's ingress.
@@ -237,6 +259,11 @@ type Service struct {
 	// vipNodeTimeout and vipPassTimeout bound one node's read and one environment's pass of the virtual IP reader. A test
 	// shortens them (export_test.go).
 	vipNodeTimeout, vipPassTimeout time.Duration
+	// selfObs is, by environment, the last SelfObservation of its self network, and selfCb the function each one is handed
+	// to (OnSelfObserved); selfMu guards both.
+	selfMu  sync.Mutex
+	selfObs map[string]SelfObservation
+	selfCb  func(SelfObservation)
 }
 
 // New builds the deployer.
