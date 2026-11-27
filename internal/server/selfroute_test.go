@@ -345,6 +345,97 @@ func TestHolderOriginsFollowTheClaim(t *testing.T) {
 	}
 }
 
+// holderURLs is a settable pair of the instance's own URLs, as instanceSelfURLs reads them.
+type holderURLs struct {
+	mu            sync.Mutex
+	public, agent string
+}
+
+func (u *holderURLs) set(public, agent string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.public, u.agent = public, agent
+}
+
+func (u *holderURLs) read() ingressdeploy.SelfURLs {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return ingressdeploy.SelfURLs{PublicURL: u.public, AgentURL: u.agent, ListenPort: 7480}
+}
+
+// TestHolderOriginsKeepTheDirectAddress (D-07, D-10): once the public URL is the route host, the agent URL's origin, the
+// direct address Settings require then, stays in the set while the route is on, so a browser on it can still switch the
+// route off. Off the route host the agent URL adds nothing, and with no claim nothing is added at all. The set is read from
+// the stored URLs on every call, normalised.
+func TestHolderOriginsKeepTheDirectAddress(t *testing.T) {
+	const agent = "https://tierplan.internal:7480"
+	h, src, _ := newHolderRig(t, true, nil)
+	urls := &holderURLs{}
+	h.wire(selfInputs{urls: urls.read})
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	urls.set("https://tierplan.example.org:7480", agent)
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin}) {
+		t.Fatalf("public URL off the route host: origins = %q, want [%q]", got, holderOrigin)
+	}
+	urls.set("https://"+holderHost, agent)
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin, agent}) {
+		t.Fatalf("public URL on the route host: origins = %q, want [%q %q]", got, holderOrigin, agent)
+	}
+	urls.set("https://TP.Apps.Example.Org.:443/", "HTTPS://TierPlan.Internal:7480/")
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin, agent}) {
+		t.Fatalf("both URLs in other forms: origins = %q, want [%q %q]", got, holderOrigin, agent)
+	}
+	urls.set("https://"+holderHost, "")
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin}) {
+		t.Fatalf("public URL on the route host, no agent URL: origins = %q, want [%q]", got, holderOrigin)
+	}
+	urls.set("https://"+holderHost, agent)
+	src.set(ingressstore.SystemClaim{}, false)
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.ExtraOrigins(); len(got) != 0 {
+		t.Fatalf("route off: origins = %q, want none", got)
+	}
+}
+
+// TestHolderDirectAddressCanStillChangeThings: with the public URL on the route host, a change from the agent URL's origin
+// is accepted while the route is on; with the public URL elsewhere the same origin is refused, as before.
+func TestHolderDirectAddressCanStillChangeThings(t *testing.T) {
+	const agent = "https://tierplan.internal:7480"
+	h, _, _ := newHolderRig(t, true, nil)
+	urls := &holderURLs{}
+	h.wire(selfInputs{urls: urls.read})
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	post := func(public string) int {
+		urls.set(public, agent)
+		r := httpx.New(httpx.Options{
+			PublicOrigin: func() string { return httpx.OriginOf(urls.read().PublicURL) },
+			ExtraOrigins: h.ExtraOrigins,
+			Logger:       slog.New(slog.DiscardHandler),
+		})
+		httpx.Register(r, huma.Operation{OperationID: "postHolder", Method: http.MethodPost, Path: "/api/holder"}, rbac.Public,
+			func(context.Context, *struct{}) (*holderEchoOut, error) { return &holderEchoOut{}, nil })
+		req := httptest.NewRequest(http.MethodPost, "/api/holder", nil)
+		req.RemoteAddr = "192.0.2.10:41000"
+		req.Host = "tierplan.internal:7480"
+		req.Header.Set("Origin", agent)
+		rec := httptest.NewRecorder()
+		r.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post("https://" + holderHost); code != http.StatusOK {
+		t.Errorf("public URL on the route host: a change from %s answered %d, want 200", agent, code)
+	}
+	if code := post("https://tierplan.example.org:7480"); code != http.StatusForbidden {
+		t.Errorf("public URL off the route host: a change from %s answered %d, want 403", agent, code)
+	}
+}
+
 // logCapture keeps every record a slog handler is given.
 type logCapture struct {
 	mu   sync.Mutex

@@ -150,8 +150,8 @@ func TestPreviewSelfRouteOrderedItems(t *testing.T) {
 	if pv.Host != srHost {
 		t.Errorf("Host = %q, want %q", pv.Host, srHost)
 	}
-	if pv.Direct != srAgent {
-		t.Errorf("Direct = %q, want %q", pv.Direct, srAgent)
+	if pv.Direct != srPublic {
+		t.Errorf("Direct = %q, want %q", pv.Direct, srPublic)
 	}
 	if pv.Refused() {
 		t.Error("the preview refuses, want it to go ahead")
@@ -436,8 +436,8 @@ func TestPreviewSelfRouteOff(t *testing.T) {
 		if got, want := pv.Items[1].Message, "The tierplan-self network stays, because the port-80 carve-out uses it."; got != want {
 			t.Errorf("network message = %q, want %q", got, want)
 		}
-		if pv.Host != srHost || pv.Direct != srAgent {
-			t.Errorf("Host %q Direct %q, want %q and %q", pv.Host, pv.Direct, srHost, srAgent)
+		if pv.Host != srHost || pv.Direct != srPublic {
+			t.Errorf("Host %q Direct %q, want %q and %q", pv.Host, pv.Direct, srHost, srPublic)
 		}
 	})
 	t.Run("no carve-out removes the network", func(t *testing.T) {
@@ -491,7 +491,7 @@ func TestSelfRouteFacts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SelfRouteFacts: %v", err)
 		}
-		if f.Here != ingressdeploy.SelfHereYes || !f.On || f.Host != srHost || !f.Attached || !f.AttachedKnown || f.Direct != srAgent ||
+		if f.Here != ingressdeploy.SelfHereYes || !f.On || f.Host != srHost || !f.Attached || !f.AttachedKnown || f.Direct != srPublic ||
 			f.Kind != ingressdeploy.SelfKindSwarmService || f.Refusal != nil || f.Snippet != nil || !f.CarveOut {
 			t.Errorf("facts = %+v", f)
 		}
@@ -528,7 +528,7 @@ func TestSelfRouteFacts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SelfRouteFacts: %v", err)
 		}
-		if f.On || f.Host != "" || f.Direct != srAgent || f.CarveOut || f.Here != ingressdeploy.SelfHereYes {
+		if f.On || f.Host != "" || f.Direct != srPublic || f.CarveOut || f.Here != ingressdeploy.SelfHereYes {
 			t.Errorf("facts = %+v", f)
 		}
 	})

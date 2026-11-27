@@ -104,3 +104,6 @@ func (s *Service) SetVIPReadTimeouts(node, pass time.Duration) {
 // SetSelfWaitBound replaces the bound of a self route job's wait for the next observation of the self network: fn is called
 // once as the wait starts, and its channel ends the wait. A nil channel never ends it.
 func (s *Service) SetSelfWaitBound(fn func() <-chan time.Time) { s.selfWaitBound = fn }
+
+// DirectAddress is directAddress: the address the self-route card offers as the one that keeps working (D-07).
+func DirectAddress(urls SelfURLs, host string) string { return directAddress(urls, host) }
