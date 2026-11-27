@@ -153,7 +153,7 @@ func (h *selfRoute) Observe(o ingressdeploy.SelfObservation) {
 	switch {
 	case cur.Claimed && o.EnvID != cur.EnvID:
 		return
-	case !cur.Claimed && o.Kind == "" && !(cur.HasObs && cur.Obs.EnvID == o.EnvID):
+	case !cur.Claimed && o.Kind == "" && (!cur.HasObs || cur.Obs.EnvID != o.EnvID):
 		// No claim, and TierPlan does not run here: the observation is of another environment. One of the environment
 		// already held, saying TierPlan is no longer there, replaces it.
 		return

@@ -72,8 +72,8 @@ func TestSystemRouteConditions(t *testing.T) {
 		},
 		{
 			name: "bundle not applied by every node", attached: true, attachedKnown: true,
-			edit: func(in *stackops.RouteStateInput) { in.NodesApplied, in.AppliedNodes = false, 1 },
-			want: [5]cond{ready, ready, ready, ready, {stackops.CondNotReady, stackops.ReasonNodesBehind}},
+			edit:  func(in *stackops.RouteStateInput) { in.NodesApplied, in.AppliedNodes = false, 1 },
+			want:  [5]cond{ready, ready, ready, ready, {stackops.CondNotReady, stackops.ReasonNodesBehind}},
 			state: stackops.RoutePending,
 		},
 		{

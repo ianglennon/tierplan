@@ -6,9 +6,9 @@ package ingressdeploy_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -449,7 +449,8 @@ func TestPreflightHTTP01Conflict(t *testing.T) {
 // the carve-out works and says what to do where it does not, so the promise is gone from every source file of the package.
 func TestNoLaterVersionSentence(t *testing.T) {
 	old := "A later version " + "lifts this limit."
-	files, err := filepath.Glob("*.go")
+	src := os.DirFS(".")
+	files, err := fs.Glob(src, "*.go")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
@@ -458,7 +459,7 @@ func TestNoLaterVersionSentence(t *testing.T) {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		b, err := os.ReadFile(f)
+		b, err := fs.ReadFile(src, f)
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}

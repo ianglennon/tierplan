@@ -76,15 +76,7 @@ func pemCerts(t *testing.T, data []byte) []*x509.Certificate {
 }
 
 func sameCerts(got []*x509.Certificate, want ...*x509.Certificate) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if !got[i].Equal(want[i]) {
-			return false
-		}
-	}
-	return true
+	return slices.EqualFunc(got, want, (*x509.Certificate).Equal)
 }
 
 func TestOwnTrustPEMOrderAndVersion(t *testing.T) {

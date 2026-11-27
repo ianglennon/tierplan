@@ -16,6 +16,7 @@ func (o fixedOrigin) PublicOrigin() string { return string(o) }
 // origin and, while TierPlan's own route is on, the route host's origin, each as an escaped
 // literal pattern. The option that switches the origin check off is never used.
 func TestShellOriginPatternsIncludeExtraOrigins(t *testing.T) {
+	t.Parallel()
 	const public = "https://tierplan.example.org:7480"
 	route := func() []string { return []string{"https://tp.apps.example.org"} }
 	none := func() []string { return nil }
