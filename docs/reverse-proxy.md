@@ -320,7 +320,7 @@ TierPlan watches the requests that reach it and tells admins (anyone with the `s
 | Warning | What it means | What to do |
 |---------|---------------|------------|
 | **Forwarded headers from an untrusted address** | A peer that is not in `TIERPLAN_TRUSTED_PROXIES` sent `X-Forwarded-…` headers. TierPlan ignored them. | If the address in the warning is your proxy, add it to `TIERPLAN_TRUSTED_PROXIES`. If it is not, something is sending forged headers; they did no harm. |
-| **Requests don't match the public URL** | Requests arrive for a host, or over a scheme, that is not the public URL's. | Make the proxy pass the original `Host` (nginx: `proxy_set_header Host $http_host;`) and send `X-Forwarded-Proto`, and check that `TIERPLAN_PUBLIC_URL` is the address people type. Reaching TierPlan by another address, such as its IP and port, shows this warning too. |
+| **Requests don't match the public URL** | Requests arrive for a host, or over a scheme, that is not the public URL's. | Make the proxy pass the original `Host` (nginx: `proxy_set_header Host $http_host;`) and send `X-Forwarded-Proto`, and check that `TIERPLAN_PUBLIC_URL` is the address people type. Reaching TierPlan by another address, such as its IP and port, shows this warning too. Requests for the host of TierPlan's own ingress route, while the route is on, do not (see [ingress.md](ingress.md#tierplans-own-route)). |
 | **WebSocket connections are failing** | A request to `/agent/connect` arrived without the WebSocket upgrade headers. | Pass `Upgrade` and `Connection` (nginx: the two `proxy_set_header` lines and the `map`). |
 
 Other symptoms:

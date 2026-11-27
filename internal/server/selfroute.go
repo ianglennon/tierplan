@@ -232,6 +232,13 @@ func (h *selfRoute) ExtraOrigins() []string {
 	return out
 }
 
+// RouteOrigins is the route host's origin while the system claim exists, else none: what the proxy observer also accepts
+// as the address of a request (httpx.ProxyObserver.AlsoMatch), so a request through TierPlan's own route is no URL mismatch.
+// It comes from the stored claim only.
+func (h *selfRoute) RouteOrigins() []string {
+	return slices.Clone(h.snap.Load().Origins)
+}
+
 // Ready is whether the trusted set can be believed complete (A-08): the claim was read and, when it exists, the first
 // observation of its environment arrived. selfReadyTimeout after the wait began it is true regardless.
 func (h *selfRoute) Ready() bool {

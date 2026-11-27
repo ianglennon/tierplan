@@ -967,7 +967,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// remembers it for an hour and tells the open bells when a kind appears (D-53).
 	// It looks at no request until the live trusted set is known, so a proxy on TierPlan's own network is not reported
 	// as untrusted in the first minutes after a restart (A-08).
-	proxyObs := httpx.NewProxyObserver(inst.PublicURL, nil).OnNew(broker.PublishProxyWarning).HoldUntil(selfRt.Ready)
+	// Requests for TierPlan's own route host, while the route is on, are no URL mismatch (28-UAT 9f).
+	proxyObs := httpx.NewProxyObserver(inst.PublicURL, nil).OnNew(broker.PublishProxyWarning).HoldUntil(selfRt.Ready).AlsoMatch(selfRt.RouteOrigins)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
 		WithNotifier(broker).
 		OnUpgradeFailure(proxyObs.RecordUpgradeFailure).

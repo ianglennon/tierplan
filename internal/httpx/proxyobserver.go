@@ -67,6 +67,8 @@ type ProxyObserver struct {
 	onNew func(kind string)
 	// ready gates Observe: nil is always ready (A-08).
 	ready func() bool
+	// also are origins besides the public URL's that a request may be for without a mismatch; nil is none.
+	also func() []string
 }
 
 // NewProxyObserver returns an observer that compares requests with publicURL,
@@ -101,6 +103,15 @@ func (o *ProxyObserver) HoldUntil(ready func() bool) *ProxyObserver {
 	return o
 }
 
+// AlsoMatch sets the origins, besides the public URL's, that a request may be for without being a URL mismatch: TierPlan's
+// own route host while the route is on (D-07). They are read on every request and come from TierPlan's stored settings,
+// never from a request. A request for one of them over another scheme is still a mismatch. Call it before the observer
+// serves.
+func (o *ProxyObserver) AlsoMatch(origins func() []string) *ProxyObserver {
+	o.also = origins
+	return o
+}
+
 // Observe is the middleware. It belongs right after the client-address
 // middleware, which says whether the TCP peer is a trusted proxy and which scheme
 // the request effectively used. It never changes the request or the response.
@@ -123,10 +134,27 @@ func (o *ProxyObserver) look(req *http.Request) {
 	}
 	scheme := EffectiveScheme(ctx)
 	if want := o.publicURL(); want != "" && !isProbe(req, peer) {
-		if mismatch(want, req.Host, scheme) {
+		if mismatch(want, req.Host, scheme) && !o.alsoMatches(req.Host, scheme) {
 			o.record(signalKey{kind: SignalURLMismatch, host: clipHost(strings.ToLower(req.Host)), scheme: scheme})
 		}
 	}
+}
+
+// alsoMatches is whether a request for host over scheme is for one of the AlsoMatch origins.
+func (o *ProxyObserver) alsoMatches(host, scheme string) bool {
+	if o.also == nil {
+		return false
+	}
+	got := canonicalOrigin(scheme, host)
+	if got == "" {
+		return false
+	}
+	for _, raw := range o.also() {
+		if OriginOf(raw) == got {
+			return true
+		}
+	}
+	return false
 }
 
 // RecordUpgradeFailure notes a request to the agent or ingress endpoint that

@@ -417,6 +417,32 @@ func TestHolderOriginsKeepTheDirectAddress(t *testing.T) {
 	}
 }
 
+// TestHolderRouteOriginsForTheProxyObserver (28-UAT 9f): the proxy observer is told the route host's origin while the claim
+// exists, so requests through TierPlan's own route raise no "Requests don't match the public URL" warning. It is the claim's
+// origin alone, not the agent URL's, and it goes with the claim.
+func TestHolderRouteOriginsForTheProxyObserver(t *testing.T) {
+	h, src, _ := newHolderRig(t, true, nil)
+	urls := &holderURLs{}
+	h.wire(selfInputs{urls: urls.read})
+	urls.set("https://tierplan.example.org:7480", "https://tierplan.internal:7480")
+	if got := h.RouteOrigins(); len(got) != 0 {
+		t.Fatalf("before the claim was read: route origins = %q, want none", got)
+	}
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.RouteOrigins(); !slices.Equal(got, []string{holderOrigin}) {
+		t.Fatalf("route on: route origins = %q, want [%q]", got, holderOrigin)
+	}
+	src.set(ingressstore.SystemClaim{}, false)
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.RouteOrigins(); len(got) != 0 {
+		t.Fatalf("route off: route origins = %q, want none", got)
+	}
+}
+
 // holderPost posts to a router built over the holder and the stored public URL, from origin, and answers the status.
 func holderPost(h *selfRoute, urls *holderURLs, origin string) int {
 	r := httpx.New(httpx.Options{
