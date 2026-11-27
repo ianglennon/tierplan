@@ -40,12 +40,25 @@ const (
 	SkipSelfNotAttached SkipReason = "self_not_attached"
 )
 
-// The entry point every router is attached to, and the TLS floor of the default options (D-04). The
-// web entry point only redirects and never carries a router (RTE-02, PROH-21-03).
+// The entry point every route's router is attached to, and the TLS floor of the default options
+// (D-04). The web entry point redirects and carries one router only: TierPlan's own HTTP-01 carve-out
+// (RTE-02, PROH-21-03, Phase 28 D-12).
 const (
 	entryPointSecure = "websecure"
+	entryPointWeb    = "web"
 	minTLSVersion    = "VersionTLS12"
 )
+
+// CarveOutPriority is the priority of TierPlan's own HTTP-01 carve-out router on the web entry point
+// (D-12). The static file puts the port-80 redirect at priority 1, so the carve-out wins on TierPlan's
+// own names and the challenge path and every other plain request is still redirected (28-S12-RESULT.md,
+// traefik v3.7.19). The redirect is the only other router on web, so any value above 1 would do; 10000
+// is the value S12 proved.
+const CarveOutPriority = 10000
+
+// acmeChallengePath is where an ACME HTTP-01 challenge is fetched, the one path TierPlan's plain
+// listener answers (internal/server/plainchallenge.go).
+const acmeChallengePath = "/.well-known/acme-challenge/"
 
 // HostCert is one hostname's certificate as the renderer is given it: the chain and the private key as
 // PEM, and a Reason when the certificate cannot be served. The certificate is servable when Reason is
@@ -182,10 +195,14 @@ type router struct {
 	Service     string   `yaml:"service"`
 	Priority    int      `yaml:"priority"`
 	Middlewares []string `yaml:"middlewares,omitempty"`
-	// TLS is an empty mapping with no omitempty, so it encodes as `tls: {}`: the router is served
-	// over TLS with the default options.
-	TLS struct{} `yaml:"tls"`
+	// TLS is set to an empty mapping on every route's router, so it encodes as `tls: {}`: the router is
+	// served over TLS with the default options. It is nil only on the carve-out, which is plain HTTP on
+	// the web entry point (D-12) and so has no tls key.
+	TLS *struct{} `yaml:"tls,omitempty"`
 }
+
+// tlsDefault is the tls value of every router served over TLS: an empty mapping, `tls: {}`.
+func tlsDefault() *struct{} { return &struct{}{} }
 
 type service struct {
 	LoadBalancer loadBalancer `yaml:"loadBalancer"`
@@ -243,6 +260,9 @@ const SelfTransport = "t-self"
 const (
 	selfRouterName  = "tierplan-self"
 	selfServiceName = "svc-tierplan-self"
+	// The carve-out router and its service, TierPlan's plain listener (D-12).
+	acmeRouterName   = "tierplan-acme"
+	plainServiceName = "svc-tierplan-plain"
 )
 
 // templateOpen is the opening delimiter of Go templates, which Traefik runs over dynamic files. It is
@@ -324,6 +344,7 @@ func renderSchema2(in Input) (Result, error) {
 				EntryPoints: []string{entryPointSecure},
 				Service:     selfServiceName,
 				Priority:    Priority(r.PathPrefix),
+				TLS:         tlsDefault(),
 			}
 			http.Services[selfServiceName] = service{LoadBalancer: loadBalancer{
 				Servers:          []server{{URL: selfURL(in.Self)}},
@@ -360,6 +381,7 @@ func renderSchema2(in Input) (Result, error) {
 			EntryPoints: []string{entryPointSecure},
 			Service:     svc,
 			Priority:    Priority(r.PathPrefix),
+			TLS:         tlsDefault(),
 		}
 		if r.Strip {
 			// The route forwards without its prefix through its own middleware (D-17). The root prefix was
@@ -396,6 +418,25 @@ func renderSchema2(in Input) (Result, error) {
 			Service:    r.Service,
 			Hash:       hash,
 		})
+		rendered++
+	}
+
+	// TierPlan's own HTTP-01 carve-out (D-12), whether or not the self route is on: one router on web
+	// for TierPlan's own names on the challenge path, to its plain listener over the self network.
+	if hosts := carveOutHosts(in.Self); len(hosts) > 0 {
+		http.Routers[acmeRouterName] = router{
+			Rule:        carveOutRule(hosts),
+			EntryPoints: []string{entryPointWeb},
+			Service:     plainServiceName,
+			Priority:    CarveOutPriority,
+		}
+		http.Services[plainServiceName] = service{LoadBalancer: loadBalancer{
+			Servers: []server{{URL: plainURL(in.Self)}},
+		}}
+		names = append(names,
+			namedObject{kind: "router", name: acmeRouterName, identity: acmeRouterName},
+			namedObject{kind: "service", name: plainServiceName, identity: plainServiceName},
+		)
 		rendered++
 	}
 
@@ -514,6 +555,40 @@ func addCert(files map[string]ingressbundle.File, pairs map[certPair]struct{}, c
 // the agent and proxy addresses are built from.
 func selfRule(host string) string {
 	return "Host(`" + host + "`) && !PathPrefix(`" + config.AgentConnectPath + "`) && !PathPrefix(`" + config.IngressConnectPath + "`)"
+}
+
+// carveOutHosts is the carve-out's hosts: the self input's ACME hosts, lower-cased, sorted and without
+// duplicates, or none when there is no self input, TierPlan is not on the self network or it has no
+// ACME host (D-12). refuseSelf has already checked every host.
+func carveOutHosts(s *SelfInput) []string {
+	if s == nil || !s.Attached || len(s.ACMEHosts) == 0 {
+		return nil
+	}
+	hosts := make([]string, 0, len(s.ACMEHosts))
+	for _, h := range s.ACMEHosts {
+		hosts = append(hosts, strings.ToLower(h))
+	}
+	slices.Sort(hosts)
+	return slices.Compact(hosts)
+}
+
+// carveOutRule is the carve-out's rule: the hosts, exactly, and the challenge path (D-12, SELF-04).
+func carveOutRule(hosts []string) string {
+	matchers := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		matchers = append(matchers, "Host(`"+h+"`)")
+	}
+	host := matchers[0]
+	if len(matchers) > 1 {
+		host = "(" + strings.Join(matchers, " || ") + ")"
+	}
+	return host + " && PathPrefix(`" + acmeChallengePath + "`)"
+}
+
+// plainURL is TierPlan's plain listener on the self network: the listen port, which answers plain HTTP
+// on the challenge path only and closes every other plain request (internal/server/plainchallenge.go).
+func plainURL(s *SelfInput) string {
+	return "http://" + s.BackendHost + ":" + strconv.Itoa(s.BackendPort)
 }
 
 // selfURL is TierPlan's address on the self network. TierPlan serves TLS on its listen port, so the

@@ -107,6 +107,10 @@ func goldenScenarios() map[string]Input {
 		// The same claim while TierPlan is not on the self network (D-03): no router, no service, no
 		// transport, and the route is skipped as self_not_attached.
 		"self-not-attached": selfRouteInput(false),
+		// The self route with TierPlan's own HTTP-01 carve-out (D-12): router tierplan-acme on web only,
+		// for the two ACME hosts on the challenge path, at CarveOutPriority with no tls, to
+		// svc-tierplan-plain, TierPlan's plain listener. Everything else is the self-route golden's.
+		"self-acme-carveout": selfACMEInput(),
 		// One https route on port 8443: its service names the user transport and the bundle holds it (D-13).
 		"https-backend": {
 			Snapshot: ingress.Snapshot{
@@ -165,6 +169,13 @@ func selfRouteInput(attached bool) Input {
 		OwnVersion:   1,
 		Self:         selfInput(attached),
 	}
+}
+
+// selfACMEInput is the self-route scenario with the hosts of the public and agent URLs as ACME hosts.
+func selfACMEInput() Input {
+	in := selfRouteInput(true)
+	in.Self.ACMEHosts = []string{"tierplan.internal", "tierplan.example.org"}
+	return in
 }
 
 // goldenBundle is the JSON a bundle.json holds: everything of a Result but file data.
