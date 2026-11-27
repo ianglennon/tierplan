@@ -113,7 +113,7 @@ func TestLifecycleNewestConnectionWins(t *testing.T) {
 	if n := len(srv.Hub.Sessions()); n != 1 {
 		t.Errorf("%d sessions registered, want 1", n)
 	}
-	second.Hello(t, []int{1}, "")
+	second.Hello(t, ingresstest.CurrentSchemas(), "")
 	if got := second.NextBundle(t); got.ID != want.ID {
 		t.Errorf("bundle ID on the second connection = %q, want %q", got.ID, want.ID)
 	}
@@ -290,7 +290,7 @@ func TestLifecycleWatchdogClosesASilentSession(t *testing.T) {
 
 	// Sixty seconds in, the node speaks; the answer proves the hub has read it.
 	clock.Advance(60 * time.Second)
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	c.NextBundle(t)
 
 	// Another sixty seconds: 120 s since it connected, 60 s since it spoke. Within the window. The second send
@@ -365,7 +365,7 @@ func TestLifecycleLiveAndDialHosts(t *testing.T) {
 	}
 
 	// A message makes it live again.
-	ca.Hello(t, []int{1}, "")
+	ca.Hello(t, ingresstest.CurrentSchemas(), "")
 	ca.NextBundle(t)
 	if !srv.Hub.Live(a.NodeID) {
 		t.Error("a session that just spoke is not live")

@@ -87,7 +87,7 @@ func TestSendStatusReadErrorEndsTheSession(t *testing.T) {
 	id := ingresstest.NewIdentity()
 	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "node-n1", SwarmNodeID: "n1"})
 	lcAwaitRegistered(t, srv, id.NodeID)
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	// The hello has been handled when the writer has looked at the (empty) environment.
 	dvAwaitCount(t, srv, id.NodeID, ingresshub.PushNone, "", 1)
 

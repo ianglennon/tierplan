@@ -324,6 +324,11 @@ func (c *Conn) Health(t testing.TB, ok bool) {
 	c.Send(t, ingresswire.Health{T: ingresswire.TypeHealth, TraefikOK: ok})
 }
 
+// CurrentSchemas is the bundle schemas a current supervisor lists in its hello: what ingressbundle.SupportedSchemas
+// returns. A node that says hello with it is compatible with this server's renderer; a test of an old node
+// lists ingressbundle.Schema1 by name instead.
+func CurrentSchemas() []int { return ingressbundle.SupportedSchemas() }
+
 // Hello sends the first message after the welcome: the node's version, the schemas it can apply and the ID of
 // the bundle it runs.
 func (c *Conn) Hello(t testing.TB, schemas []int, appliedID string) {

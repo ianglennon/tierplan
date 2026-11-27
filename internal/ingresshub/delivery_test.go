@@ -40,12 +40,12 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-// dvNode enrols a node of env, which lists swarmID, and says hello for schema 1 with the bundle it runs.
+// dvNode enrols a node of env, which lists swarmID, and says hello for the current schema with the bundle it runs.
 func dvNode(t *testing.T, srv *ingresstest.Server, env ingresstest.Environment, swarmID, applied string) (*ingresstest.Identity, *ingresstest.Conn) {
 	t.Helper()
 	id := ingresstest.NewIdentity()
 	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "node-" + swarmID, SwarmNodeID: swarmID})
-	c.Hello(t, []int{1}, applied)
+	c.Hello(t, ingresstest.CurrentSchemas(), applied)
 	return id, c
 }
 
@@ -175,7 +175,7 @@ func TestDeliveryNeverResentAfterRejected(t *testing.T) {
 	_ = c.WS.CloseNow()
 	lcAwaitGone(t, srv, id.NodeID)
 	c2 := srv.Connect(t, id, ingresstest.Dial{})
-	c2.Hello(t, []int{1}, "")
+	c2.Hello(t, ingresstest.CurrentSchemas(), "")
 	if got := c2.NextBundle(t); got.ID != y.ID {
 		t.Fatalf("after a reconnect the frame is %s, want %s", got.ID, y.ID)
 	}
@@ -200,7 +200,7 @@ func TestDeliveryIncompatibleSchemaMarksTheNode(t *testing.T) {
 
 	id := ingresstest.NewIdentity()
 	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "old", SwarmNodeID: "n1"})
-	c.Hello(t, []int{7}, "")
+	c.Hello(t, []int{ingressbundle.Schema1}, "") // a proxy image from before schema 2: it lists schema 1 only
 	evs := dvAwaitCount(t, srv, id.NodeID, ingresshub.PushIncompatible, x.ID, 1)
 	if n := dvCount(evs, id.NodeID, ingresshub.PushSent, ""); n != 0 {
 		t.Errorf("an incompatible node was sent a bundle (%d sent events)", n)

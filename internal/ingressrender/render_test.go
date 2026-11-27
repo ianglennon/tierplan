@@ -102,8 +102,8 @@ func TestRenderOneRouteTracer(t *testing.T) {
 	if len(res.Skipped) != 0 {
 		t.Errorf("Skipped = %v, want none", res.Skipped)
 	}
-	if b.Schema != ingressbundle.Schema1 {
-		t.Errorf("schema = %d, want %d", b.Schema, ingressbundle.Schema1)
+	if b.Schema != ingressbundle.Schema2 {
+		t.Errorf("schema = %d, want %d", b.Schema, ingressbundle.Schema2)
 	}
 	if want := (ingressbundle.Version{Config: 3, Certs: 7, Own: 0}); b.Version != want {
 		t.Errorf("version = %+v, want %+v", b.Version, want)

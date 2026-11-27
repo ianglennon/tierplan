@@ -1,13 +1,13 @@
 {
-  "id": "7ae3eb4bb95892e88744423b8df79f60cb3e4fe9b21d66382aee5dae872c6c47",
-  "schema": 1,
+  "id": "8ccdd11cb4d601c59f7c8b325a79e4fb560206f192f69324118e25846b7e018f",
+  "schema": 2,
   "version": {
     "config": 5,
     "certs": 2,
     "own": 0
   },
   "manifest": {
-    "schema": 1,
+    "schema": 2,
     "files": [
       {
         "path": "certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key",
