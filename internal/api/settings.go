@@ -315,11 +315,15 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		// the effective agent URL (this save's, else the stored one) must be free
 		// whenever the public URL names a claimed host. An env-locked public URL is
 		// never re-checked: the API cannot change it, and the self-route preview
-		// refuses a locked contradiction (28-21).
-		if d.IngressHosts != nil && len(problems) == 0 && (agentURL != before.AgentURL || url != before.PublicURL) {
+		// refuses a locked contradiction (28-21). It runs again once the save holds the
+		// write transaction (WR-08).
+		checkIngressHosts := func() error {
+			if d.IngressHosts == nil || len(problems) != 0 || (agentURL == before.AgentURL && url == before.PublicURL) {
+				return nil
+			}
 			hosts, err := d.IngressHosts(ctx)
 			if err != nil {
-				return nil, internal("read the ingress hostnames", err)
+				return err
 			}
 			claimed := func(u string) bool {
 				_, ok := hosts[urlHostname(u)]
@@ -333,16 +337,23 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			} else if !before.PublicURLLocked && url != before.PublicURL && urlHasPath(url) && selfRouteOn(hosts) {
 				add("body.publicUrl", codePublicURLPathWithSelfRoute)
 			}
+			return nil
 		}
-
-		if len(problems) > 0 {
-			return nil, &huma.ErrorModel{
+		refused := func() *huma.ErrorModel {
+			return &huma.ErrorModel{
 				Type:   problemValidationFailed,
 				Title:  http.StatusText(http.StatusUnprocessableEntity),
 				Status: http.StatusUnprocessableEntity,
 				Detail: detail,
 				Errors: problems,
 			}
+		}
+		if err := checkIngressHosts(); err != nil {
+			return nil, internal("read the ingress hostnames", err)
+		}
+
+		if len(problems) > 0 {
+			return nil, refused()
 		}
 		if len(details) == 0 {
 			return &SettingsOutput{CacheControl: "no-store", Body: withAgents(ctx, before)}, nil
@@ -353,6 +364,17 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			return nil, internal("begin", err)
 		}
 		defer func() { _ = tx.Rollback() }() // a no-op once committed
+
+		// Again, now that the save holds the write transaction (WR-08): the store has one
+		// writer, so no claim can commit until this save ends, and a claim that committed
+		// since the check above is read here. The claim's own transaction reads the stored
+		// URLs the same way, so one of the two always sees the other.
+		if err := checkIngressHosts(); err != nil {
+			return nil, internal("read the ingress hostnames", err)
+		}
+		if len(problems) > 0 {
+			return nil, refused()
+		}
 
 		if err := d.Instance.SetTx(ctx, tx, d.Store.Q, name, url); err != nil {
 			if errors.Is(err, instance.ErrPublicURLLocked) {

@@ -160,6 +160,12 @@ func isAgentHost(host string, w World) bool {
 	return slices.Contains(w.AgentHosts, NormalizeHost(host))
 }
 
+// AgentHostProblem is the refusal of a claim on host, the host agents and proxies dial (D-10): CodeHostIsAgentURL with its
+// sentence. The store refuses with it inside a claim's write transaction (WR-08).
+func AgentHostProblem(host string) Problem {
+	return Problem{Severity: SeverityError, Code: CodeHostIsAgentURL, Message: agentHostMessage(host)}
+}
+
 // agentHostMessage is the sentence a claim on the agent host is refused with.
 func agentHostMessage(host string) string {
 	return "“" + host + "” is the host of your agent URL (or of your public URL, because no agent URL is set). " +
@@ -242,7 +248,8 @@ func CheckRequest(host string, w World) (dom Domain, p Problem, bad bool) {
 // as its lower-case form. It returns the domain the host is under; bad is false when the claim may go ahead.
 //
 // It is pure and reads no ingress switch. The switch preview calls it to show the answer, and the store judges the holder
-// again inside its own write transaction, so a claim that landed since the preview is still caught there.
+// and the agent host again inside its own write transaction, so a claim, or an agent URL, that landed since the preview is
+// still caught there.
 func CheckSystemClaim(host string, w World) (dom Domain, p Problem, bad bool) {
 	host = NormalizeHost(host)
 	dom, p, bad = CheckRequest(host, w)

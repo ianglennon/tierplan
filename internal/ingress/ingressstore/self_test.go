@@ -479,3 +479,47 @@ func TestSystemClaimChangeHookRunsAfterCommit(t *testing.T) {
 		t.Fatalf("the change hook saw %v, want [true false]: once after the set, once after the clear", seen)
 	}
 }
+
+// TestSetSystemClaimRefusesTheAgentHostInItsTransaction (WR-08, D-10): the agent-host rule is judged again inside the claim's
+// write transaction, against the URLs the settings table holds then, as well as the instance's own, so a settings save that
+// pointed the agent URL at the host after the switch's check still stops the claim. With no agent URL stored, the public URL
+// is the host agents dial.
+func TestSetSystemClaimRefusesTheAgentHostInItsTransaction(t *testing.T) {
+	ctx := context.Background()
+	setting := func(t *testing.T, st interface {
+		Exec(string, ...any) (sql.Result, error)
+	}, key, value string) {
+		t.Helper()
+		if _, err := st.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, 1) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
+			t.Fatalf("store setting %s: %v", key, err)
+		}
+	}
+	refusedAgentHost := func(t *testing.T, err error) {
+		t.Helper()
+		var refused *RefusedError
+		if !errors.As(err, &refused) || len(refused.Problems) != 1 || refused.Problems[0].Code != ingress.CodeHostIsAgentURL {
+			t.Fatalf("SetSystemClaim = %v, want a %s refusal", err, ingress.CodeHostIsAgentURL)
+		}
+	}
+	t.Run("the stored agent URL", func(t *testing.T) {
+		s, st, _ := newTestStore(t)
+		seedEnv(t, st, "e1", "One")
+		d1 := registerDomain(t, s, "e1", "apps.example.org")
+		setting(t, st.Write, "agent_url", "https://TP.apps.example.org.:7480")
+		refusedAgentHost(t, s.SetSystemClaim(ctx, selfClaim("e1", selfHost, d1.ID), nil))
+		if _, ok, _ := s.SystemClaim(ctx); ok {
+			t.Fatal("a refused claim was stored")
+		}
+	})
+	t.Run("the stored public URL with no agent URL", func(t *testing.T) {
+		s, st, _ := newTestStore(t)
+		seedEnv(t, st, "e1", "One")
+		d1 := registerDomain(t, s, "e1", "apps.example.org")
+		setting(t, st.Write, "public_url", "https://"+selfHost)
+		refusedAgentHost(t, s.SetSystemClaim(ctx, selfClaim("e1", selfHost, d1.ID), nil))
+		setting(t, st.Write, "agent_url", "https://tierplan.internal:7480")
+		if err := s.SetSystemClaim(ctx, selfClaim("e1", selfHost, d1.ID), nil); err != nil {
+			t.Fatalf("with a direct agent URL stored: %v", err)
+		}
+	})
+}

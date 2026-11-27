@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ianglennon/tierplan/internal/config"
@@ -172,5 +173,27 @@ func TestPublicURLMayHaveNoPathWhileTheSelfRouteIsOn(t *testing.T) {
 	g, gcookie, gcsrf := ingressHostsFixture(t, map[string]ingress.ClaimInfo{"app.apps.example.org": stackClaim("app.apps.example.org")})
 	if rec := g.patchSettings(t, gcookie, gcsrf, map[string]string{"publicUrl": "https://tierplan.example.org/tp"}); rec.Code != http.StatusOK {
 		t.Fatalf("a base path with only a stack's route: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestSettingsJudgeTheIngressHostsAgainInTheTransaction (WR-08): a claim that lands between the settings check and the save
+// is still caught, because the hosts are read again once the save holds the write transaction, which no claim can commit
+// beside.
+func TestSettingsJudgeTheIngressHostsAgainInTheTransaction(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	f := newAuthFixture(t, config.Config{})
+	f.settingsIngressHosts = func(context.Context) (map[string]ingress.ClaimInfo, error) {
+		if calls.Add(1) == 1 {
+			return map[string]ingress.ClaimInfo{}, nil // the check before the transaction: nothing claimed yet
+		}
+		return map[string]ingress.ClaimInfo{"tp.apps.example.org": systemClaim("tp.apps.example.org")}, nil
+	}
+	f.h = f.build(t)
+	cookie, csrf := f.signIn(t, "admin", false)
+	assertFieldProblems(t, f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://tp.apps.example.org:7480"}),
+		map[string]string{"body.agentUrl": "agent_url_is_ingress_host"})
+	if f.inst.AgentURL() != "" {
+		t.Fatalf("a refused agent URL was stored: %q", f.inst.AgentURL())
 	}
 }

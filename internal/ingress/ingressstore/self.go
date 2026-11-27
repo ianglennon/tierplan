@@ -8,10 +8,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
@@ -117,6 +120,15 @@ func (s *Store) SetSystemClaim(ctx context.Context, in SystemClaimInput, hook Sy
 		if !ingress.Under(host, dom.Suffix) {
 			return false, ErrNotUnderDomain
 		}
+		// The host agents and proxies dial, judged again here (WR-08, D-10): a settings save that pointed the agent URL at the
+		// host since the switch's check has committed by now, because the store has one writer.
+		agentHosts, err := s.agentHostsTx(ctx, q)
+		if err != nil {
+			return false, err
+		}
+		if slices.Contains(agentHosts, host) {
+			return false, &RefusedError{Problems: []ingress.Problem{ingress.AgentHostProblem(host)}}
+		}
 		reserved, err := q.ListIngressReservedByDomain(ctx, dom.ID)
 		if err != nil {
 			return false, fmt.Errorf("ingressstore: list the reserved hostnames of domain %q: %w", dom.ID, err)
@@ -156,6 +168,33 @@ func (s *Store) SetSystemClaim(ctx context.Context, in SystemClaimInput, hook Sy
 		s.systemClaimChanged()
 	}
 	return err
+}
+
+// agentHostsTx is the host agents and proxies dial, read inside a write transaction: the instance's own (Deps.AgentHosts,
+// which an environment variable may fix) and the one the settings table holds now, the agent URL's else the public URL's.
+// Both are refused, so a cache not yet updated after a settings commit cannot let a claim through.
+func (s *Store) agentHostsTx(ctx context.Context, q *sqlc.Queries) ([]string, error) {
+	var hosts []string
+	if s.agentHosts != nil {
+		hosts = append(hosts, s.agentHosts()...)
+	}
+	stored := ""
+	for _, key := range []string{instance.SettingAgentURL, instance.SettingPublicURL} {
+		v, err := q.GetSetting(ctx, key)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("ingressstore: read the %s setting: %w", key, err)
+		}
+		if v != "" {
+			stored = v
+			break
+		}
+	}
+	if stored != "" {
+		if u, err := url.Parse(stored); err == nil {
+			hosts = append(hosts, u.Hostname())
+		}
+	}
+	return normalizedHosts(hosts), nil
 }
 
 // systemInsertError names why the hostname row was refused: a second system claim (the partial unique
