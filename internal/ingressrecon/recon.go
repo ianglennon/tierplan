@@ -64,6 +64,12 @@ type Deps struct {
 	// It is called for every environment rendered and, through the version poll, every PollInterval, so it
 	// must be cheap. Nil, or ok false, renders no self input and own version 0.
 	Self func(ctx context.Context, envID string) (ingressrender.SelfInput, int64, bool)
+	// HoldFirstRender, when set, says whether the environment's first render since start must wait (28-UAT 9a): TierPlan
+	// has not yet observed itself on its own network, so a render now would leave its own route out and the proxies,
+	// reconnecting after TierPlan's restart, would drop it. While it holds, the reconciler holds no bundle for the
+	// environment, so the proxies keep serving their cached one; the poll tries again every PollInterval. It is asked only
+	// while the environment has no bundle: once one is rendered it is kept current as always. It must be cheap.
+	HoldFirstRender func(envID string) bool
 }
 
 // envState is what the reconciler holds of one environment.
@@ -192,6 +198,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, envID string) error {
 // reconcile is one render of the environment, with the environment's run lock held. It writes the stored bundle
 // only after the render succeeded.
 func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) error {
+	if r.firstRenderHeld(envID, s) {
+		return nil
+	}
 	snap, err := r.d.Model.Snapshot(ctx, envID)
 	if err != nil {
 		return &readError{err}
@@ -255,6 +264,22 @@ func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) e
 		r.d.OnRender(envID, res.Bundle.ID, changed)
 	}
 	return nil
+}
+
+// firstRenderHeld is whether the environment has no bundle yet and Deps.HoldFirstRender holds its first render.
+func (r *Reconciler) firstRenderHeld(envID string, s *envState) bool {
+	if r.d.HoldFirstRender == nil {
+		return false
+	}
+	s.mu.Lock()
+	have := s.have
+	s.mu.Unlock()
+	if have || !r.d.HoldFirstRender(envID) {
+		return false
+	}
+	r.log.Debug("the first render of the environment waits until TierPlan has observed its own network; its proxies keep their cached bundle",
+		"environment", envID)
+	return true
 }
 
 // self is Deps.Self for the environment, or nothing when it is unset.

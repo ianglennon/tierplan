@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/moby/moby/api/types/swarm"
@@ -32,6 +33,16 @@ import (
 // EnsureTick is how often the ensure loop takes a pass on its own, on the injected clock. A change to the ingress
 // state and a Wake take one sooner.
 const EnsureTick = time.Minute
+
+// EnsureStartupRetry is how soon, on the injected clock, the loop takes another round after one in which a pass could not
+// read its environment, while the start-up window lasts. Right after TierPlan starts the agents have not reconnected yet, so
+// the first round finds no manager; waiting a whole EnsureTick for the next would leave TierPlan's own network unobserved, and
+// its own route held back, for a minute after every restart (28-UAT 9a).
+const EnsureStartupRetry = 5 * time.Second
+
+// EnsureStartupWindow is how long after Run starts an unreachable environment is retried every EnsureStartupRetry. After
+// it, an environment that cannot be read is tried once an EnsureTick, as always.
+const EnsureStartupWindow = 2 * time.Minute
 
 // ensureParallel bounds how many environments one round works on at once, so one unreachable swarm does not hold
 // up the others.
@@ -89,7 +100,8 @@ func (s *Service) Wake() {
 
 // Run is the ensure loop: a round now, then one on every EnsureTick of the injected clock, on every change the ingress
 // notifier reports and on every Wake, until ctx ends. Each cycle arms exactly one timer; a wake takes its round on the
-// timer already armed (D-11).
+// timer already armed (D-11). Within EnsureStartupWindow of the start, a round in which some environment could not be read
+// arms EnsureStartupRetry instead, so the agents' reconnecting after a restart is met within seconds.
 func (s *Service) Run(ctx context.Context) {
 	var changed <-chan struct{}
 	var sub *ingress.Subscription
@@ -98,9 +110,13 @@ func (s *Service) Run(ctx context.Context) {
 		defer sub.Close()
 		changed = sub.C()
 	}
+	startupEnds := s.d.Clock.Now().Add(EnsureStartupWindow)
 	for {
-		s.round(ctx)
-		timer := s.d.Clock.After(EnsureTick)
+		wait := EnsureTick
+		if s.round(ctx) && s.d.Clock.Now().Before(startupEnds) {
+			wait = EnsureStartupRetry
+		}
+		timer := s.d.Clock.After(wait)
 	wait:
 		for {
 			select {
@@ -119,21 +135,26 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // round takes one pass over every environment whose ingress is on. An environment whose ingress is off is never
-// listed, so nothing of it is touched (Pitfall 15).
-func (s *Service) round(ctx context.Context) {
+// listed, so nothing of it is touched (Pitfall 15). It reports whether some pass could not read its environment.
+func (s *Service) round(ctx context.Context) (unreachable bool) {
 	if ctx.Err() != nil {
-		return
+		return false
 	}
 	ids, err := s.d.Store.EnabledEnvs(ctx)
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not list the environments", "error", err)
-		return
+		return false
 	}
 	var g errgroup.Group
 	g.SetLimit(ensureParallel)
+	var mu sync.Mutex
 	for _, id := range ids {
 		g.Go(func() error {
-			s.pass(ctx, id)
+			if s.pass(ctx, id) == EnsureUnreachable {
+				mu.Lock()
+				unreachable = true
+				mu.Unlock()
+			}
 			return nil
 		})
 	}
@@ -141,22 +162,23 @@ func (s *Service) round(ctx context.Context) {
 	if s.roundHook != nil {
 		s.roundHook()
 	}
+	return unreachable
 }
 
 // pass is one ensure pass over one environment: it decides, writes what differs under the operation lock and records
-// when it ended and with which class.
-func (s *Service) pass(ctx context.Context, envID string) {
+// when it ended and with which class, which it returns ("" too for a pass that ended early).
+func (s *Service) pass(ctx context.Context, envID string) string {
 	state, err := s.d.Store.DeployState(ctx, envID)
 	if err != nil {
 		s.log().Warn("the ingress ensure loop could not read an environment's state", "environment", envID, "error", err)
-		return
+		return ""
 	}
 	if !state.Enabled {
-		return
+		return ""
 	}
 	class, record := s.ensure(ctx, envID, state)
 	if ctx.Err() != nil {
-		return
+		return ""
 	}
 	if record {
 		if err := s.d.Store.RecordEnsure(ctx, envID, s.d.Clock.Now(), class); err != nil {
@@ -168,6 +190,7 @@ func (s *Service) pass(ctx context.Context, envID string) {
 	if !state.Paused {
 		s.ensureVIP(ctx, envID)
 	}
+	return class
 }
 
 // ensure decides one environment's pass and returns its class. record is false for an environment the pass leaves

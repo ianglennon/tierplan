@@ -262,6 +262,11 @@ certificate is valid and TierPlan is on the `tierplan-self` network. Its state i
 out to the proxies), `waiting_certificate`, `self_not_attached` and `unknown`. The card, the routes list (as a route whose
 owner is the system), `GET .../ingress/status` (`selfRoute`) and a read-only line on Settings > HTTPS all show it.
 
+When TierPlan restarts, for example for an upgrade, it does not know whether it is still on `tierplan-self` until its first
+ensure pass has looked. Until then it sends the proxies of that environment nothing new, so they keep serving the bundle they
+had, the route included. The pass runs within seconds of the manager's agent reconnecting, and TierPlan waits at most two
+minutes for it. A pass that finds TierPlan no longer on the network takes the route out.
+
 The public URL is not changed. While the route is on, TierPlan also accepts changes from `https://<route host>`, an origin it
 takes from the stored route and never from a header (see [reverse-proxy.md](reverse-proxy.md#the-public-url-decides-everything)).
 The agent URL's origin is accepted too whenever an agent URL is set, with the route on or off, so if you later set the

@@ -29,5 +29,6 @@ func wireIngressRecon(log *slog.Logger, model *ingressstore.Store, certs *ingres
 	if q, ok := clock.(quietable); ok {
 		clock = q.Quiet()
 	}
-	return ingressrecon.New(ingressrecon.Deps{Model: model, Certs: certs, Notifier: notifier, Clock: clock, Log: log, Self: holder.SelfInput})
+	return ingressrecon.New(ingressrecon.Deps{Model: model, Certs: certs, Notifier: notifier, Clock: clock, Log: log, Self: holder.SelfInput,
+		HoldFirstRender: holder.HoldFirstRender})
 }

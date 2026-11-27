@@ -28,18 +28,42 @@ type manualClock struct {
 	armed chan struct{}
 	mu    sync.Mutex
 	timer chan time.Time
+	// waits are the durations the loop armed, in order.
+	waits []time.Duration
 }
 
 func newManualClock() *manualClock {
 	return &manualClock{at: time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC), armed: make(chan struct{}, 1)}
 }
 
-func (c *manualClock) Now() time.Time { return c.at }
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
 
-func (c *manualClock) After(time.Duration) <-chan time.Time {
+// advance moves the clock on by d.
+func (c *manualClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.at = c.at.Add(d)
+	c.mu.Unlock()
+}
+
+// lastWait is the duration of the timer the loop armed last.
+func (c *manualClock) lastWait() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.waits) == 0 {
+		return 0
+	}
+	return c.waits[len(c.waits)-1]
+}
+
+func (c *manualClock) After(d time.Duration) <-chan time.Time {
 	ch := make(chan time.Time, 1)
 	c.mu.Lock()
 	c.timer = ch
+	c.waits = append(c.waits, d)
 	c.mu.Unlock()
 	select {
 	case c.armed <- struct{}{}:
@@ -51,9 +75,9 @@ func (c *manualClock) After(time.Duration) <-chan time.Time {
 // fire ends the timer the loop armed last.
 func (c *manualClock) fire() {
 	c.mu.Lock()
-	ch := c.timer
+	ch, at := c.timer, c.at
 	c.mu.Unlock()
-	ch <- c.at
+	ch <- at
 }
 
 // countingEngine counts every call the deployer makes of the engine.
@@ -198,6 +222,68 @@ func TestEnsureRepairsAndIsQuiet(t *testing.T) {
 	testsupport.Await(t, "the timer", clock.armed)
 	if got := len(r.fake.Writes()); got != written {
 		t.Fatalf("passes over a repaired swarm wrote %v", r.fake.Writes()[written:])
+	}
+}
+
+// TestEnsureRetriesSoonAfterStart (28-UAT 9a): right after start the agents have not reconnected, so the first pass finds no
+// manager. The loop then tries again after EnsureStartupRetry, not a whole EnsureTick later, so TierPlan's own network is
+// observed within seconds of the manager coming back; once a pass reads the swarm, and after the start-up window, the loop
+// keeps its minute.
+func TestEnsureRetriesSoonAfterStart(t *testing.T) {
+	clock := newManualClock()
+	r := enabledRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) { d.Clock = clock }})
+	r.envs.set(func(i *ingressdeploy.EnvInfo) { i.ManagerConnected = false })
+	rounds := make(chan struct{}, 16)
+	r.svc.SetRoundHook(func() {
+		select {
+		case rounds <- struct{}{}:
+		default:
+		}
+	})
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.svc.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	testsupport.Await(t, "the first round", rounds)
+	testsupport.Await(t, "the timer", clock.armed)
+	if _, class := r.ensureState(); class != ingressdeploy.EnsureUnreachable {
+		t.Fatalf("class = %q, want unreachable", class)
+	}
+	if got := clock.lastWait(); got != ingressdeploy.EnsureStartupRetry {
+		t.Fatalf("after an unreachable pass at start the loop waits %v, want %v", got, ingressdeploy.EnsureStartupRetry)
+	}
+
+	// The manager is back: the retry reads the swarm, and the loop goes back to its minute.
+	r.envs.set(func(i *ingressdeploy.EnvInfo) { i.ManagerConnected = true })
+	clock.advance(ingressdeploy.EnsureStartupRetry)
+	clock.fire()
+	testsupport.Await(t, "the retry", rounds)
+	testsupport.Await(t, "the timer", clock.armed)
+	if _, class := r.ensureState(); class != ingressdeploy.EnsureOK {
+		t.Fatalf("class = %q, want ok", class)
+	}
+	if got := clock.lastWait(); got != ingressdeploy.EnsureTick {
+		t.Fatalf("after a pass that read the swarm the loop waits %v, want %v", got, ingressdeploy.EnsureTick)
+	}
+
+	// Past the start-up window an unreachable environment is tried once a minute, as before.
+	r.envs.set(func(i *ingressdeploy.EnvInfo) { i.ManagerConnected = false })
+	clock.advance(ingressdeploy.EnsureStartupWindow)
+	clock.fire()
+	testsupport.Await(t, "the round after the window", rounds)
+	testsupport.Await(t, "the timer", clock.armed)
+	if _, class := r.ensureState(); class != ingressdeploy.EnsureUnreachable {
+		t.Fatalf("class = %q, want unreachable", class)
+	}
+	if got := clock.lastWait(); got != ingressdeploy.EnsureTick {
+		t.Fatalf("an unreachable pass after the start-up window waits %v, want %v", got, ingressdeploy.EnsureTick)
 	}
 }
 

@@ -615,6 +615,61 @@ func TestHolderReadyGate(t *testing.T) {
 	})
 }
 
+// TestHolderHoldsTheFirstRender (28-UAT 9a): after a restart the claim is read at once but TierPlan's own network is
+// observed only by the first ensure pass that reaches the manager. Until then the holder holds the first render of the
+// claim's environment, so the proxies keep the cached bundle with TierPlan's own route in it rather than being sent one
+// without it; it lets go on the claim's environment's first observation, attached or not, or at the ready fallback, and it
+// never holds another environment or one with no claim.
+func TestHolderHoldsTheFirstRender(t *testing.T) {
+	t.Run("held until the claim's environment is observed", func(t *testing.T) {
+		h, _, _ := newHolderRig(t, true, nil)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if !h.HoldFirstRender(holderEnv) {
+			t.Fatal("a claim and no observation: not held, want the first render held")
+		}
+		if h.HoldFirstRender("env-2") {
+			t.Fatal("another environment is held, want only the claim's")
+		}
+		h.Observe(attachedObs("env-2"))
+		if !h.HoldFirstRender(holderEnv) {
+			t.Fatal("another environment's observation let the claim's go, want it still held")
+		}
+		o := attachedObs(holderEnv)
+		o.Attached = false // a pass that says TierPlan is not on the network is an answer too: the route goes
+		h.Observe(o)
+		if h.HoldFirstRender(holderEnv) {
+			t.Fatal("after the claim's environment's observation: held, want it let go")
+		}
+	})
+	t.Run("let go at the fallback", func(t *testing.T) {
+		h, _, clk := newHolderRig(t, true, nil)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		clk.advance(selfReadyTimeout)
+		if h.HoldFirstRender(holderEnv) {
+			t.Fatal("at the fallback: held, want the render to go ahead")
+		}
+	})
+	t.Run("no claim holds nothing", func(t *testing.T) {
+		h, _, _ := newHolderRig(t, false, nil)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if h.HoldFirstRender(holderEnv) {
+			t.Fatal("with no claim: held, want nothing held")
+		}
+	})
+	t.Run("a nil holder holds nothing", func(t *testing.T) {
+		var h *selfRoute
+		if h.HoldFirstRender(holderEnv) {
+			t.Fatal("a nil holder held a render")
+		}
+	})
+}
+
 // TestHolderClaimChangedReloads (WR-01): the store's change hook reloads the holder at once, without waiting for an ensure
 // pass to publish an observation, so the route's origin goes with the claim even while TierPlan's environment is unreachable.
 func TestHolderClaimChangedReloads(t *testing.T) {

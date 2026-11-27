@@ -293,3 +293,104 @@ func TestRenderedOwnReportsTheLastRender(t *testing.T) {
 		t.Errorf("RenderedOwn of an unknown environment = %d, want 0", got)
 	}
 }
+
+// 28-UAT 9a: right after a restart TierPlan has not yet observed itself on its own network, so a first render would leave
+// its own route out and the reconnecting proxies would apply that, dropping the route until the next ensure pass. While
+// Deps.HoldFirstRender says so, the environment's first render waits: the reconciler holds no bundle, so the proxies keep
+// serving their cached one. Once the hold lifts the render goes ahead, and a hold never withdraws a bundle already rendered.
+func TestFirstRenderWaitsWhileHeld(t *testing.T) {
+	rg := newRig(t)
+	rg.claimSelf()
+	self := newFakeSelf(rigEnv, "trust 1", 42)
+	var held sync.Mutex
+	hold := true
+	d := rg.deps(nil)
+	d.Self = self.Self
+	d.HoldFirstRender = func(envID string) bool {
+		held.Lock()
+		defer held.Unlock()
+		return hold && envID == rigEnv
+	}
+	r := New(d)
+	ctx := context.Background()
+
+	if err := r.Reconcile(ctx, rigEnv); err != nil {
+		t.Fatalf("held render: %v", err)
+	}
+	if b, ok := r.Current(rigEnv); ok {
+		t.Fatalf("a held first render published bundle %s, want none so the proxies keep their cache", b.ID)
+	}
+	if f := r.Failures(); len(f) != 0 {
+		t.Errorf("a held first render was recorded as a failure: %+v", f)
+	}
+
+	held.Lock()
+	hold = false
+	held.Unlock()
+	if err := r.Reconcile(ctx, rigEnv); err != nil {
+		t.Fatalf("render after the hold: %v", err)
+	}
+	b, ok := r.Current(rigEnv)
+	if !ok {
+		t.Fatal("no bundle once the hold lifted")
+	}
+	if names := routerNames(t, b); !slices.Contains(names, "tierplan-self") {
+		t.Fatalf("routers = %v, want tierplan-self", names)
+	}
+
+	// A hold that comes back later changes nothing: the environment has its bundle, which renders keep current.
+	held.Lock()
+	hold = true
+	held.Unlock()
+	self.set("trust 2", 43)
+	if err := r.Reconcile(ctx, rigEnv); err != nil {
+		t.Fatalf("render with a bundle held: %v", err)
+	}
+	if b, _ := r.Current(rigEnv); b.Version.Own != 43 {
+		t.Errorf("Version.Own = %d, want 43: a hold must not stop the renders of an environment that has a bundle", b.Version.Own)
+	}
+}
+
+// 28-UAT 9a: the poll visits an environment with no bundle every PollInterval, so a held first render goes ahead within one
+// poll of the hold lifting.
+func TestPollRendersOnceTheHoldLifts(t *testing.T) {
+	rg := newRig(t)
+	rg.claimSelf()
+	self := newFakeSelf(rigEnv, "trust 1", 42)
+	var held sync.Mutex
+	hold := true
+	renders := make(chan renderEvent, 64)
+	d := rg.deps(func(envID, id string, changed bool) { renders <- renderEvent{envID, id, changed} })
+	d.Self = self.Self
+	d.HoldFirstRender = func(string) bool {
+		held.Lock()
+		defer held.Unlock()
+		return hold
+	}
+	r := New(d)
+	s := &started{r: r, renders: renders, changes: r.Changes().Subscribe()}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		stop()
+		testsupport.Await(t, "Run to return", done)
+		s.changes.Close()
+	})
+
+	rg.clock.AwaitTimer(t, PollInterval)
+	assertNoRender(t, s)
+	held.Lock()
+	hold = false
+	held.Unlock()
+	rg.clock.Advance(PollInterval)
+	if ev := s.awaitRender(t); !ev.changed || ev.envID != rigEnv {
+		t.Fatalf("render after the hold lifted = %+v, want a new bundle for %s", ev, rigEnv)
+	}
+	if _, ok := r.Current(rigEnv); !ok {
+		t.Fatal("no bundle after the poll")
+	}
+}

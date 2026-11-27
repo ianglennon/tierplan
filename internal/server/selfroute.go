@@ -242,6 +242,20 @@ func (h *selfRoute) Ready() bool {
 	return !h.now().Before(s.WaitSince.Add(selfReadyTimeout))
 }
 
+// HoldFirstRender is ingressrecon.Deps.HoldFirstRender (28-UAT 9a): whether the first render of envID since start must
+// wait. It holds while the claim names envID and the holder is not Ready: the claim's environment has not been observed yet,
+// so SelfInput would say TierPlan is not on its own network and the render would leave its own route out. The reconnecting
+// proxies would apply that and drop a route that was serving before the restart. Holding keeps their cached bundle until
+// the first ensure pass that reaches the manager says where TierPlan is, attached or not; selfReadyTimeout bounds it.
+// Nothing is guessed: no attachment is assumed, and the trusted set stays empty until that observation (WR-03).
+func (h *selfRoute) HoldFirstRender(envID string) bool {
+	if h == nil {
+		return false
+	}
+	s := h.snap.Load()
+	return s.Claimed && envID != "" && s.EnvID == envID && !h.Ready()
+}
+
 // wire gives the holder the facts SelfInput and the install hook read. The server calls it once, after the ACME manager
 // exists and before the reconciler runs.
 func (h *selfRoute) wire(in selfInputs) {
