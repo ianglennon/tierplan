@@ -117,6 +117,19 @@ func TestSelfInputForTheReconciler(t *testing.T) {
 		r.urls = ingressdeploy.SelfURLs{PublicURL: wiringPublicURL, AgentURL: wiringAgentURL, ListenPort: 7480}
 	})
 
+	t.Run("a base path in the public URL reaches the renderer, which skips the route alone (WR-07, WR-09)", func(t *testing.T) {
+		r.urls.PublicURL = wiringPublicURL + "/tp/"
+		got, _, ok := r.h.SelfInput(context.Background(), holderEnv)
+		if !ok || got.BasePath != "/tp" {
+			t.Fatalf("SelfInput with a base path: BasePath %q ok %t, want /tp", got.BasePath, ok)
+		}
+		res, err := ingressrender.Render(ingressrender.Input{Self: &got})
+		if err != nil || res.SelfRefused == nil || res.SelfRefused.Field != "self basePath" {
+			t.Fatalf("Render = %+v, %v; want the self input refused on its base path, the render itself fine", res.SelfRefused, err)
+		}
+		r.urls = ingressdeploy.SelfURLs{PublicURL: wiringPublicURL, AgentURL: wiringAgentURL, ListenPort: 7480}
+	})
+
 	t.Run("a certificate change moves the version", func(t *testing.T) {
 		_, before, _ := r.h.SelfInput(context.Background(), holderEnv)
 		r.trust.chain = []*x509.Certificate{trustCert(t, "tierplan.example.org")}

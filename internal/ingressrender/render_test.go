@@ -5,7 +5,7 @@ package ingressrender
 
 import (
 	"bytes"
-	"errors"
+	"reflect"
 	"os"
 	"path/filepath"
 	"slices"
@@ -403,13 +403,17 @@ func TestCarveOutRefusals(t *testing.T) {
 		}(), CodeUnsafeValue, "self acmeHost"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := Render(tc.in)
-			var refused *RefusedError
-			if !errors.As(err, &refused) {
-				t.Fatalf("Render = %+v, %v; want a refusal", res.Skipped, err)
+			res := mustRender(t, tc.in)
+			refused := res.SelfRefused
+			if refused == nil {
+				t.Fatalf("Render = %+v; want the self input refused", res.Skipped)
 			}
 			if refused.Code != tc.code || refused.Field != tc.field {
 				t.Errorf("refused %s on %q, want %s on %q", refused.Code, refused.Field, tc.code, tc.field)
+			}
+			raw, _ := dynamicOf(t, res.Bundle)
+			if strings.Contains(string(raw), acmeRouterName) || strings.Contains(string(raw), "acme-challenge") {
+				t.Errorf("a refused self input still rendered the carve-out:\n%s", raw)
 			}
 		})
 	}
@@ -590,9 +594,10 @@ func TestSharedCertificatePairIsWrittenOnce(t *testing.T) {
 	}
 }
 
-// TestSelfInputRefusals pins T-28-36 and Pitfall 9: every self value that can reach the dynamic file is
-// held to the route rule, and an attached input that cannot be rendered fails the whole render, so the
-// node keeps its last good bundle.
+// TestSelfInputRefusals pins T-28-36, Pitfall 9 and WR-09: every self value that can reach the dynamic
+// file is held to the route rule, and an attached input that cannot be rendered is refused: nothing of
+// TierPlan's own route or carve-out is rendered, the system route is skipped as self_input_invalid, and
+// Result.SelfRefused names the field. The render itself goes on, so the environment's stack routes do.
 func TestSelfInputRefusals(t *testing.T) {
 	keyOnly := []byte("-----BEGIN PRIVATE KEY-----\nS0VZQQ==\n-----END PRIVATE KEY-----\n")
 	cases := []struct {
@@ -618,13 +623,21 @@ func TestSelfInputRefusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in := selfRouteInput(true)
 			tc.edit(in.Self)
-			res, err := Render(in)
-			var refused *RefusedError
-			if !errors.As(err, &refused) {
-				t.Fatalf("Render = %+v, %v; want a refusal", res.Skipped, err)
+			res := mustRender(t, in)
+			refused := res.SelfRefused
+			if refused == nil {
+				t.Fatalf("Render = %+v; want the self input refused", res.Skipped)
 			}
 			if refused.Code != tc.code || refused.Field != tc.field {
 				t.Errorf("refused %s on %q, want %s on %q", refused.Code, refused.Field, tc.code, tc.field)
+			}
+			want := []Skipped{{Hostname: "tp.apps.example.org", PathPrefix: "/", Service: "tierplan", Reason: SkipSelfInputInvalid}}
+			if !reflect.DeepEqual(res.Skipped, want) {
+				t.Errorf("skipped = %+v, want %+v", res.Skipped, want)
+			}
+			raw, _ := dynamicOf(t, res.Bundle)
+			if strings.Contains(string(raw), selfRouterName) || strings.Contains(string(raw), SelfTransport) {
+				t.Errorf("a refused self input still rendered TierPlan's route:\n%s", raw)
 			}
 		})
 	}
@@ -634,15 +647,15 @@ func TestSelfInputRefusals(t *testing.T) {
 	t.Run("not attached: a brace still fails", func(t *testing.T) {
 		in := selfRouteInput(false)
 		in.Self.Host = "tp{.apps.example.org"
-		if _, err := Render(in); err == nil {
-			t.Error("a not-attached self input with a brace rendered")
+		if res := mustRender(t, in); res.SelfRefused == nil {
+			t.Error("a not-attached self input with a brace was not refused")
 		}
 	})
 	t.Run("not attached: a base path still fails", func(t *testing.T) {
 		in := selfRouteInput(false)
 		in.Self.BasePath = "/tp"
-		if _, err := Render(in); err == nil {
-			t.Error("a not-attached self input with a base path rendered")
+		if res := mustRender(t, in); res.SelfRefused == nil {
+			t.Error("a not-attached self input with a base path was not refused")
 		}
 	})
 	t.Run("not attached: incomplete input renders", func(t *testing.T) {
@@ -692,4 +705,44 @@ func TestSystemClaimWithoutSelfInputSkips(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRefusedSelfInputLeavesStackRoutesAlone (WR-09): a self input that cannot be rendered skips TierPlan's own route only. A
+// stack route of the same environment is rendered as it would be with no self input at all, so its hostname keeps getting
+// served and new certificates while TierPlan's own route waits.
+func TestRefusedSelfInputLeavesStackRoutesAlone(t *testing.T) {
+	in := selfACMEInput()
+	in.Snapshot.Claims = append(in.Snapshot.Claims, claimFor("app.example.com"))
+	in.Snapshot.Routes = append(in.Snapshot.Routes, swarmRoute("app.example.com", "/", "shop", "web", 8080))
+	in.Certs = append(in.Certs, HostCert{Hostname: "app.example.com", ChainPEM: chainA, KeyPEM: keyA})
+	in.Self.BackendHost = "" // TierPlan as a plain container on a swarm node: no name on the self network
+
+	res, err := Render(in)
+	if err != nil {
+		t.Fatalf("Render = %v; want the stack route rendered and only TierPlan's own skipped", err)
+	}
+	if res.SelfRefused == nil || res.SelfRefused.Code != CodeSelfInput || res.SelfRefused.Field != "self backendHost" {
+		t.Fatalf("SelfRefused = %+v, want %s on self backendHost", res.SelfRefused, CodeSelfInput)
+	}
+	if got := res.Bundle.Manifest.Routes; len(got) != 1 || got[0].Hostname != "app.example.com" {
+		t.Fatalf("routes in the bundle = %+v, want the stack route only", got)
+	}
+	want := []Skipped{{Hostname: "tp.apps.example.org", PathPrefix: "/", Service: "tierplan", Reason: SkipSelfInputInvalid}}
+	if !reflect.DeepEqual(res.Skipped, want) {
+		t.Errorf("skipped = %+v, want %+v", res.Skipped, want)
+	}
+	plain := in
+	plain.Self = nil
+	plain.Snapshot.Claims, plain.Snapshot.Routes = plain.Snapshot.Claims[1:], plain.Snapshot.Routes[1:]
+	plain.Certs = plain.Certs[1:]
+	if got, wantRaw := dynamicFileOf(t, res.Bundle), dynamicFileOf(t, mustRender(t, plain).Bundle); got != wantRaw {
+		t.Errorf("the dynamic file with a refused self input differs from one with none:\n%s\nwant\n%s", got, wantRaw)
+	}
+}
+
+// dynamicFileOf is the bundle's dynamic file as text.
+func dynamicFileOf(t *testing.T, b ingressbundle.Bundle) string {
+	t.Helper()
+	raw, _ := dynamicOf(t, b)
+	return string(raw)
 }

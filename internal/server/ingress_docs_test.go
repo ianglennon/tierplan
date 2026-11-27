@@ -107,6 +107,8 @@ func TestIngressDocsListEveryStableCode(t *testing.T) {
 		{"ingressdeploy.CodeSelfNetworkForeignMember", ingressdeploy.CodeSelfNetworkForeignMember},
 		{"stacks.CodeSelfNetworkReserved", stacks.CodeSelfNetworkReserved},
 		{"ingressrender.CodeSelfInput", ingressrender.CodeSelfInput},
+		{"ingressrender.SkipSelfInputInvalid", string(ingressrender.SkipSelfInputInvalid)},
+		{"stackops.ReasonSelfInputInvalid", stackops.ReasonSelfInputInvalid},
 		// Agents and proxies never through ingress: the handshake refusals.
 		{"wire.ReasonSelfNetworkPeer", wire.ReasonSelfNetworkPeer},
 		{"ingresswire.RefuseSelfNetworkPeer", ingresswire.RefuseSelfNetworkPeer},

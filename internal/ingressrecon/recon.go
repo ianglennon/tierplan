@@ -79,6 +79,9 @@ type envState struct {
 	// config and certs are the version pair the current bundle's last render read, and own the own version
 	// it was rendered at (0 when the environment does not carry TierPlan).
 	config, certs, own int64
+	// selfRefused is the last render's refusal of the self input as text, "" for none, so a refusal that
+	// repeats on every poll is logged once.
+	selfRefused string
 }
 
 // Reconciler keeps the current bundle of every environment, in memory only (D-20).
@@ -232,7 +235,18 @@ func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) e
 	}
 	s.skipped = res.Skipped
 	s.config, s.certs, s.own = snap.Settings.ConfigVersion, certsVersion, in.OwnVersion
+	selfRefused := ""
+	if res.SelfRefused != nil {
+		selfRefused = res.SelfRefused.Error()
+	}
+	logSelf := selfRefused != "" && selfRefused != s.selfRefused
+	s.selfRefused = selfRefused
 	s.mu.Unlock()
+	if logSelf {
+		// The stack routes are rendered all the same (WR-09); only TierPlan's own route and carve-out wait.
+		r.log.Warn("TierPlan's own route and HTTP-01 carve-out are left out of the environment's bundle: TierPlan's own input cannot be rendered",
+			"environment", envID, "code", res.SelfRefused.Code, "field", res.SelfRefused.Field)
+	}
 
 	if changed {
 		r.changes.Notify(envID)

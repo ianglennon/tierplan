@@ -38,6 +38,10 @@ const (
 	// from the proxy: the render was given no self input, or TierPlan is not on the self network yet
 	// (D-03). Nothing is served on the hostname until it is.
 	SkipSelfNotAttached SkipReason = "self_not_attached"
+	// SkipSelfInputInvalid: the route is TierPlan's own and the self input could not be rendered (a base
+	// path in the public URL, or no name of TierPlan's on the self network): Result.SelfRefused says which
+	// field. Only TierPlan's own route and carve-out are left out; the stack routes are rendered (WR-09).
+	SkipSelfInputInvalid SkipReason = "self_input_invalid"
 )
 
 // The entry point every route's router is attached to, and the TLS floor of the default options
@@ -152,6 +156,11 @@ type Skipped struct {
 type Result struct {
 	Bundle  ingressbundle.Bundle
 	Skipped []Skipped
+	// SelfRefused is why the self input could not be rendered (CodeUnsafeValue or CodeSelfInput, and the
+	// field), nil when it could or there was none. The render goes on without it: TierPlan's own route is
+	// skipped as self_input_invalid and its carve-out is left out, so a problem of TierPlan's own route
+	// never stops the environment's stack routes (WR-09).
+	SelfRefused *RefusedError
 }
 
 // The typed shape of the dynamic file. YAML is produced only by marshalling these (D-07): there is no
@@ -306,8 +315,12 @@ func renderSchema2(in Input) (Result, error) {
 			return Result{}, err
 		}
 	}
-	if err := refuseSelf(in.Self); err != nil {
-		return Result{}, err
+	// A self input that cannot be rendered is refused alone (WR-09): nothing of it reaches the file, and
+	// the stack routes are rendered as with no self input.
+	self := in.Self
+	selfRefused := refuseSelf(self)
+	if selfRefused != nil {
+		self = nil
 	}
 
 	var (
@@ -331,7 +344,10 @@ func renderSchema2(in Input) (Result, error) {
 				Hostname: r.Hostname, PathPrefix: r.PathPrefix, Stack: r.StackName, Service: r.Service, Reason: reason,
 			})
 		}
-		cert, reason := selectRoute(r, claimed, certs, in.Self)
+		cert, reason := selectRoute(r, claimed, certs, self)
+		if reason == SkipSelfNotAttached && selfRefused != nil {
+			reason = SkipSelfInputInvalid
+		}
 		if reason != "" {
 			skip(reason)
 			continue
@@ -341,20 +357,20 @@ func renderSchema2(in Input) (Result, error) {
 			// names this host. Its router and service have fixed names, and its transport verifies
 			// TierPlan against the trust file (D-14).
 			http.Routers[selfRouterName] = router{
-				Rule:        selfRule(in.Self.Host),
+				Rule:        selfRule(self.Host),
 				EntryPoints: []string{entryPointSecure},
 				Service:     selfServiceName,
 				Priority:    Priority(r.PathPrefix),
 				TLS:         tlsDefault(),
 			}
 			http.Services[selfServiceName] = service{LoadBalancer: loadBalancer{
-				Servers:          []server{{URL: selfURL(in.Self)}},
+				Servers:          []server{{URL: selfURL(self)}},
 				ServersTransport: SelfTransport,
 			}}
-			trust := ingressbundle.CertsDir + "/" + ingressbundle.Checksum(in.Self.TrustPEM) + ".crt"
-			files[trust] = ingressbundle.File{Path: trust, Data: slices.Clone(in.Self.TrustPEM)}
+			trust := ingressbundle.CertsDir + "/" + ingressbundle.Checksum(self.TrustPEM) + ".crt"
+			files[trust] = ingressbundle.File{Path: trust, Data: slices.Clone(self.TrustPEM)}
 			selfTr = &selfServersTransport{
-				ServerName: in.Self.ServerName,
+				ServerName: self.ServerName,
 				RootCAs:    []string{ingressbundle.CertRoot + "/" + path2name(trust)},
 			}
 			hash := routeHash(r.Hostname, r.PathPrefix)
@@ -424,7 +440,7 @@ func renderSchema2(in Input) (Result, error) {
 
 	// TierPlan's own HTTP-01 carve-out (D-12), whether or not the self route is on: one router on web
 	// for TierPlan's own names on the challenge path, to its plain listener over the self network.
-	if hosts := carveOutHosts(in.Self); len(hosts) > 0 {
+	if hosts := carveOutHosts(self); len(hosts) > 0 {
 		http.Routers[acmeRouterName] = router{
 			Rule:        carveOutRule(hosts),
 			EntryPoints: []string{entryPointWeb},
@@ -432,7 +448,7 @@ func renderSchema2(in Input) (Result, error) {
 			Priority:    CarveOutPriority,
 		}
 		http.Services[plainServiceName] = service{LoadBalancer: loadBalancer{
-			Servers: []server{{URL: plainURL(in.Self)}},
+			Servers: []server{{URL: plainURL(self)}},
 		}}
 		names = append(names,
 			namedObject{kind: "router", name: acmeRouterName, identity: acmeRouterName},
@@ -491,7 +507,7 @@ func renderSchema2(in Input) (Result, error) {
 	slices.SortFunc(skipped, func(a, b Skipped) int {
 		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.PathPrefix, b.PathPrefix))
 	})
-	return Result{Bundle: bundle, Skipped: skipped}, nil
+	return Result{Bundle: bundle, Skipped: skipped, SelfRefused: selfRefused}, nil
 }
 
 // refuseRoute is the defence in depth behind the label parser. It checks every route, rendered or not
@@ -607,11 +623,11 @@ func selfURL(s *SelfInput) string {
 // server name and a trust bundle of at least one PEM certificate. An attached input with no host is
 // the carve-out alone, with no system claim. Not-attached input is allowed to be incomplete (nothing
 // of it is rendered), but its strings are checked all the same. A nil input is fine.
-func refuseSelf(s *SelfInput) error {
+func refuseSelf(s *SelfInput) *RefusedError {
 	if s == nil {
 		return nil
 	}
-	refuse := func(code, field string) error {
+	refuse := func(code, field string) *RefusedError {
 		return &RefusedError{Code: code, Hostname: s.Host, PathPrefix: "/", Field: "self " + field}
 	}
 	fields := []struct{ field, value string }{

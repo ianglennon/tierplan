@@ -18646,7 +18646,7 @@
             "type": "string"
           },
           "reason": {
-            "description": "Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network) or not_observed (no check has read that since TierPlan started)",
+            "description": "Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network), not_observed (no check has read that since TierPlan started) or self_input_invalid (TierPlan's own route cannot be rendered from what it knows of itself)",
             "type": "string"
           },
           "state": {

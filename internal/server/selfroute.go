@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -296,11 +297,24 @@ func (h *selfRoute) selfInput(ctx context.Context, in *selfInputs, envID string)
 	out := ingressrender.SelfInput{
 		BackendHost: s.Backend, BackendPort: urls.ListenPort, ServerName: serverName,
 		TrustPEM: trust, ACMEHosts: acmeHosts, Attached: s.Attached,
+		// The renderer refuses a base path, which leaves TierPlan's own route out with a reason rather than serving the
+		// host root and the connect paths at the wrong place (WR-07, WR-09). Settings refuse one while the route is on,
+		// so it reaches here only through an environment-fixed public URL.
+		BasePath: basePathOf(urls.PublicURL),
 	}
 	if s.Claimed {
 		out.Host = s.Host
 	}
 	return out, ver, true
+}
+
+// basePathOf is the path of a URL without its trailing slash, "" for the root or a URL that does not parse.
+func basePathOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(u.Path, "/")
 }
 
 // selfEnv is the environment TierPlan's own route or carve-out can be in: the claim's while one exists, else the one the
@@ -366,7 +380,7 @@ func (h *selfRoute) http01Cached() bool {
 func (h *selfRoute) remember(in *selfInputs, envID string, out ingressrender.SelfInput, ok bool) {
 	key := ""
 	if ok {
-		key = fmt.Sprintf("%q|%q|%d|%q|%q|%t", out.Host, out.BackendHost, out.BackendPort, out.ServerName, strings.Join(out.ACMEHosts, ","), out.Attached)
+		key = fmt.Sprintf("%q|%q|%d|%q|%q|%t|%q", out.Host, out.BackendHost, out.BackendPort, out.ServerName, strings.Join(out.ACMEHosts, ","), out.Attached, out.BasePath)
 	}
 	h.inMu.Lock()
 	if h.seen == nil {

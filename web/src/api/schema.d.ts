@@ -14087,7 +14087,7 @@ export interface components {
             code: "claim_held" | "network_attached" | "backend_healthy" | "certificate_ready" | "applied";
             /** @description A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the certificate's own failure hint */
             message: string;
-            /** @description Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network) or not_observed (no check has read that since TierPlan started) */
+            /** @description Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network), not_observed (no check has read that since TierPlan started) or self_input_invalid (TierPlan's own route cannot be rendered from what it knows of itself) */
             reason: string;
             /**
              * @description ready: the condition holds. not_ready: it was read and does not hold. unknown: what it depends on was not read, for example the engine could not be reached or ingress is off; it is never reported ready

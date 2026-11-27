@@ -160,6 +160,10 @@ const (
 	ReasonSelfNotAttached = "self_not_attached"
 	// ReasonNotObserved: no pass has read whether TierPlan is on the tierplan-self network since it started.
 	ReasonNotObserved = "not_observed"
+	// ReasonSelfInputInvalid: what TierPlan knows of itself cannot be rendered as its route (a base path in the public URL,
+	// or no name of TierPlan's on the self network), so the proxy has no way to reach it. It is spelled as the renderer's
+	// skipped reason (ingressrender.SkipSelfInputInvalid); the environment's stack routes are rendered all the same (WR-09).
+	ReasonSelfInputInvalid = "self_input_invalid"
 )
 
 // RouteUnknown is the state of a route whose conditions could not all be read, so whether it serves is not known.
@@ -192,7 +196,12 @@ func SystemRouteConditions(in RouteStateInput, r ingress.Route, attached, attach
 	default:
 		network, backend = ready(CondNetworkAttached), ready(CondBackendHealthy)
 	}
-	return []Condition{claim, network, backend, certificateCondition(in, key), withCounts(appliedCondition(in, key), in)}
+	cert := certificateCondition(in, key)
+	if in.BundleKnown && in.Skipped[key] == ReasonSelfInputInvalid {
+		// The route is left out for TierPlan's own input, not for its certificate, which was then not looked at.
+		backend, cert = notReady(CondBackendHealthy, ReasonSelfInputInvalid), unknown(CondCertificateReady, ReasonSelfInputInvalid)
+	}
+	return []Condition{claim, network, backend, cert, withCounts(appliedCondition(in, key), in)}
 }
 
 // SystemRouteState is the state and reason of a system route from its conditions, with RouteStates' precedence: ingress off,

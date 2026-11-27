@@ -35,7 +35,7 @@ type RouteAppliedBody struct {
 type RouteConditionBody struct {
 	Code    string            `json:"code" enum:"claim_held,network_attached,backend_healthy,certificate_ready,applied" doc:"Which condition this is. claim_held: the stack holds the claim the route sits under. network_attached: the service is on the ingress network (for TierPlan's own route, TierPlan is on the tierplan-self network). backend_healthy: the service runs at least one replica (for TierPlan's own route, the proxy can reach TierPlan). certificate_ready: the hostname has a certificate the bundle can carry. applied: every active ingress node applied a bundle that holds the route. A route's conditions always come in this order"`
 	State   string            `json:"state" enum:"ready,not_ready,unknown" doc:"ready: the condition holds. not_ready: it was read and does not hold. unknown: what it depends on was not read, for example the engine could not be reached or ingress is off; it is never reported ready"`
-	Reason  string            `json:"reason" doc:"Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network) or not_observed (no check has read that since TierPlan started)"`
+	Reason  string            `json:"reason" doc:"Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network), not_observed (no check has read that since TierPlan started) or self_input_invalid (TierPlan's own route cannot be rendered from what it knows of itself)"`
 	Message string            `json:"message" doc:"A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the certificate's own failure hint"`
 	Applied *RouteAppliedBody `json:"applied,omitempty" doc:"How many active ingress nodes applied the bundle; present on the applied condition only"`
 }
@@ -403,6 +403,8 @@ func conditionMessage(reason, service string) string {
 		return "TierPlan is not on the tierplan-self network, so the proxy cannot reach it."
 	case stackops.ReasonNotObserved:
 		return "TierPlan has not checked whether it is on the tierplan-self network since it started."
+	case stackops.ReasonSelfInputInvalid:
+		return "TierPlan cannot render its own route from what it knows of itself (a base path in the public URL, or no name on the tierplan-self network). The server log names the field."
 	}
 	return ""
 }

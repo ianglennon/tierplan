@@ -71,6 +71,18 @@ func TestSystemRouteConditions(t *testing.T) {
 			state: stackops.RouteWaitingCertificate, reason: stackops.ReasonNoCertificate,
 		},
 		{
+			name: "TierPlan's own input cannot be rendered (WR-09)", attached: true, attachedKnown: true,
+			edit: func(in *stackops.RouteStateInput) {
+				in.InBundle = map[stackops.RouteKey]bool{}
+				in.Skipped = map[stackops.RouteKey]string{key: stackops.ReasonSelfInputInvalid}
+			},
+			want: [5]cond{
+				ready, ready, {stackops.CondNotReady, stackops.ReasonSelfInputInvalid}, {stackops.CondUnknown, stackops.ReasonSelfInputInvalid},
+				{stackops.CondNotReady, stackops.ReasonNotInBundle},
+			},
+			state: stackops.RouteBackendNotRunning,
+		},
+		{
 			name: "bundle not applied by every node", attached: true, attachedKnown: true,
 			edit:  func(in *stackops.RouteStateInput) { in.NodesApplied, in.AppliedNodes = false, 1 },
 			want:  [5]cond{ready, ready, ready, ready, {stackops.CondNotReady, stackops.ReasonNodesBehind}},

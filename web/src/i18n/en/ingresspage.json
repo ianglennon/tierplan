@@ -89,6 +89,7 @@
       "no_bundle": "Ingress hasn't published its settings yet.",
       "self_not_attached": "TierPlan isn't on the tierplan-self network yet, so the proxies can't reach it.",
       "not_observed": "TierPlan hasn't checked whether it's on the tierplan-self network since it started.",
+      "self_input_invalid": "TierPlan can't build its own route from what it knows of itself, such as a public URL with a path. The server log names the setting.",
       "appliedReady": "On {{applied}} of {{total}} nodes."
     },
     "off": {
