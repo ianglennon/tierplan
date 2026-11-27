@@ -316,3 +316,69 @@ func (e *xffEnv) forgedGet(n *dockertest.Node, host, path string) (int, string, 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	return resp.StatusCode, string(body), from, err
 }
+
+// xffCurlService is the one-shot routed service that forges the header from the ingress overlay.
+const xffCurlService = "tp-xff-curl"
+
+// TestSelfXFFFromTheIngressOverlayIsNotBelieved is D-08 at TierPlan's end on a real swarm, in its worst case: the stub is
+// on tierplan-ingress as well as tierplan-self, and a routed service on tierplan-ingress (on the other node) calls it there
+// directly with `X-Forwarded-For: 6.6.6.6`. The stub trusts only the self network's ranges, so it does not believe the
+// header: the address it derives is the calling task's own on the overlay (SELF-03: a routed service cannot make TierPlan
+// record an address it chose).
+func TestSelfXFFFromTheIngressOverlayIsNotBelieved(t *testing.T) {
+	e := startXFFEnv(t)
+
+	e.sh(e.mgr, "docker service update --detach=false --quiet --network-add "+ingress.NetworkName+" "+stubService+" 2>&1")
+	stubAddrs := e.taskAddrs(stubService, ingress.NetworkName, "desired-state=running")
+	if len(stubAddrs) != 1 {
+		t.Fatalf("the stub's running task has addresses %v on %s, want one", stubAddrs, ingress.NetworkName)
+	}
+	target := stubAddrs[0]
+	if slices.ContainsFunc(e.trusted, func(p netip.Prefix) bool { return p.Contains(target) }) {
+		t.Fatalf("the stub's address %s on %s is inside the trusted ranges %v", target, ingress.NetworkName, e.trusted)
+	}
+
+	// The routed service runs once on the worker. Its loop only retries while the overlay's path to the stub comes up.
+	script := "for i in $(seq 1 30); do wget -q -T 5 -O - --no-check-certificate --header \"X-Forwarded-For: " + forgedXFF +
+		"\" https://" + net.JoinHostPort(target.String(), traefiktest.StubPort) + "/client-ip && exit 0; sleep 1; done; exit 1"
+	e.sh(e.mgr, "docker service create --detach=true --quiet --no-resolve-image --name "+xffCurlService+
+		" --restart-condition none --network "+ingress.NetworkName+" --constraint node.role==worker --entrypoint sh "+
+		e.image+" -c '"+script+"' 2>&1")
+	var state string
+	dockertest.Wait(t, deployBound, "the routed service's one run to end", func() (bool, string) {
+		state = strings.TrimSpace(e.sh(e.mgr, "docker service ps --no-trunc --format '{{.CurrentState}} {{.Error}}' "+xffCurlService))
+		return strings.HasPrefix(state, "Complete") || strings.HasPrefix(state, "Failed") || strings.HasPrefix(state, "Rejected"), state
+	})
+	logs := e.sh(e.mgr, "docker service logs --raw "+xffCurlService+" 2>&1")
+	if !strings.HasPrefix(state, "Complete") {
+		t.Fatalf("the routed service's run ended %q:\n%s", state, strings.TrimSpace(logs))
+	}
+	answer, ok := parseClientAnswer(logs)
+	if !ok {
+		t.Fatalf("the routed service printed no answer of the stub:\n%s", strings.TrimSpace(logs))
+	}
+	curlAddrs := e.taskAddrs(xffCurlService, ingress.NetworkName, "")
+	if len(curlAddrs) != 1 {
+		t.Fatalf("the routed service's task has addresses %v on %s, want one", curlAddrs, ingress.NetworkName)
+	}
+	caller := curlAddrs[0]
+	t.Logf("the stub answered client=%s xff=%q to the routed task at %s", answer.client, answer.xff, caller)
+
+	if !strings.Contains(answer.xff, forgedXFF) {
+		t.Fatalf("the stub saw X-Forwarded-For %q, want the forged %s to have reached it", answer.xff, forgedXFF)
+	}
+	if answer.client == forgedXFF {
+		t.Fatalf("the stub believed the forged X-Forwarded-For from the ingress overlay: client=%s", answer.client)
+	}
+	if answer.client != caller.String() {
+		t.Fatalf("the stub derived client=%s, want the routed task's own address on %s, %s", answer.client, ingress.NetworkName, caller)
+	}
+	var peers []netip.Addr
+	dockertest.Wait(t, serveBound, "the stub to log the peer of the routed service's request", func() (bool, string) {
+		peers = e.stubPeers()
+		return slices.Contains(peers, caller), fmt.Sprintf("peers %v", peers)
+	})
+	if slices.ContainsFunc(e.trusted, func(p netip.Prefix) bool { return p.Contains(caller) }) {
+		t.Fatalf("the routed task's address %s is inside the trusted ranges %v", caller, e.trusted)
+	}
+}
