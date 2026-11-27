@@ -38,6 +38,7 @@ func TestARenderedBundleIsAcceptedByTheSupervisorsCheck(t *testing.T) {
 		t.Fatalf("Check refused a schema 2 bundle: %v", err)
 	}
 
+	// Schema1 is the old schema, which this supervisor does not apply.
 	old, err := ingressbundle.Build(ingressbundle.Schema1, b.Version, b.Files, nil)
 	if err != nil {
 		t.Fatalf("build the same files as a schema 1 bundle: %v", err)

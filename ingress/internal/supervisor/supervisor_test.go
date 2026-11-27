@@ -128,7 +128,7 @@ func bundleFor(t *testing.T, config int64, dynamic []byte, leaves ...leaf) ingre
 			ingressbundle.File{Path: l.keyPath, Data: l.key})
 	}
 	files = append(files, ingressbundle.File{Path: ingressbundle.DynamicFile, Data: dynamic})
-	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: config}, files, nil)
+	b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: config}, files, nil)
 	if err != nil {
 		t.Fatalf("build a bundle: %v", err)
 	}

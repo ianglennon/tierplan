@@ -32,7 +32,7 @@ func testEKM(b byte) []byte { return bytes.Repeat([]byte{b}, authn.EKMLength) }
 
 func testBundle(t *testing.T) ingressbundle.Bundle {
 	t.Helper()
-	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 5},
+	b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: 5},
 		[]ingressbundle.File{
 			{Path: ingressbundle.DynamicFile, Data: []byte("http: {}\n")},
 			{Path: ingressbundle.CertsDir + "/a.key", Data: []byte("key")},
@@ -312,7 +312,7 @@ func TestDecodeBundleRefusesOversizeAndUnverifiable(t *testing.T) {
 
 func TestDecodeBundleAcceptsALowerVersion(t *testing.T) {
 	mk := func(cfg int64, data string) ingressbundle.Bundle {
-		b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: cfg},
+		b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: cfg},
 			[]ingressbundle.File{{Path: ingressbundle.DynamicFile, Data: []byte(data)}}, nil)
 		if err != nil {
 			t.Fatal(err)
