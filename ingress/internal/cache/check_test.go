@@ -26,12 +26,35 @@ func TestCheckAcceptsABundle(t *testing.T) {
 	}
 }
 
+// TestARenderedBundleIsAcceptedByTheSupervisorsCheck is the Phase 28 tracer: a bundle of the schema the
+// renderer makes now (ingressrender.Latest, which is ingressbundle.Schema2) with a dynamic file shaped like
+// the renderer's passes the supervisor's Check, and the same files under the old schema 1 do not.
+func TestARenderedBundleIsAcceptedByTheSupervisorsCheck(t *testing.T) {
+	b := testBundle(t, "a.test.local")
+	if b.Schema != ingressbundle.Schema2 {
+		t.Fatalf("the test bundle is schema %d, want %d", b.Schema, ingressbundle.Schema2)
+	}
+	if err := Check(b); err != nil {
+		t.Fatalf("Check refused a schema 2 bundle: %v", err)
+	}
+
+	old, err := ingressbundle.Build(ingressbundle.Schema1, b.Version, b.Files, nil)
+	if err != nil {
+		t.Fatalf("build the same files as a schema 1 bundle: %v", err)
+	}
+	err = Check(old)
+	var verr *ingressbundle.VerifyError
+	if !errors.As(err, &verr) || verr.Reason != ingressbundle.ReasonSchemaUnsupported {
+		t.Fatalf("Check of a schema 1 bundle = %v, want the unsupported-schema refusal", err)
+	}
+}
+
 func TestCheckAcceptsTheEmptyBundle(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(goldenDir, "empty", "tierplan.yml"))
 	if err != nil {
 		t.Fatalf("read the empty golden: %v", err)
 	}
-	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 1},
+	b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: 1},
 		[]ingressbundle.File{{Path: ingressbundle.DynamicFile, Data: data}}, nil)
 	if err != nil {
 		t.Fatalf("build the empty bundle: %v", err)
@@ -165,15 +188,16 @@ func rejectRows() []rejectRow {
 	return []rejectRow{
 		{"schema_unsupported", ingressbundle.ReasonSchemaUnsupported, true, func(t *testing.T) ingressbundle.Bundle {
 			b := testBundle(t, host)
-			out, err := ingressbundle.Build(2, b.Version, b.Files, nil)
+			// Schema1 is the old schema: a proxy built for schema 2 does not apply it.
+			out, err := ingressbundle.Build(ingressbundle.Schema1, b.Version, b.Files, nil)
 			if err != nil {
-				t.Fatalf("build a schema 2 bundle: %v", err)
+				t.Fatalf("build a schema 1 bundle: %v", err)
 			}
 			return out
 		}},
 		{"schema", ingressbundle.ReasonSchema, false, func(t *testing.T) ingressbundle.Bundle {
 			b := cloned(testBundle(t, host))
-			b.Manifest.Schema = 2
+			b.Manifest.Schema = ingressbundle.Schema1 // the manifest disagrees with the bundle's schema 2
 			return b
 		}},
 		{"checksum", ingressbundle.ReasonChecksum, false, func(t *testing.T) ingressbundle.Bundle {
@@ -206,7 +230,7 @@ func rejectRows() []rejectRow {
 		}},
 		{"missing_file/no-dynamic-file", ingressbundle.ReasonMissingFile, true, func(t *testing.T) ingressbundle.Bundle {
 			l := newLeafFiles(t, host)
-			b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 1},
+			b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: 1},
 				[]ingressbundle.File{{Path: l.certPath, Data: l.cert}, {Path: l.keyPath, Data: l.key}}, nil)
 			if err != nil {
 				t.Fatalf("build a bundle with no dynamic file: %v", err)
@@ -348,7 +372,7 @@ func TestCheckRejects(t *testing.T) {
 func TestCheckIgnoresStripPrefixPaths(t *testing.T) {
 	dynamic := "tls:\n  options:\n    default:\n      sniStrict: true\n      minVersion: VersionTLS12\n" +
 		"http:\n  middlewares:\n    m-strip-x:\n      stripPrefix:\n        prefixes:\n          - /x\n"
-	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 1},
+	b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: 1},
 		[]ingressbundle.File{{Path: ingressbundle.DynamicFile, Data: []byte(dynamic)}}, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)

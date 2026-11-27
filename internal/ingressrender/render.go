@@ -196,8 +196,8 @@ func Render(in Input) (Result, error) {
 	return RenderSchema(Latest, in)
 }
 
-// renderSchema1 is the rendering of bundle schema 1.
-func renderSchema1(in Input) (Result, error) {
+// renderSchema2 is the rendering of bundle schema 2.
+func renderSchema2(in Input) (Result, error) {
 	certs := make(map[string]HostCert, len(in.Certs))
 	for _, c := range in.Certs {
 		certs[c.Hostname] = c
@@ -332,7 +332,7 @@ func renderSchema1(in Input) (Result, error) {
 		return Result{}, err
 	}
 
-	bundle, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{
+	bundle, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{
 		Config: in.Snapshot.Settings.ConfigVersion,
 		Certs:  in.CertsVersion,
 		Own:    in.OwnVersion,

@@ -147,12 +147,12 @@ func TestRejectReasonWireStrings(t *testing.T) {
 }
 
 func TestSupportedSchemas(t *testing.T) {
-	if got := SupportedSchemas(); !slices.Equal(got, []int{Schema1}) {
-		t.Fatalf("SupportedSchemas = %v, want [%d]", got, Schema1)
+	if got := SupportedSchemas(); !slices.Equal(got, []int{Schema2}) {
+		t.Fatalf("SupportedSchemas = %v, want [%d]", got, Schema2)
 	}
 	s := SupportedSchemas()
 	s[0] = 99
-	if got := SupportedSchemas(); !slices.Equal(got, []int{Schema1}) {
+	if got := SupportedSchemas(); !slices.Equal(got, []int{Schema2}) {
 		t.Fatalf("a caller's change reached the next call: %v", got)
 	}
 }
