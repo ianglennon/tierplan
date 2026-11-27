@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/ingress"
 )
@@ -61,8 +62,9 @@ func (s *Service) standaloneSelfWork(sp *selfPass, l standaloneLive) bool {
 // proxy's project is built. TierPlan's own bridge (the name and the label pair) is adopted whatever its subnet; one of the
 // name that is not TierPlan's is foreign and never attached. When wanted and absent, the bridge is made, its /24 from the
 // host's pools under the address-space lock when TierPlan plans them, else the engine's choice. Then, when wanted, TierPlan's
-// own container is connected to it under SelfBackendAlias unless it is on it already. A connect that fails is logged and
-// tried again on the next pass: it changes nothing. c is the host's client, inside one write.
+// own container is connected to it under SelfBackendAlias unless it is on it already, and each connect is audited as
+// ingress.self_network_attached (D-18). A connect that fails is logged and tried again on the next pass: it changes nothing.
+// c is the host's client, inside one write.
 func (s *Service) ensureStandaloneSelfNetwork(ctx context.Context, c *dockerx.Client, sp *selfPass, l standaloneLive) (selfNet, error) {
 	if l.selfForeign {
 		return selfNet{foreign: true}, nil
@@ -118,6 +120,24 @@ func (s *Service) connectSelf(ctx context.Context, sp *selfPass, networkID strin
 	}
 	sp.place.Attached = true
 	s.log().Info("the ingress ensure loop connected TierPlan's own container to "+ingress.SelfNetworkName, "environment", sp.info.ID)
+	if s.d.Audit == nil {
+		return
+	}
+	if err := s.d.Audit.Record(ctx, audit.Entry{
+		Actor: audit.SystemIngress, Action: audit.ActionIngressSelfNetworkAttached, TargetType: "environment", TargetID: sp.info.ID,
+		EnvID: sp.info.ID, Result: audit.ResultSuccess,
+		Details: map[string]string{"network": ingress.SelfNetworkName, "container": shortContainerID(sp.place.ContainerID)},
+	}); err != nil {
+		s.log().Warn("the ingress ensure loop could not audit TierPlan's connect to its own network", "environment", sp.info.ID, "error", err)
+	}
+}
+
+// shortContainerID is the 12 characters of a container ID the docker CLI shows.
+func shortContainerID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 // observeStandaloneSelf reads the self network, the ingress network and the host's bridge on the standalone host's engine

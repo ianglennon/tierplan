@@ -210,7 +210,10 @@ func TestAuditProofSelfNetworkAttached(t *testing.T) {
 	r, self := newStandaloneSelfRig(t, standaloneSelfOptions{})
 	const long = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	self.recreate(long)
-	token := r.issueToken()
+	token := r.sys.tokens[0] // the join token the enable gave the proxy
+	if token == "" {
+		t.Fatal("the enable gave the proxy no join token")
+	}
 	r.claimSelf()
 
 	r.round()

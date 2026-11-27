@@ -878,6 +878,7 @@ describe("actionLabel (ingress)", () => {
     "ingress.deploy_resumed",
     "ingress.claimed",
     "ingress.vip_moved",
+    "ingress.self_network_attached",
   ];
 
   it("labels every ingress action and lists it in the Action filter", () => {
@@ -888,6 +889,9 @@ describe("actionLabel (ingress)", () => {
     expect(actionLabel("ingress.domain_created", real)).toBe("Registered ingress domain");
     expect(actionLabel("ingress.domain_credential_replaced", real)).toBe(
       "Replaced ingress domain DNS token",
+    );
+    expect(actionLabel("ingress.self_network_attached", real)).toBe(
+      "Connected TierPlan to its own ingress network",
     );
   });
 
