@@ -22,6 +22,8 @@ to [On a standalone host](#on-a-standalone-host) describe a swarm; that section 
 - [The access log](#the-access-log)
 - [Switching off](#switching-off)
 - [Nodes that were away](#nodes-that-were-away)
+- [DNS](#dns)
+- [Certificate Transparency](#certificate-transparency)
 - [Virtual IP](#virtual-ip)
 
 ## What switching on creates
@@ -283,6 +285,38 @@ again retries the ones that remain.
 A node that still runs a proxy container is never wiped. If you switch ingress on again before a pending wipe ran,
 the entry is dropped without wiping, because the proxy owns the volume again. A node that left the swarm for good
 keeps its entry, since there is no agent to reconnect.
+
+## DNS
+
+Every hostname a stack asks for gets its own certificate, and TierPlan proves it owns the name with the DNS-01 challenge.
+It writes a TXT record at `_acme-challenge.<hostname>` through the token of the domain the hostname belongs to, waits for
+Let's Encrypt to see it, and deletes the record afterwards. The token is the one you give for the domain; see
+[https.md](https.md#the-token) for how to make a Cloudflare token and what it needs.
+
+**Keep the apps domain apart from your main records.** A Cloudflare API token is scoped to accounts or to zones. It cannot be
+limited to some records of a zone or to a subdomain. A token that can edit the DNS of the zone your apps live in can edit
+every other record in that zone too. So give the apps their own registered domain, or at least their own zone, and make the
+token for that zone alone. Then a leaked token reaches only the apps' records, and not your organisation's mail, website or
+other records.
+
+### CNAME delegation (advanced)
+
+If you would rather keep the hostnames in a zone you do not want to give a token for, delegate only the challenge. In the
+hostname's zone, make `_acme-challenge.<hostname>` a CNAME to a name in a second zone, the challenge zone, that you do
+control. TierPlan follows the CNAME and writes the TXT record at its target. The token must see both zones: the zone of the
+hostname, which TierPlan checks when you add the domain, and the challenge zone, where the record is written. A token that
+sees only one of them is refused, with `dns_zone_not_found` or `dns_delegation_target`. Delegation rests on the automated
+tests, which run against a fake DNS provider and a test CA. It has not been run against Cloudflare itself yet.
+
+<!-- 28-41: complete the line above from 28-S7-RESULT.md (S7 run, or resting on the automated tests). -->
+
+## Certificate Transparency
+
+Every certificate TierPlan obtains is published in public Certificate Transparency logs, with every name in it. Anyone can
+search those logs, and they cannot be edited afterwards. This includes a name that is requested ahead of the stack that
+uses it: if you add a hostname to a domain, or a stack asks for one, the certificate for it is logged as soon as it is
+issued, whether or not anything ever serves it. Do not put a name you need to keep private in a hostname, and do not
+request one to try it out.
 
 ## Virtual IP
 
