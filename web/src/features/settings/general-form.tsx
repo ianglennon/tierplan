@@ -80,6 +80,10 @@ const INGRESS_HOST: Readonly<Record<string, { field: FieldName; messageKey: stri
     field: "agentUrl",
     messageKey: "settings.general.agentUrl.ingressHost",
   },
+  public_url_path_with_self_route: {
+    field: "publicUrl",
+    messageKey: "settings.general.publicUrl.pathWithSelfRoute",
+  },
 };
 
 // Where the fields sit on screen, which is where focus goes first on an error.

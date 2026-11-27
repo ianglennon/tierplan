@@ -147,3 +147,30 @@ func TestPublicURLMayBeTheRouteHostOnlyWithAFreeAgentURL(t *testing.T) {
 		t.Fatalf("public URL = %q", g.inst.PublicURL())
 	}
 }
+
+// TestPublicURLMayHaveNoPathWhileTheSelfRouteIsOn (WR-07): the self route serves TierPlan at the root of its hostname and
+// leaves out the connect paths at the root, so a public URL with a base path, which moves both, is refused on its field while
+// TierPlan's own route is on. With only a stack's route, or a public URL at the root, the save goes through.
+func TestPublicURLMayHaveNoPathWhileTheSelfRouteIsOn(t *testing.T) {
+	t.Parallel()
+	refused := map[string]string{"body.publicUrl": "public_url_path_with_self_route"}
+	f, cookie, csrf := ingressHostsFixture(t, map[string]ingress.ClaimInfo{"tp.apps.example.org": systemClaim("tp.apps.example.org")})
+	audited := len(f.audits(t, "settings.updated"))
+	for _, bad := range []string{"https://tierplan.example.org/tp", "https://tierplan.example.org:7480/a/b/"} {
+		assertFieldProblems(t, f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": bad}), refused)
+	}
+	if f.inst.PublicURL() != "" {
+		t.Fatalf("a refused save stored the public URL %q", f.inst.PublicURL())
+	}
+	if n := len(f.audits(t, "settings.updated")); n != audited {
+		t.Fatalf("%d settings.updated entries, want %d: a refusal writes nothing", n, audited)
+	}
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://tierplan.example.org/"}); rec.Code != http.StatusOK {
+		t.Fatalf("a public URL at the root: %d %s", rec.Code, rec.Body)
+	}
+
+	g, gcookie, gcsrf := ingressHostsFixture(t, map[string]ingress.ClaimInfo{"app.apps.example.org": stackClaim("app.apps.example.org")})
+	if rec := g.patchSettings(t, gcookie, gcsrf, map[string]string{"publicUrl": "https://tierplan.example.org/tp"}); rec.Code != http.StatusOK {
+		t.Fatalf("a base path with only a stack's route: %d %s", rec.Code, rec.Body)
+	}
+}

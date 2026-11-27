@@ -50,6 +50,12 @@ const codeAgentURLIsIngressHost = "agent_url_is_ingress_host"
 // so the public URL may be the self route's host when a direct agent URL stays.
 const codePublicURLIsIngressHost = "public_url_is_ingress_host"
 
+// codePublicURLPathWithSelfRoute is the field error code of a public URL with a base
+// path while TierPlan's own route is on (WR-07): the route serves TierPlan at the root of
+// its hostname and leaves out the connect paths there, so a base path would break the route
+// and move the connect paths out of its exclusions. Switch the route off first.
+const codePublicURLPathWithSelfRoute = "public_url_path_with_self_route"
+
 // targetSettings is the audit target of a settings change.
 const targetSettings = "settings"
 
@@ -87,6 +93,22 @@ type SettingsDeps struct {
 
 // urlHostname is the lower-cased hostname of a normalised URL, without the port
 // or a trailing dot; "" when there is none.
+// urlHasPath is whether a URL names a path below the root, a base path.
+func urlHasPath(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && strings.Trim(u.Path, "/") != ""
+}
+
+// selfRouteOn is whether the ingress hosts hold TierPlan's own route (a system claim).
+func selfRouteOn(hosts map[string]ingress.ClaimInfo) bool {
+	for _, c := range hosts {
+		if c.OwnerKind == ingress.OwnerSystem {
+			return true
+		}
+	}
+	return false
+}
+
 func urlHostname(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -196,6 +218,8 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			"An agent URL whose host the ingress serves (the self route's or a stack's) answers 422 " + codeAgentURLIsIngressHost +
 			", and a public URL whose host the ingress serves answers 422 " + codePublicURLIsIngressHost +
 			" unless the same save or the stored settings keep an agent URL the ingress does not serve; both change nothing. " +
+			"A public URL with a base path while TierPlan's own route is on answers 422 " + codePublicURLPathWithSelfRoute +
+			": the route serves TierPlan at the root of its hostname, so switch it off first. " +
 			"An http public URL answers 422 " + codeInvalidPublicURL + " and an http agent URL answers 422 " + codeInvalidAgentURL +
 			", each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. " +
 			"An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while " +
@@ -306,6 +330,8 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			}
 			if !before.PublicURLLocked && claimed(url) && (agentURL == "" || claimed(agentURL)) {
 				add("body.publicUrl", codePublicURLIsIngressHost)
+			} else if !before.PublicURLLocked && url != before.PublicURL && urlHasPath(url) && selfRouteOn(hosts) {
+				add("body.publicUrl", codePublicURLPathWithSelfRoute)
 			}
 		}
 

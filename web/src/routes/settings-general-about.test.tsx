@@ -815,6 +815,22 @@ describe("General tab: ingress hostnames", () => {
     nothingElseSpeaks();
   });
 
+  it("routes the base-path refusal of the self route to the public URL field", async () => {
+    refuse([{ location: "body.publicUrl", message: "public_url_path_with_self_route" }]);
+    await openGeneral();
+    fireEvent.change(urlField(), { target: { value: "https://tierplan.example.org/tp" } });
+    fireEvent.click(saveButton());
+    await confirmPublicURL();
+
+    const error = await screen.findByText(
+      "TierPlan's own route is on, and it serves TierPlan at the root of its hostname. A public URL with a path would break the route. Turn the route off on the Ingress page first, or use a public URL with no path.",
+    );
+    expect(urlField().getAttribute("aria-invalid")).toBe("true");
+    expect(urlField().getAttribute("aria-describedby")).toContain(error.id);
+    expect(agentField().getAttribute("aria-invalid")).toBe("false");
+    nothingElseSpeaks();
+  });
+
   it("routes the public URL refusal to its field when clearing the agent URL caused it", async () => {
     settings.publicUrl = ROUTE;
     settings.agentUrl = "https://tierplan.internal:7480";

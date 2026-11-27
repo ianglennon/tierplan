@@ -119,6 +119,7 @@ func TestIngressDocsListEveryStableCode(t *testing.T) {
 		{"api.problemSelfRouteNotOn", unexportedConst(t, "api/ingress_self.go", "problemSelfRouteNotOn")},
 		{"api.codeAgentURLIsIngressHost", unexportedConst(t, "api/settings.go", "codeAgentURLIsIngressHost")},
 		{"api.codePublicURLIsIngressHost", unexportedConst(t, "api/settings.go", "codePublicURLIsIngressHost")},
+		{"api.codePublicURLPathWithSelfRoute", unexportedConst(t, "api/settings.go", "codePublicURLPathWithSelfRoute")},
 	}
 	for _, c := range codes {
 		if c.value == "" {

@@ -21,7 +21,8 @@
       "pending": "Saving…",
       "publicUrl": {
         "helper": "The address people use to reach TierPlan. It must start with https://. If TierPlan runs under a path, include it, for example https://example.com/tierplan. It controls cookies and request origin checks.",
-        "ingressHost": "This is the hostname of TierPlan's own route. With no agent URL set, agents and proxies dial the public URL, and they must never go through ingress. Set an agent URL that isn't an ingress hostname first, then save."
+        "ingressHost": "This is the hostname of TierPlan's own route. With no agent URL set, agents and proxies dial the public URL, and they must never go through ingress. Set an agent URL that isn't an ingress hostname first, then save.",
+        "pathWithSelfRoute": "TierPlan's own route is on, and it serves TierPlan at the root of its hostname. A public URL with a path would break the route. Turn the route off on the Ingress page first, or use a public URL with no path."
       },
       "agentUrl": {
         "label": "Agent URL",
