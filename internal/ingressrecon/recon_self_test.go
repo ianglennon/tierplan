@@ -214,3 +214,82 @@ func TestOtherEnvironmentsAreUnchanged(t *testing.T) {
 		t.Errorf("routers = %v, want no tierplan-self", names)
 	}
 }
+
+// settledSelf is a running reconciler over env-1 carrying TierPlan, past its start render, with the poll armed.
+func settledSelf(t *testing.T, rg *rig, self *fakeSelf) *started {
+	t.Helper()
+	rg.claimSelf()
+	s := rg.startSelf(self)
+	if ev := s.awaitRender(t); !ev.changed {
+		t.Fatalf("the start render reported an unchanged bundle %s, want a new one", ev.id)
+	}
+	s.awaitChange(t)
+	rg.clock.AwaitTimer(t, PollInterval)
+	return s
+}
+
+// A-02 / T-28-47: TierPlan's own certificate changing, with the config and certs versions unchanged, moves the own
+// version, and the next poll renders the new trust bundle. A poll with nothing moved renders nothing.
+func TestOwnVersionChangeAloneRerenders(t *testing.T) {
+	rg := newRig(t)
+	self := newFakeSelf(rigEnv, "trust 1", 42)
+	s := settledSelf(t, rg, self)
+	first, _ := s.r.Current(rigEnv)
+
+	self.set("trust 2", 43)
+	rg.clock.Advance(PollInterval)
+	if ev := s.awaitRender(t); !ev.changed || ev.envID != rigEnv {
+		t.Fatalf("render after the certificate change = %+v, want a new bundle for %s", ev, rigEnv)
+	}
+	s.awaitChange(t)
+	b, _ := s.r.Current(rigEnv)
+	if b.Version.Own != 43 {
+		t.Errorf("Version.Own = %d, want 43", b.Version.Own)
+	}
+	if b.Version.Config != first.Version.Config || b.Version.Certs != first.Version.Certs {
+		t.Errorf("Version = %+v, want the config and certs versions of %+v", b.Version, first.Version)
+	}
+	if trustFile(b, "trust 2") == nil || trustFile(b, "trust 1") != nil {
+		t.Error("the bundle does not carry the new trust file alone")
+	}
+
+	// Nothing moved: the poll looks and renders nothing. It arms its next timer after it has looked.
+	rg.clock.AwaitTimer(t, PollInterval)
+	rg.clock.Advance(PollInterval)
+	rg.clock.AwaitTimer(t, PollInterval)
+	assertNoRender(t, s)
+	assertNothingAnnounced(t, s)
+}
+
+// 28-32: RenderedOwn is the own version of the environment's last rendered bundle, 0 before any and for an
+// environment the reconciler does not know.
+func TestRenderedOwnReportsTheLastRender(t *testing.T) {
+	rg := newRig(t)
+	rg.claimSelf()
+	self := newFakeSelf(rigEnv, "trust 1", 42)
+	d := rg.deps(nil)
+	d.Self = self.Self
+	r := New(d)
+	if got := r.RenderedOwn(rigEnv); got != 0 {
+		t.Fatalf("RenderedOwn before any render = %d, want 0", got)
+	}
+
+	ctx := context.Background()
+	if err := r.Reconcile(ctx, rigEnv); err != nil {
+		t.Fatalf("first render: %v", err)
+	}
+	if got := r.RenderedOwn(rigEnv); got != 42 {
+		t.Errorf("RenderedOwn after the first render = %d, want 42", got)
+	}
+
+	self.set("trust 2", 43)
+	if err := r.Reconcile(ctx, rigEnv); err != nil {
+		t.Fatalf("second render: %v", err)
+	}
+	if got := r.RenderedOwn(rigEnv); got != 43 {
+		t.Errorf("RenderedOwn after the second render = %d, want 43", got)
+	}
+	if got := r.RenderedOwn("env-unknown"); got != 0 {
+		t.Errorf("RenderedOwn of an unknown environment = %d, want 0", got)
+	}
+}
