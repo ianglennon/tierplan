@@ -42,6 +42,9 @@ const (
 	// CodeSelfRouteReleaseFailed is a release the store could not write. The route is still on, and turning it off again
 	// tries again.
 	CodeSelfRouteReleaseFailed = "self_route_release_failed"
+	// CodeSelfRouteHeld is a claim the store refused because the install already holds TierPlan's own route
+	// (ingressstore.ErrSystemClaimHeld): another switch-on, in another environment, stored its claim after this job's check.
+	CodeSelfRouteHeld = "self_route_held"
 )
 
 // SelfNetworkWait is how long a self route job waits, on the injected clock, for an ensure pass to report the self network as
@@ -75,6 +78,7 @@ var selfCodeMessages = map[string]string{
 	CodeSelfRouteCheckFailed:   "The checks could not be run, so TierPlan's own route was not switched on. Try again.",
 	CodeSelfRouteClaimFailed:   "TierPlan's own route could not be stored.",
 	CodeSelfRouteReleaseFailed: "TierPlan's own route could not be released, so it is still on. Turn it off again.",
+	CodeSelfRouteHeld:          "TierPlan's own route is already on in another environment. Turn it off there first.",
 }
 
 // The lines a self route job writes to its output.
@@ -282,9 +286,13 @@ func selfBackend(place SelfPlace) string {
 	return SelfBackendAlias
 }
 
-// selfClaimError is the code and sentence of a claim the store refused or could not write. A refusal keeps the policy's own
-// code and sentence; anything else is CodeSelfRouteClaimFailed, with none of the store's words.
+// selfClaimError is the code and sentence of a claim the store refused or could not write. A route the install already holds
+// is CodeSelfRouteHeld; a refusal keeps the policy's own code and sentence; anything else is CodeSelfRouteClaimFailed, with
+// none of the store's words.
 func selfClaimError(err error) (code, msg string) {
+	if errors.Is(err, ingressstore.ErrSystemClaimHeld) {
+		return CodeSelfRouteHeld, selfCodeMessages[CodeSelfRouteHeld]
+	}
 	var refused *ingressstore.RefusedError
 	if errors.As(err, &refused) && len(refused.Problems) > 0 {
 		return refused.Problems[0].Code, refused.Problems[0].Message

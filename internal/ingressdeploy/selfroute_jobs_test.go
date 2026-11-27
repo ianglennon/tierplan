@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/audit/audittest"
 	"github.com/ianglennon/tierplan/internal/dockerx"
@@ -387,4 +388,167 @@ func TestAuditProofSelfRouteDisabledFailure(t *testing.T) {
 		t.Errorf("%d ingress.self_route_disabled rows, want only the failure: %+v", len(rows), rows)
 	}
 	audittest.AssertNoSecrets(t, rows, switchCanary)
+}
+
+// certGate holds every certificate read of a self route check: each tells entered which environment it is for, then waits
+// for proceed to be closed, so a test can hold switch-on jobs inside their checks.
+type certGate struct {
+	entered chan string
+	proceed chan struct{}
+}
+
+// gatedSelfRig is a self route rig whose certificate reads pass through the gate the returned pointer holds, when it holds one.
+func gatedSelfRig(t *testing.T) (*rig, ingress.Domain, *atomic.Pointer[certGate]) {
+	t.Helper()
+	gate := &atomic.Pointer[certGate]{}
+	r, _, _, dom := newSelfRouteRig(t, selfRigOptions{deps: func(d *ingressdeploy.Deps) {
+		cert := d.HostCertificate
+		d.HostCertificate = func(ctx context.Context, envID, host string) (ingressdeploy.HostCertState, error) {
+			if g := gate.Load(); g != nil {
+				select {
+				case g.entered <- envID:
+				case <-ctx.Done():
+					return ingressdeploy.HostCertState{}, ctx.Err()
+				}
+				select {
+				case <-g.proceed:
+				case <-ctx.Done():
+					return ingressdeploy.HostCertState{}, ctx.Err()
+				}
+			}
+			return cert(ctx, envID, host)
+		}
+	}})
+	return r, dom, gate
+}
+
+// secondSelfEnv adds a second swarm environment, "staging", with ingress on and the domain other.example.org, to the rig.
+func (r *rig) secondSelfEnv() string {
+	r.t.Helper()
+	ctx := testsupport.Context(r.t)
+	id := uuid.NewString()
+	if _, err := r.st.Write.Exec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, env_type)
+		VALUES (?, 'agent', 'staging', '', 1, 1, 1, 'swarm')`, id); err != nil {
+		r.t.Fatalf("insert environment: %v", err)
+	}
+	if _, err := r.istore.SetEnabled(ctx, id, true, "admin", nil); err != nil {
+		r.t.Fatalf("SetEnabled: %v", err)
+	}
+	if _, err := r.istore.CreateDomain(ctx, ingressstore.CreateDomainInput{EnvID: id, Suffix: "other.example.org", Issuer: ingress.IssuerStaging, Actor: "admin"}, nil); err != nil {
+		r.t.Fatalf("CreateDomain: %v", err)
+	}
+	return id
+}
+
+// TestTwoSelfRouteEnablesLeaveOne is SELF-01's concurrency edge: two switch-ons in one environment are serialised by its
+// operation lock (the second is refused while the first runs, and one started after it is refused by its own check), and two in
+// different environments that both pass their checks leave exactly one claim, the other job failing at self_claim with
+// self_route_held and its failure row {step, code}. The test holds both jobs inside their checks with channels, no sleeps.
+func TestTwoSelfRouteEnablesLeaveOne(t *testing.T) {
+	t.Run("one environment", func(t *testing.T) {
+		r, _, gate := gatedSelfRig(t)
+		ctx := testsupport.Context(t)
+		g := &certGate{entered: make(chan string, 1), proceed: make(chan struct{})}
+		gate.Store(g)
+		selfWaitNone(r)
+
+		first := r.enableSelf(srHost)
+		select {
+		case <-g.entered:
+		case <-ctx.Done():
+			t.Fatal("the first switch-on never reached its check")
+		}
+		_, err := r.svc.EnableSelfRoute(ctx, testActor, testOwner, r.envID, ingressdeploy.SelfRouteRequest{Hostname: "tp2.apps.example.org"})
+		var locked *ingressdeploy.LockedError
+		if !errors.As(err, &locked) {
+			t.Errorf("a second switch-on while the first runs = %v, want a *LockedError", err)
+		}
+		gate.Store(nil)
+		close(g.proceed)
+		wantJobItems(t, r.wait(first), jobs.JobDone,
+			[2]string{ingressdeploy.ItemSelfCheck, jobs.ItemDone},
+			[2]string{ingressdeploy.ItemSelfClaim, jobs.ItemDone},
+			[2]string{ingressdeploy.ItemSelfNetwork, jobs.ItemDone},
+		)
+
+		later := r.wait(r.enableSelf("tp2.apps.example.org"))
+		wantJobItems(t, later, jobs.JobFailed,
+			[2]string{ingressdeploy.ItemSelfCheck, jobs.ItemFailed},
+			[2]string{ingressdeploy.ItemSelfClaim, jobs.ItemSkipped},
+			[2]string{ingressdeploy.ItemSelfNetwork, jobs.ItemSkipped},
+		)
+		if it := itemOf(later, ingressdeploy.ItemSelfCheck); it.Code != ingressdeploy.CodeSelfRouteAlreadyOn {
+			t.Errorf("the later check = %+v, want %s", it, ingressdeploy.CodeSelfRouteAlreadyOn)
+		}
+		if claim, held, err := r.istore.SystemClaim(ctx); err != nil || !held || claim.Hostname != srHost {
+			t.Errorf("SystemClaim = %+v, held %v, err %v, want the first switch-on's %s", claim, held, err, srHost)
+		}
+	})
+
+	t.Run("two environments", func(t *testing.T) {
+		r, _, gate := gatedSelfRig(t)
+		ctx := testsupport.Context(t)
+		env2 := r.secondSelfEnv()
+		g := &certGate{entered: make(chan string, 2), proceed: make(chan struct{})}
+		gate.Store(g)
+		selfWaitNone(r)
+
+		id1 := r.enableSelf(srHost)
+		id2, err := r.svc.EnableSelfRoute(ctx, testActor, testOwner, env2, ingressdeploy.SelfRouteRequest{Hostname: "tp.other.example.org"})
+		if err != nil {
+			t.Fatalf("EnableSelfRoute in the second environment: %v", err)
+		}
+		// Both checks are running, so each has found the install without a route; then both go on to claim.
+		for range 2 {
+			select {
+			case <-g.entered:
+			case <-ctx.Done():
+				t.Fatal("the two switch-ons never both reached their checks")
+			}
+		}
+		close(g.proceed)
+		jobsByEnv := map[string]jobs.Job{r.envID: r.wait(id1), env2: r.wait(id2)}
+
+		claim, held, err := r.istore.SystemClaim(ctx)
+		if err != nil || !held {
+			t.Fatalf("SystemClaim: held %v, err %v, want one route", held, err)
+		}
+		winner := jobsByEnv[claim.EnvID]
+		loserEnv := r.envID
+		if claim.EnvID == r.envID {
+			loserEnv = env2
+		}
+		loser := jobsByEnv[loserEnv]
+		wantJobItems(t, winner, jobs.JobDone,
+			[2]string{ingressdeploy.ItemSelfCheck, jobs.ItemDone},
+			[2]string{ingressdeploy.ItemSelfClaim, jobs.ItemDone},
+			[2]string{ingressdeploy.ItemSelfNetwork, jobs.ItemDone},
+		)
+		// The check went well before the claim was refused, so the hub reads the loser's job as partial: it did not switch on.
+		wantJobItems(t, loser, jobs.JobPartial,
+			[2]string{ingressdeploy.ItemSelfCheck, jobs.ItemDone},
+			[2]string{ingressdeploy.ItemSelfClaim, jobs.ItemFailed},
+			[2]string{ingressdeploy.ItemSelfNetwork, jobs.ItemSkipped},
+		)
+		it := itemOf(loser, ingressdeploy.ItemSelfClaim)
+		if it.Code != ingressdeploy.CodeSelfRouteHeld {
+			t.Errorf("the loser's claim item = %+v, want %s", it, ingressdeploy.CodeSelfRouteHeld)
+		}
+		if want := "TierPlan's own route is already on in another environment. Turn it off there first."; it.Message != want {
+			t.Errorf("the loser's sentence = %q, want %q", it.Message, want)
+		}
+
+		rows := audittest.Rows(t, r.st, audit.ActionIngressSelfRouteEnabled)
+		var failures []audit.Row
+		for _, row := range rows {
+			if row.Result == string(audit.ResultFailure) {
+				failures = append(failures, row)
+			}
+		}
+		if len(rows) != 2 || len(failures) != 1 {
+			t.Fatalf("ingress.self_route_enabled rows = %+v, want one success and one failure", rows)
+		}
+		wantFailureRow(t, failures, loserEnv, audit.ActionIngressSelfRouteEnabled, ingressdeploy.ItemSelfClaim, ingressdeploy.CodeSelfRouteHeld)
+		audittest.AssertNoSecrets(t, rows, switchCanary)
+	})
 }
