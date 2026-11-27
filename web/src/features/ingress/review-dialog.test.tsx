@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import type { IngressStarted, ReviewItem, ReviewPreview } from "@/api/ingress-switches";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ReviewDialog, type ReviewKind } from "@/features/ingress/review-dialog";
 import { SettingsTab } from "@/features/ingress/settings-tab";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -507,5 +509,132 @@ describe("a reader", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getAllByText("Needs Admin").length).toBeGreaterThan(0);
     expect(requests.filter((r) => r.includes("/jobs/") || r.startsWith("POST"))).toEqual([]);
+  });
+});
+
+// The self route's previews (D-17, UI-SPEC S1b, S1c, A-05) are an ordered list of items, not findings. The dialog is
+// driven directly here with fixed answers: what the server says is a given, what the dialog draws is under test.
+
+const ITEMS_ALL: ReviewItem[] = [
+  { code: "self_hostname", state: "ok", message: "tp.example.com is free and under example.com." },
+  {
+    code: "self_certificate",
+    state: "warning",
+    message: "No certificate yet. TierPlan orders one when you turn the route on.",
+  },
+  {
+    code: "self_network",
+    state: "warning",
+    message: "TierPlan is not on tierplan-self yet.",
+    snippet: { kind: "stack_file", text: "services:\n  tierplan:" },
+  },
+  {
+    code: "self_origin",
+    state: "ok",
+    message: "TierPlan will also accept https://tp.example.com.",
+  },
+  {
+    code: "self_carve_out",
+    state: "ok",
+    message: "The ingress sends only acme-challenge requests for tp.example.com to TierPlan.",
+  },
+];
+
+function SelfHarness({
+  kind,
+  items,
+  withForm = false,
+  onChecked,
+}: {
+  kind: ReviewKind;
+  items: ReviewItem[];
+  withForm?: boolean;
+  onChecked?: () => void;
+}) {
+  const preview = useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<ReviewPreview> => {
+      onChecked?.();
+      return { findings: [], redeploy: [], unreachable: [], items };
+    },
+  });
+  const start = useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<IngressStarted> => ({ jobId: "j1" }),
+  });
+  return (
+    <ReviewDialog
+      envId={ENV}
+      kind={kind}
+      open
+      onOpenChange={() => {}}
+      preview={preview}
+      start={start}
+      bodyValues={{ direct: "tp.lan:7480", host: "tp.example.com" }}
+      form={
+        withForm
+          ? {
+              fields: <input aria-label="Hostname" defaultValue="tp.example.com" />,
+              canCheck: true,
+              check: () => preview.mutate(),
+            }
+          : undefined
+      }
+    />
+  );
+}
+
+async function openSelf(kind: ReviewKind, items: ReviewItem[], withForm = false) {
+  render(
+    <QueryClientProvider client={client}>
+      <SelfHarness kind={kind} items={items} withForm={withForm} />
+    </QueryClientProvider>,
+  );
+  const title =
+    kind === "selfEnable" ? "Turn on TierPlan's own route?" : "Turn off TierPlan's own route?";
+  return waitUnderFakeClock(() => screen.getByRole("dialog", { name: title }));
+}
+
+function headingsOf(dialog: HTMLElement): string[] {
+  const list = within(dialog).getByRole("list");
+  return within(list)
+    .getAllByRole("listitem")
+    .map((li) => li.querySelector(".text-sm.font-medium")?.textContent ?? "");
+}
+
+describe("an ordered self route preview", () => {
+  it("draws the items in the order the server sends them, each with its word", async () => {
+    const dialog = await openSelf("selfEnable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(headingsOf(dialog)).toEqual([
+      "Hostname",
+      "Domain and certificate",
+      "Self network",
+      "Origin",
+      "Port 80 for TierPlan's certificate",
+    ]);
+    const list = within(dialog).getByRole("list");
+    expect(list.tagName).toBe("OL");
+    const words = within(list)
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector(".sr-only")?.textContent);
+    expect(words).toEqual(["OK", "Warning", "Warning", "OK", "OK"]);
+    expect(within(dialog).getByText("tp.example.com is free and under example.com.")).toBeTruthy();
+  });
+
+  it("does not regroup the items by severity", async () => {
+    const reversed = [ITEMS_ALL[3], ITEMS_ALL[1], ITEMS_ALL[0]] as ReviewItem[];
+    const dialog = await openSelf("selfEnable", reversed);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(headingsOf(dialog)).toEqual(["Origin", "Domain and certificate", "Hostname"]);
+  });
+
+  it("skips an item the server does not send", async () => {
+    const without = ITEMS_ALL.filter((item) => item.code !== "self_carve_out");
+    const dialog = await openSelf("selfEnable", without);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    const list = within(dialog).getByRole("list");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(4);
+    expect(within(dialog).queryByText("Port 80 for TierPlan's certificate")).toBeNull();
   });
 });

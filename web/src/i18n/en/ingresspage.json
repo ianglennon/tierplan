@@ -588,6 +588,47 @@
         "progress": "Turning virtual IP off…",
         "done": "Virtual IP is off.",
         "failedHint": "Nothing is lost. Turn it off again to remove what is left."
+      },
+      "blockedBody": "Fix the item marked Refused. Nothing has been changed.",
+      "itemState": {
+        "ok": "OK",
+        "warning": "Warning",
+        "refused": "Refused"
+      },
+      "items": {
+        "self_hostname": "Hostname",
+        "self_certificate": "Domain and certificate",
+        "self_network": "Self network",
+        "self_origin": "Origin",
+        "self_carve_out": "Port 80 for TierPlan's certificate",
+        "self_origin_removed": "Origin",
+        "self_network_removed": "Self network"
+      },
+      "snippet": {
+        "title": "Add TierPlan to the self network",
+        "stack_file": "the stack file lines",
+        "service_update": "the service update command",
+        "stackFileNote": "If the service has no `networks` entry yet, list the networks it already uses as well. A service with a `networks` entry leaves the default network.",
+        "note": "TierPlan makes the tierplan-self network when you turn the route on. Run this after that. Direct access on {{direct}} isn't affected either way."
+      },
+      "selfEnable": {
+        "title": "Turn on TierPlan's own route?",
+        "body": "TierPlan makes the tierplan-self network and serves this app on the hostname you give, with a certificate. Direct access on {{direct}} keeps working, and you can turn the route off from there.",
+        "confirm": "Turn on own route",
+        "dismiss": "Keep route off",
+        "check": "Check hostname",
+        "progress": "Turning own route on…",
+        "done": "TierPlan's own route is on.",
+        "failedHint": "Nothing is lost. Turn it on again to carry on, or off to remove what was made. Direct access on {{direct}} still works."
+      },
+      "selfDisable": {
+        "title": "Turn off TierPlan's own route?",
+        "body": "TierPlan stops serving {{host}}. Direct access on {{direct}} keeps working. The hostname, its certificate and the tierplan-self network are kept only while something else needs them.",
+        "confirm": "Turn off own route",
+        "dismiss": "Keep route on",
+        "progress": "Turning own route off…",
+        "done": "TierPlan's own route is off.",
+        "failedHint": "Nothing is lost. Turn it off again to remove what is left. Direct access on {{direct}} still works."
       }
     }
   }

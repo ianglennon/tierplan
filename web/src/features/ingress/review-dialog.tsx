@@ -11,9 +11,11 @@ import {
   type IngressStarted,
   ingressJobQuery,
   jobEnded,
+  type ReviewItem,
   type ReviewPreview,
 } from "@/api/ingress-switches";
 import type { components } from "@/api/schema";
+import { CopyableCode } from "@/components/copyable-code";
 import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -34,7 +36,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { POLICY } from "@/features/ingress/vip-status-card";
-import { useT } from "@/i18n/use-t";
+import { keyExists, useT } from "@/i18n/use-t";
 
 type StackJobItemBody = components["schemas"]["StackJobItemBody"];
 
@@ -45,7 +47,16 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 export const REDEPLOY_SHOWN = 10;
 
 // The switches the dialog is built for. Each has its own words under ingressPage.review.<kind>.
-export type ReviewKind = "enable" | "disable" | "vipEnable" | "vipChange" | "vipDisable";
+export type ReviewKind =
+  | "enable"
+  | "disable"
+  | "vipEnable"
+  | "vipChange"
+  | "vipDisable"
+  | "selfEnable"
+  | "selfDisable";
+
+export type { ReviewItem };
 
 // ReviewForm is the optional first state of the dialog (the virtual IP's address and router ID): fields the card owns,
 // drawn above the buttons, and the button that runs the preview with what was typed. The preview is not run when the
@@ -215,6 +226,7 @@ function ReviewBody({
         job={job.data}
         unreadable={unreadable}
         ended={ended}
+        bodyValues={bodyValues}
         onClose={onClose}
       />
     );
@@ -227,11 +239,18 @@ function ReviewBody({
   const redeploy = data?.redeploy ?? [];
   const unreachable = data?.unreachable ?? [];
   const checking = hasForm ? preview.isPending : !preview.isError && !data;
-  const confirmOff = checking || preview.isError || blocking.length > 0 || start.isPending;
+  // An ordered preview (the self route's) refuses through an item the server marked refused, not through a finding.
+  const items = data?.items ?? [];
+  const blockedByItem = items.some((item) => item.state === "refused");
+  const confirmOff =
+    checking || preview.isError || blocking.length > 0 || blockedByItem || start.isPending;
+  const checkLabel = keyExists(`ingressPage.review.${kind}.check`)
+    ? t(`ingressPage.review.${kind}.check`)
+    : t("ingressPage.review.check");
 
   // Until a preview with nothing that refuses has come back, a switch with a form shows the form, and what the server
   // refused with is drawn above it, as the server's sentence and never as a toast (U-17).
-  if (form && (!data || blocking.length > 0)) {
+  if (form && (!data || blocking.length > 0 || blockedByItem)) {
     return (
       <div className="flex flex-col gap-4">
         <DialogHeader>
@@ -247,6 +266,7 @@ function ReviewBody({
             </AlertDescription>
           </Alert>
         ) : null}
+        {blockedByItem ? <BlockedItems items={items} bodyValues={bodyValues} /> : null}
         {form.fields}
         {checking ? (
           <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -265,7 +285,7 @@ function ReviewBody({
             onClick={form.check}
           >
             {preview.isPending ? <Spinner aria-hidden="true" /> : null}
-            {t("ingressPage.review.check")}
+            {checkLabel}
           </Button>
         </DialogFooter>
       </div>
@@ -293,6 +313,8 @@ function ReviewBody({
           </AlertDescription>
         </Alert>
       ) : null}
+      {blockedByItem ? <BlockedAlert /> : null}
+      {items.length > 0 ? <ReviewItems items={items} bodyValues={bodyValues} /> : null}
       {data?.warning !== undefined ? (
         // The virtual IP is never switched on without this in front of the person, so a preview that came without the
         // sentence still shows the one the page knows.
@@ -366,6 +388,97 @@ function ReviewBody({
         </Button>
       </DialogFooter>
     </div>
+  );
+}
+
+// BlockedAlert is the one destructive alert above an ordered preview that has a refused item. It says that nothing was
+// changed and points at the item; the refused sentence itself is drawn once, in the list.
+function BlockedAlert() {
+  const t = useT();
+  return (
+    <Alert variant="destructive">
+      <AlertTitle>{t("ingressPage.review.blocked")}</AlertTitle>
+      <AlertDescription className="break-words">
+        {t("ingressPage.review.blockedBody")}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+// BlockedItems is the preview as the form state draws it when an item was refused: the alert, then the list with the
+// refused item in it, above the fields the person corrects.
+function BlockedItems({
+  items,
+  bodyValues,
+}: {
+  items: ReviewItem[];
+  bodyValues?: Record<string, unknown>;
+}) {
+  return (
+    <>
+      <BlockedAlert />
+      <ReviewItems items={items} bodyValues={bodyValues} />
+    </>
+  );
+}
+
+// ITEM_DOT is how an ordered preview's item is drawn: a passed one is online, a warning is degraded, a refusal is
+// offline. The word beside it is for the reader who cannot see the colour.
+const ITEM_DOT: Record<ReviewItem["state"], HealthState> = {
+  ok: "online",
+  warning: "degraded",
+  refused: "offline",
+};
+
+// ReviewItems draws an ordered preview (D-17, UI-SPEC A-05): one li per item, in the order the server sends. The order is
+// the story, so nothing is regrouped by severity. The web supplies each heading from the item's code; the message is the
+// server's sentence as sent, drawn as text.
+function ReviewItems({
+  items,
+  bodyValues,
+}: {
+  items: ReviewItem[];
+  bodyValues?: Record<string, unknown>;
+}) {
+  const t = useT();
+  const direct = typeof bodyValues?.direct === "string" ? bodyValues.direct : undefined;
+  return (
+    <ol className="flex flex-col gap-4">
+      {items.map((item) => {
+        const headingKey = `ingressPage.review.items.${item.code}`;
+        return (
+          // The server sends one item per code, so the code is the key.
+          <li key={item.code} className="flex flex-col gap-1">
+            <StatusDot
+              state={ITEM_DOT[item.state]}
+              label={keyExists(headingKey) ? t(headingKey) : item.code}
+              className="text-sm font-medium"
+            />
+            <span className="sr-only">{t(`ingressPage.review.itemState.${item.state}`)}</span>
+            <p className="text-sm break-words">{item.message}</p>
+            {item.snippet ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-medium">{t("ingressPage.review.snippet.title")}</p>
+                <CopyableCode
+                  code={item.snippet.text}
+                  label={t(`ingressPage.review.snippet.${item.snippet.kind}`)}
+                />
+                {item.snippet.kind === "stack_file" ? (
+                  <p className="text-xs break-words text-muted-foreground">
+                    {t("ingressPage.review.snippet.stackFileNote")}
+                  </p>
+                ) : null}
+                {direct !== undefined ? (
+                  <p className="text-xs break-words text-muted-foreground">
+                    {t("ingressPage.review.snippet.note", { direct })}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -450,12 +563,14 @@ interface ProgressProps {
   job: IngressJob | undefined;
   unreadable: boolean;
   ended: boolean;
+  // The values of the placeholders in the failure hint (the direct address of the self route).
+  bodyValues?: Record<string, unknown>;
   onClose: () => void;
 }
 
 // Progress is the dialog once the switch is confirmed: the step list and the job's output while it runs, the outcome
 // when it ended, and one button that waits for the end.
-function Progress({ kind, job, unreadable, ended, onClose }: ProgressProps) {
+function Progress({ kind, job, unreadable, ended, bodyValues, onClose }: ProgressProps) {
   const t = useT();
   const steps = (job?.items ?? []).filter((item) => item.kind !== "group" && item.kind !== "task");
   const output = job?.output ?? [];
@@ -502,7 +617,9 @@ function Progress({ kind, job, unreadable, ended, onClose }: ProgressProps) {
         <Alert variant="destructive">
           <AlertDescription className="flex flex-col gap-2 break-words">
             <span>{failureSentence(job, t("ingressPage.review.jobFailed"))}</span>
-            <span className="text-sm">{t(`ingressPage.review.${kind}.failedHint`)}</span>
+            <span className="text-sm">
+              {t(`ingressPage.review.${kind}.failedHint`, bodyValues)}
+            </span>
           </AlertDescription>
         </Alert>
       ) : null}
