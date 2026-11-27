@@ -299,6 +299,9 @@ type authFixture struct {
 	// settingsAgents, when set, is what the settings routes count agents with and
 	// push new addresses through (plan 02-26).
 	settingsAgents api.SettingsAgents
+	// settingsIngressHosts, when set, is the install's ingress hostnames the settings
+	// routes check the agent URL and the public URL against (plan 28-23).
+	settingsIngressHosts func(context.Context) (map[string]ingress.ClaimInfo, error)
 	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
 	envWarningsNow func() time.Time
 	// envWarningsVIP reads the virtual IP facts of the same route; nil lists none.
@@ -443,7 +446,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Access: f.access, Store: f.st, Checker: checker, Instance: f.inst, Sessions: f.sess,
 		Limiter: inviteLimiter, AnonAudit: f.inviteAudit, Now: f.clk.now, Log: log,
 	})
-	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, Log: log})
+	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, IngressHosts: f.settingsIngressHosts, Log: log})
 	api.RegisterHTTPS(r, f.https)
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{

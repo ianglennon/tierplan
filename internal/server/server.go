@@ -1397,7 +1397,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
-		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
+		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, IngressHosts: ingressStore.InstallClaimHosts, Log: log},
 		HTTPS: api.HTTPSDeps{
 			Served:    func() api.ServedCertificate { return rt.servedWith(trust) },
 			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen), Audit: aud},

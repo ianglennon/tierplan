@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -36,6 +38,11 @@ const problemAgentURLLocked = "agent_url_locked"
 // codeInvalidAgentURL is the field error code of a malformed agent URL. The SPA
 // maps it to the same "Enter a full address" copy as invalid_public_url.
 const codeInvalidAgentURL = "invalid_agent_url"
+
+// codeAgentURLIsIngressHost is the field error code of an agent URL whose host is
+// a hostname the ingress serves: the self route's or a stack's (D-10). Agents and
+// proxies dial the agent URL, so it must never become a route through the ingress.
+const codeAgentURLIsIngressHost = "agent_url_is_ingress_host"
 
 // targetSettings is the audit target of a settings change.
 const targetSettings = "settings"
@@ -64,8 +71,22 @@ type SettingsDeps struct {
 	// Agents counts enrolled agents and tells connected ones a new address. Nil
 	// means none: the counts are 0 and nothing is pushed.
 	Agents SettingsAgents
+	// IngressHosts is every hostname the ingress holds in the install, the self
+	// route's and every stack's, by lower-cased hostname. A save may not point the
+	// agent URL at one (D-10). Nil skips the check.
+	IngressHosts func(ctx context.Context) (map[string]ingress.ClaimInfo, error)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+}
+
+// urlHostname is the lower-cased hostname of a normalised URL, without the port
+// or a trailing dot; "" when there is none.
+func urlHostname(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 }
 
 // SettingsBody is the instance's editable settings.
@@ -252,6 +273,20 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			case u != agentURL:
 				details["agent_url_from"], details["agent_url_to"] = agentURL, u
 				agentURL = u
+			}
+		}
+
+		// After the field checks and before the transaction, so a refusal changes
+		// nothing. Only a value this save changes is checked: an env-locked value
+		// cannot change here, and the self-route preview refuses a locked
+		// contradiction (28-21).
+		if d.IngressHosts != nil && len(problems) == 0 && agentURL != before.AgentURL && agentURL != "" {
+			hosts, err := d.IngressHosts(ctx)
+			if err != nil {
+				return nil, internal("read the ingress hostnames", err)
+			}
+			if _, claimed := hosts[urlHostname(agentURL)]; claimed {
+				add("body.agentUrl", codeAgentURLIsIngressHost)
 			}
 		}
 
