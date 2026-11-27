@@ -42,6 +42,8 @@ export interface ReviewItem {
   code: string;
   state: "ok" | "warning" | "refused";
   message: string;
+  // The stable code of a warning or a refusal, as sent (ingress_host_invalid, host_taken, ...); absent when it passed.
+  reason?: string;
   snippet?: { kind: "stack_file" | "service_update"; text: string };
 }
 

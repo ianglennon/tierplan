@@ -337,7 +337,9 @@ describe("a malformed hostname (UI-SPEC S1b)", () => {
       });
   }
 
-  async function checkHost(value: string): Promise<{ dialog: HTMLElement; field: HTMLInputElement }> {
+  async function checkHost(
+    value: string,
+  ): Promise<{ dialog: HTMLElement; field: HTMLInputElement }> {
     mountCard();
     fireEvent.click(await button("Turn on own route"));
     const dialog = await waitUnderFakeClock(() =>
@@ -364,7 +366,9 @@ describe("a malformed hostname (UI-SPEC S1b)", () => {
     // Plain text: no link, no list, no alert box.
     expect(error?.querySelector("a, ul, [data-slot=alert]")).toBeNull();
     // The field stays in the form, below what the server refused with.
-    expect(field.compareDocumentPosition(error as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      field.compareDocumentPosition(error as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("clears the inline error once the hostname is edited", async () => {

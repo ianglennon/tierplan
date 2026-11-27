@@ -21,6 +21,7 @@ import { NeedsTooltip } from "@/components/needs-tooltip";
 import { StatusDot } from "@/components/status-dot";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -80,6 +81,9 @@ export function usingRoute(host: string): boolean {
 
 const mono = <span className="font-mono break-all" />;
 
+// HOST_INVALID is the reason the server's hostname item refuses with when the value is not a hostname at all.
+const HOST_INVALID = "ingress_host_invalid";
+
 // selfNetworkLeftOff says whether a switch-on job ended with TierPlan still off the tierplan-self network: its
 // self_network step reports attached false (a timeout reports no step result, which is not this).
 function selfNetworkLeftOff(job: IngressJob): boolean {
@@ -112,6 +116,8 @@ export function SelfRouteCard({ envId }: { envId: string }) {
   // The hostname a switch-off was opened for, so the dialog's sentence does not change when the job releases it.
   const [leaving, setLeaving] = useState("");
   const [hostname, setHostname] = useState("");
+  // The hostname the last check asked about, so a refusal of it is drawn under the field only until the name is edited.
+  const [checked, setChecked] = useState<string | null>(null);
   const preview = useSelfRoutePreview(envId, hostname);
   const enable = useEnableSelfRoute(envId, hostname);
   const offPreview = useSelfRouteOffPreview(envId);
@@ -198,7 +204,10 @@ export function SelfRouteCard({ envId }: { envId: string }) {
 
   function begin(kind: ReviewKind) {
     if ((kind === "selfDisable" ? permission : reason) !== undefined) return;
-    if (kind === "selfEnable") setHostname("");
+    if (kind === "selfEnable") {
+      setHostname("");
+      setChecked(null);
+    }
     if (kind === "selfDisable") setLeaving(self?.host ?? "");
     setShown(kind);
     setReviewing(kind);
@@ -207,8 +216,18 @@ export function SelfRouteCard({ envId }: { envId: string }) {
   const hostId = `${id}-hostname`;
   const canCheck = hostname.trim() !== "";
   const check = () => {
-    if (canCheck && !preview.isPending) preview.mutate();
+    if (!canCheck || preview.isPending) return;
+    setChecked(hostname);
+    preview.mutate();
   };
+  // A malformed hostname is drawn inline under the field (UI-SPEC S1b), in the server's sentence: the server judges the
+  // name (ingress.ValidateHost), so the web never guesses a rule of its own. Other refusals stay above the form.
+  const hostItem = preview.data?.items?.find((item) => item.code === "self_hostname");
+  const malformed =
+    checked === hostname && hostItem?.state === "refused" && hostItem.reason === HOST_INVALID
+      ? hostItem.message
+      : undefined;
+  const errorId = `${hostId}-error`;
   const snippet = on && state === "self_not_attached" && !standalone ? self.snippet : undefined;
   const refusal = self.refusal;
   const refusalKey = refusal ? `ingressPage.settings.selfRoute.refusal.${refusal.code}` : "";
@@ -403,7 +422,10 @@ export function SelfRouteCard({ envId }: { envId: string }) {
                       value={hostname}
                       autoComplete="off"
                       spellCheck={false}
-                      aria-describedby={`${hostId}-help`}
+                      aria-invalid={malformed !== undefined || undefined}
+                      aria-describedby={
+                        malformed !== undefined ? `${hostId}-help ${errorId}` : `${hostId}-help`
+                      }
                       onChange={(e) => setHostname(e.target.value)}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
@@ -426,6 +448,11 @@ export function SelfRouteCard({ envId }: { envId: string }) {
                         }}
                       />
                     </p>
+                    {malformed !== undefined ? (
+                      <FieldError id={errorId} className="break-words">
+                        {malformed}
+                      </FieldError>
+                    ) : null}
                   </div>
                 ),
               }

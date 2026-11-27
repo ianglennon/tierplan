@@ -31,6 +31,7 @@ function previewOf(data: SelfRoutePreviewBody): SelfRoutePreview {
     code: item.code,
     state: item.state,
     message: item.message,
+    ...(item.reason ? { reason: item.reason } : {}),
     ...(item.snippet ? { snippet: { kind: item.snippet.kind, text: item.snippet.text } } : {}),
   }));
   return {
