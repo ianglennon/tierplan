@@ -5,10 +5,15 @@
 package ingressrender
 
 import (
+	"bytes"
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressrender/traefiktest"
@@ -206,4 +211,149 @@ func TestRenderedCarveOutReachesThePlainListener(t *testing.T) {
 	if status != http.StatusMovedPermanently || location != "https://"+selfServerName+"/" {
 		t.Errorf("http://%s/ answered %d with Location %q, want 301 to https: the carve-out is for the challenge path only", selfServerName, status, location)
 	}
+}
+
+// swapPace is the gap between two requests of the swap tests: a client that keeps asking while
+// TierPlan's certificate changes under the proxy.
+const swapPace = 100 * time.Millisecond
+
+// selfAnswer is one paced request: its status, or its transport error, and whether it was sent after
+// the stub reported the new certificate.
+type selfAnswer struct {
+	status    int
+	err       error
+	afterSwap bool
+}
+
+// pacer sends GET / for TierPlan's host every swapPace until halted, and keeps every answer.
+type pacer struct {
+	mu      sync.Mutex
+	answers []selfAnswer
+	swapped atomic.Bool
+	cancel  context.CancelFunc
+	done    chan struct{}
+	once    sync.Once
+}
+
+// startPacer starts the requests. They run until halt, which the test's clean-up also calls.
+func (s *selfSite) startPacer(t *testing.T) *pacer {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &pacer{cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(p.done)
+		tick := time.NewTicker(swapPace)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+			after := p.swapped.Load()
+			status, err := s.statusOf(selfFront, "/")
+			p.mu.Lock()
+			p.answers = append(p.answers, selfAnswer{status: status, err: err, afterSwap: after})
+			p.mu.Unlock()
+		}
+	}()
+	t.Cleanup(p.halt)
+	return p
+}
+
+// halt stops the requests and waits for the one in flight.
+func (p *pacer) halt() {
+	p.once.Do(func() {
+		p.cancel()
+		<-p.done
+	})
+}
+
+// snapshot is a copy of the answers so far.
+func (p *pacer) snapshot() []selfAnswer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]selfAnswer(nil), p.answers...)
+}
+
+// awaitAnswers polls until the pacer holds at least n answers.
+func (p *pacer) awaitAnswers(t *testing.T, n int) {
+	t.Helper()
+	testsupport.Poll(t, testsupport.Deadline, strconv.Itoa(n)+" paced answers", func() (bool, string) { // testsupport: external, each answer is a real request through Traefik
+		got := len(p.snapshot())
+		return got >= n, strconv.Itoa(got) + " so far"
+	})
+}
+
+// String is the answer for a log line.
+func (a selfAnswer) String() string {
+	if a.err != nil {
+		return "error " + a.err.Error()
+	}
+	return strconv.Itoa(a.status)
+}
+
+// TestTrustBundleFollowsACertificateSwap proves A-02 and A-03 on the rendered route: TierPlan's
+// certificate changes (a re-sign keeps the key and changes the names, and the old leaf does not verify
+// the new one, F2b) while a client keeps asking for TierPlan's host. The stub reloads its pair on
+// SIGHUP and drains its old connections, so the proxy must open new ones and verify the new leaf. With
+// a trust file holding both leaves, the staged install's bundle, every answer before and after the swap
+// is 200. The control holds the old leaf only: once the old connections are gone, the answers are
+// server errors and Traefik logs x509, which shows the swap did make the proxy verify again.
+func TestTrustBundleFollowsACertificateSwap(t *testing.T) {
+	traefiktest.SkipUnlessEngineLeg(t)
+	const before, after = 10, 20
+	oldCert, key := traefiktest.SelfSignedLeaf(t, selfServerName)
+	newCert := traefiktest.ResignedLeaf(t, key, selfServerName, "tierplan.internal")
+
+	t.Run("both leaves", func(t *testing.T) {
+		trust := bytes.Join([][]byte{oldCert, newCert}, nil)
+		s := startSelfSite(t, oldCert, key, trust, nil)
+		s.awaitGet(t, selfFront, "/")
+		p := s.startPacer(t)
+		p.awaitAnswers(t, before)
+		s.stub.SwapCert(t, newCert, key)
+		p.swapped.Store(true)
+		p.awaitAnswers(t, len(p.snapshot())+after)
+		p.halt()
+
+		answers := p.snapshot()
+		n := 0
+		for i, a := range answers {
+			if a.afterSwap {
+				n++
+			}
+			if a.err != nil || a.status != http.StatusOK {
+				t.Errorf("answer %d (after the swap: %v) was %s, want 200: the route broke while the certificate changed", i, a.afterSwap, a)
+			}
+		}
+		t.Logf("%d answers, %d of them after the stub served the new leaf, all checked for 200", len(answers), n)
+		if n < after {
+			t.Fatalf("only %d answers after the swap, want at least %d", n, after)
+		}
+	})
+
+	t.Run("old leaf only", func(t *testing.T) {
+		s := startSelfSite(t, oldCert, key, oldCert, nil)
+		s.awaitGet(t, selfFront, "/")
+		p := s.startPacer(t)
+		p.awaitAnswers(t, before)
+		s.stub.SwapCert(t, newCert, key)
+		p.swapped.Store(true)
+		status := s.awaitFailure(t, "/")
+		t.Logf("with the old leaf only, GET / answered %d after the swap and Traefik logged x509", status)
+		mark := len(p.snapshot())
+		p.awaitAnswers(t, mark+after/4)
+		p.halt()
+
+		answers := p.snapshot()
+		for i, a := range answers {
+			switch {
+			case !a.afterSwap && (a.err != nil || a.status != http.StatusOK):
+				t.Errorf("answer %d, before the swap, was %s, want 200", i, a)
+			case i >= mark && (a.err != nil || a.status < http.StatusInternalServerError):
+				t.Errorf("answer %d, after the proxy refused the new leaf, was %s, want a server error: an unverified backend was served", i, a)
+			}
+		}
+	})
 }
