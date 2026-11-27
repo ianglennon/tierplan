@@ -229,10 +229,10 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 		Method:      http.MethodDelete,
 		Path:        selfRoutePath,
 		Summary:     "Switch TierPlan's own route off",
-		Description: "Takes the environment's operation lock and answers 202 with a job's ID at once. The job (ingress_self_route_disable) releases the hostname with its audit entry " +
+		Description: "Answers 202 with a job's ID at once. The job (ingress_self_route_disable) waits up to 30 seconds for the environment's operation lock, which a stack operation may hold, then releases the hostname, with the lock or without it, with its audit entry " +
 			"(ingress.self_route_disabled) as self_release, then reports from the ingress's next pass whether the tierplan-self network was removed or kept (self_network). " +
 			"No state of the route, the engine, the certificate or the environment stops it: TierPlan stays reachable on its direct address. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. " +
-			"409 " + problemSelfRouteNotOn + " when TierPlan's own route is not on in this environment; 409 " + problemOperationLocked + " while another operation holds the environment, naming it. " +
+			"409 " + problemSelfRouteNotOn + " when TierPlan's own route is not on in this environment; another operation holding the environment never refuses it. " +
 			selfRouteGateText + " A caller who holds ingress.manage but is not an instance admin is refused 403 " + problemInstanceAdminRequired + " and the refusal is audited as permission.denied.",
 		DefaultStatus: http.StatusAccepted,
 		Tags:          []string{"ingress"},

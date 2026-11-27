@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 // The kinds of the jobs that switch TierPlan's own route on and off (D-17, D-11).
@@ -342,31 +343,75 @@ func (s *Service) waitSelfObservation(ctx context.Context, envID string, after u
 	}
 }
 
-// DisableSelfRoute switches TierPlan's own route off in envID (D-11): it takes the environment's operation lock and starts a
-// job that releases the claim with ingress.self_route_disabled in the same transaction (removeSelfRoute), wakes the ensure
-// loop and reports from its next pass whether the self network was removed or kept. No check of the route, the engine, the
-// certificate or where TierPlan runs stops it (T-28-53): the only refusals are a held lock (*LockedError) and no route on in
-// envID (ErrSelfRouteNotEnabled), each before a job starts.
+// DefaultSelfReleaseLockWait is how long the switch-off of TierPlan's own route waits for the environment's operation lock
+// when Deps.SelfReleaseLockWait is zero.
+const DefaultSelfReleaseLockWait = 30 * time.Second
+
+// selfReleaseLockPoll is how often the switch-off asks for the operation lock while it waits.
+const selfReleaseLockPoll = 100 * time.Millisecond
+
+// DisableSelfRoute switches TierPlan's own route off in envID (D-11): it starts a job that waits for the environment's
+// operation lock, releases the claim with ingress.self_route_disabled in the same transaction (removeSelfRoute), wakes the
+// ensure loop and reports from its next pass whether the self network was removed or kept. No check of the route, the
+// engine, the certificate or where TierPlan runs stops it (T-28-53), and nor does a stack operation that holds the
+// environment (WR-04): the job waits for the lock up to Deps.SelfReleaseLockWait, then releases without it, since the release
+// is one transaction of its own and the ensure loop reads the claim again under the lock. The only refusal is no route on in
+// envID (ErrSelfRouteNotEnabled), before a job starts.
 func (s *Service) DisableSelfRoute(ctx context.Context, actor audit.Actor, owner, envID string) (string, error) {
 	specs := make([]jobs.ItemSpec, 0, len(selfDisableItems))
 	for _, id := range selfDisableItems {
 		specs = append(specs, jobs.ItemSpec{ID: id, Label: selfDisableLabels[id], Kind: "step"})
 	}
-	pre := func(ctx context.Context, _ EnvInfo, _ EnableRequest) ([]Finding, error) {
-		claim, held, err := s.d.Store.SystemClaim(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if !held || claim.EnvID != envID {
-			return nil, ErrSelfRouteNotEnabled
-		}
-		return nil, nil
-	}
 	// The environment is not read: nothing of it is needed to release the claim, and a read that fails must not stop it.
-	return s.startEnable(ctx, JobKindSelfRouteDisable, owner, EnvInfo{ID: envID}, EnableRequest{}, pre, specs,
-		func(jctx context.Context, r *jobs.Reporter, release func()) {
+	claim, held, err := s.d.Store.SystemClaim(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !held || claim.EnvID != envID {
+		return "", ErrSelfRouteNotEnabled
+	}
+	job, err := s.d.Jobs.Start(jobs.Spec{Kind: JobKindSelfRouteDisable, EnvID: envID, Owner: owner, Items: specs},
+		func(jctx context.Context, r *jobs.Reporter) {
+			release := s.selfReleaseLock(jctx, owner, envID, r.JobID())
+			defer release()
 			s.runSelfRouteDisable(jctx, r, release, actor, envID)
 		})
+	if err != nil {
+		return "", err
+	}
+	return job.ID, nil
+}
+
+// selfReleaseLock waits for the environment's operation lock for the switch-off's job, up to Deps.SelfReleaseLockWait, and
+// returns the function that frees it. When the lock is still held at the bound, or the job is cancelled, it returns a release
+// that frees nothing: the switch-off goes on without the lock and the holder keeps it.
+func (s *Service) selfReleaseLock(ctx context.Context, owner, envID, jobID string) func() {
+	bound := s.d.SelfReleaseLockWait
+	if bound <= 0 {
+		bound = DefaultSelfReleaseLockWait
+	}
+	deadline := time.NewTimer(bound)
+	defer deadline.Stop()
+	poll := time.NewTicker(selfReleaseLockPoll)
+	defer poll.Stop()
+	for {
+		release, held, ok := s.d.Locks.TryAcquire(envID, stackops.Holder{
+			Kind: stackops.HolderKindIngress, By: owner, Workload: "ingress", Started: s.d.Clock.Now(),
+		})
+		if ok {
+			s.d.Locks.Attach(envID, jobID)
+			return release
+		}
+		select {
+		case <-poll.C:
+		case <-deadline.C:
+			s.log().Info("TierPlan's own route is released without the environment's operation lock: another operation held it past the wait",
+				"environment", envID, "holder", held.Kind, "stack", held.StackName, "waited", bound)
+			return func() {}
+		case <-ctx.Done():
+			return func() {}
+		}
+	}
 }
 
 // runSelfRouteDisable runs the switch-off's items: the release, then the network's report, which never fails the job.

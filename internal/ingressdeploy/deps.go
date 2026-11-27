@@ -188,6 +188,9 @@ type Deps struct {
 	AddressSpaces Addressing
 	// AllocationWait is how the read-back of the new network waits on the swarm.
 	AllocationWait dockerx.AllocationWait
+	// SelfReleaseLockWait bounds how long the switch-off of TierPlan's own route waits for the environment's operation lock
+	// before it releases the route without it (D-11, WR-04). Zero is DefaultSelfReleaseLockWait.
+	SelfReleaseLockWait time.Duration
 	// LocalSwarm is the swarm membership of the server's own engine (envs.Service.LocalSwarmMembership): the cluster for a
 	// manager, the node for a manager or a worker, and whether it can be told at all. The preflight compares it with the
 	// environment's and says so when it cannot tell.

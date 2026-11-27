@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -550,5 +551,53 @@ func TestTwoSelfRouteEnablesLeaveOne(t *testing.T) {
 		}
 		wantFailureRow(t, failures, loserEnv, audit.ActionIngressSelfRouteEnabled, ingressdeploy.ItemSelfClaim, ingressdeploy.CodeSelfRouteHeld)
 		audittest.AssertNoSecrets(t, rows, switchCanary)
+	})
+}
+
+// TestDisableSelfRouteWaitsForTheLock (D-11, WR-04): a stack operation holding TierPlan's environment does not refuse the
+// switch-off. The job waits for the lock and releases once it is free; when it stays held past the bound, the job releases
+// without it, since the release is one transaction of its own, and the other holder keeps its lock.
+func TestDisableSelfRouteWaitsForTheLock(t *testing.T) {
+	deploy := stackops.Holder{StackID: "st-1", StackName: "shop", Kind: "deploy", By: "someone", Started: time.Now()}
+	t.Run("freed while it waits", func(t *testing.T) {
+		r, _ := newSelfRig(t, selfRigOptions{deps: func(d *ingressdeploy.Deps) { d.SelfReleaseLockWait = time.Minute }})
+		r.claimSelf()
+		selfWaitNone(r)
+		free, _, ok := r.locks.TryAcquire(r.envID, deploy)
+		if !ok {
+			t.Fatal("the rig's lock is held")
+		}
+		id := r.disableSelf()
+		time.AfterFunc(50*time.Millisecond, free)
+		job := r.wait(id)
+		if it := itemOf(job, ingressdeploy.ItemSelfRelease); it.State != jobs.ItemDone || it.Result["removed"] != "true" {
+			t.Fatalf("release item = %+v, want done and removed", it)
+		}
+		if _, held, err := r.istore.SystemClaim(testsupport.Context(t)); err != nil || held {
+			t.Errorf("SystemClaim after the switch-off: held %v, err %v", held, err)
+		}
+		if _, held := r.locks.Held(r.envID); held {
+			t.Error("the operation lock is still held after the job")
+		}
+	})
+	t.Run("held past the bound", func(t *testing.T) {
+		r, _ := newSelfRig(t, selfRigOptions{deps: func(d *ingressdeploy.Deps) { d.SelfReleaseLockWait = 50 * time.Millisecond }})
+		r.claimSelf()
+		selfWaitNone(r)
+		free, _, ok := r.locks.TryAcquire(r.envID, deploy)
+		if !ok {
+			t.Fatal("the rig's lock is held")
+		}
+		defer free()
+		job := r.wait(r.disableSelf())
+		if it := itemOf(job, ingressdeploy.ItemSelfRelease); it.State != jobs.ItemDone || it.Result["removed"] != "true" {
+			t.Fatalf("release item = %+v, want done and removed", it)
+		}
+		if _, held, err := r.istore.SystemClaim(testsupport.Context(t)); err != nil || held {
+			t.Errorf("SystemClaim after the switch-off: held %v, err %v", held, err)
+		}
+		if h, held := r.locks.Held(r.envID); !held || h.StackID != "st-1" {
+			t.Errorf("the deploy's lock = %+v, %v; want it still the deploy's", h, held)
+		}
 	})
 }
