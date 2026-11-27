@@ -151,6 +151,8 @@ const (
 	CodeDomainNotAllowed = "ingress_domain_not_allowed"
 	CodeHostReserved     = "ingress_host_reserved"
 	CodeHostTaken        = "ingress_host_taken"
+	// CodeHostIsAgentURL refuses a claim on the host agents and proxies dial: the agent URL's, else the public URL's.
+	CodeHostIsAgentURL = "ingress_host_is_agent_url"
 
 	// CodeDomainInvalid and CodeDomainPublicSuffix are the codes of a *NameError, a domain suffix
 	// refused at registration.

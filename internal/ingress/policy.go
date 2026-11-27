@@ -4,6 +4,7 @@
 package ingress
 
 import (
+	"slices"
 	"sort"
 )
 
@@ -21,6 +22,10 @@ type World struct {
 	// may be named: a message about another environment's claim then names neither stack nor
 	// environment.
 	CanView func(envID string) bool
+	// AgentHosts are the hosts agents and proxies dial: the host of the agent URL, or of the public URL when no agent
+	// URL is set, lower-cased and without a port (D-10). No claim, of a stack or of the system, may name one: those
+	// connections go straight to TierPlan and never through ingress (SELF-05). Empty when the instance has neither URL.
+	AgentHosts []string
 }
 
 // PlannedClaim is a hostname a stack will hold once its plan is stored, with its routes.
@@ -123,6 +128,11 @@ func judgeHost(stackID string, d Declaration, w World) (dom Domain, p Problem, b
 		p.Message = "“" + d.Host + "” is not under a domain registered for this environment. Ask an Admin to register the domain, or choose a name under one that is."
 		return dom, p, true
 	}
+	if isAgentHost(d.Host, w) {
+		p.Code = CodeHostIsAgentURL
+		p.Message = agentHostMessage(d.Host)
+		return dom, p, true
+	}
 	if w.Reserved[d.Host] {
 		p.Code = CodeHostReserved
 		p.Message = "“" + d.Host + "” is reserved by an Admin and cannot be used by a stack. Choose another name."
@@ -139,6 +149,21 @@ func judgeHost(stackID string, d Declaration, w World) (dom Domain, p Problem, b
 		return dom, p, true
 	}
 	return dom, Problem{}, false
+}
+
+// isAgentHost reports whether host is exactly a host agents and proxies dial. The comparison is on the lower-cased host,
+// so a name that only shares its domain with the agent host, or sits below it, is a different host and is not refused.
+func isAgentHost(host string, w World) bool {
+	if len(w.AgentHosts) == 0 {
+		return false
+	}
+	return slices.Contains(w.AgentHosts, NormalizeHost(host))
+}
+
+// agentHostMessage is the sentence a claim on the agent host is refused with.
+func agentHostMessage(host string) string {
+	return "“" + host + "” is the host of your agent URL (or of your public URL, because no agent URL is set). " +
+		"Agents and proxies connect straight to TierPlan and never through ingress, so ingress can't serve it."
 }
 
 // DescribeHolder says in one sentence who holds a claimed hostname. It is the one place that
@@ -183,6 +208,11 @@ func CheckRequest(host string, w World) (dom Domain, p Problem, bad bool) {
 	if !ok {
 		p.Code = CodeDomainNotAllowed
 		p.Message = "“" + host + "” is not under a domain registered for this environment. Ask an Admin to register the domain, or choose a name under one that is."
+		return Domain{}, p, true
+	}
+	if isAgentHost(host, w) {
+		p.Code = CodeHostIsAgentURL
+		p.Message = agentHostMessage(host)
 		return Domain{}, p, true
 	}
 	if w.Reserved[host] {

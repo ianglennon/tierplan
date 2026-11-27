@@ -1122,7 +1122,14 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// One ingress store and one notifier for the whole server: the stack routes judge and (from the deploy gates on) write
 	// the stacks' hostnames through the store, and the notifier wakes the reconciler of the environment that changed.
 	ingressNotifier := ingress.NewNotifier()
-	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier})
+	// The hostname policy refuses the host agents and proxies dial, the agent URL's else the public URL's. It is read from the
+	// instance on every World read, so a settings change applies at once (D-10, SELF-05).
+	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier, AgentHosts: func() []string {
+		if h := hostOf(inst.AgentBase()); h != "" {
+			return []string{h}
+		}
+		return nil
+	}})
 	// The per-hostname certificate manager shares the DNS provider map and the clock of the Let's Encrypt manager, so
 	// WithACMEDNS and WithACMEClock move both. It is started before the server listens and run in the background below.
 	certMgr, certStore, err := wireIngressCerts(cfg, log, st, vlt, jobHub, ingressStore, ingressNotifier, bo.acmeClock, acmeDNS)

@@ -72,15 +72,20 @@ type Deps struct {
 	Now func() time.Time
 	// Notifier is told the environment's id after every committed change; nil means nobody is told.
 	Notifier *ingress.Notifier
+	// AgentHosts returns the hosts agents and proxies dial: the agent URL's host, else the public URL's, lower-cased and
+	// without a port. It is read on every World read, so a settings change applies at once; nil leaves the world's
+	// AgentHosts empty (D-10).
+	AgentHosts func() []string
 }
 
 // Store is the ingress model in the database. DNS tokens are sealed by the vault under the domain's
 // own id, so a sealed token copied into another domain's row does not open.
 type Store struct {
-	st       *store.Store
-	v        *vault.Vault
-	now      func() time.Time
-	notifier *ingress.Notifier
+	st         *store.Store
+	v          *vault.Vault
+	now        func() time.Time
+	notifier   *ingress.Notifier
+	agentHosts func() []string
 }
 
 // New returns a Store.
@@ -89,7 +94,7 @@ func New(d Deps) *Store {
 	if now == nil {
 		now = time.Now
 	}
-	return &Store{st: d.St, v: d.Vault, now: now, notifier: d.Notifier}
+	return &Store{st: d.St, v: d.Vault, now: now, notifier: d.Notifier, agentHosts: d.AgentHosts}
 }
 
 // toNanos is the stored form of a time: Unix nanoseconds, 0 for the zero time.
@@ -654,12 +659,12 @@ func (s *Store) Unreserve(ctx context.Context, envID, domainID, hostname string,
 // domains, every reserved name and every claim, with the names a message about them uses. canView
 // is carried into the World for the clash message and may be nil.
 func (s *Store) World(ctx context.Context, envID string, canView func(string) bool) (ingress.World, error) {
-	return readWorld(ctx, s.st.RQ, envID, canView)
+	return s.readWorld(ctx, s.st.RQ, envID, canView)
 }
 
 // readWorld reads the world through q. ReplaceStackRoutes passes the write transaction's queries,
 // so two writers cannot both pass the check.
-func readWorld(ctx context.Context, q *sqlc.Queries, envID string, canView func(string) bool) (ingress.World, error) {
+func (s *Store) readWorld(ctx context.Context, q *sqlc.Queries, envID string, canView func(string) bool) (ingress.World, error) {
 	domains, err := q.ListIngressDomainsByEnv(ctx, envID)
 	if err != nil {
 		return ingress.World{}, fmt.Errorf("ingressstore: list the domains of environment %q: %w", envID, err)
@@ -678,6 +683,9 @@ func readWorld(ctx context.Context, q *sqlc.Queries, envID string, canView func(
 		Claims:   make(map[string]ingress.ClaimInfo, len(claims)),
 		CanView:  canView,
 	}
+	if s.agentHosts != nil {
+		w.AgentHosts = normalizedHosts(s.agentHosts())
+	}
 	for _, d := range domains {
 		w.Domains = append(w.Domains, domainOf(d))
 	}
@@ -688,6 +696,18 @@ func readWorld(ctx context.Context, q *sqlc.Queries, envID string, canView func(
 		w.Claims[c.Hostname] = claimInfoOf(c)
 	}
 	return w, nil
+}
+
+// normalizedHosts lower-cases hosts, drops blanks and removes duplicates, keeping the first of each.
+func normalizedHosts(hosts []string) []string {
+	var out []string
+	for _, h := range hosts {
+		h = ingress.NormalizeHost(h)
+		if h != "" && !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // claimInfoOf converts an install-wide claim row, with the names a message about it uses.
@@ -739,7 +759,7 @@ func (s *Store) ReplaceStackRoutes(ctx context.Context, in ReplaceInput) (ingres
 			}
 			return false, fmt.Errorf("ingressstore: read the stack %q: %w", in.StackID, err)
 		}
-		w, err := readWorld(ctx, q, in.EnvID, in.CanView)
+		w, err := s.readWorld(ctx, q, in.EnvID, in.CanView)
 		if err != nil {
 			return false, err
 		}
