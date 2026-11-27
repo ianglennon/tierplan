@@ -8,9 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCsrfToken } from "@/api/client";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SelfRouteCard } from "@/features/ingress/self-route-card";
+import { SelfRouteCard, selfRouteHeadline } from "@/features/ingress/self-route-card";
 import { SettingsTab } from "@/features/ingress/settings-tab";
-import "@/i18n";
+import { routeHeadline } from "@/features/stacks/route-state";
+import i18n from "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 import { waitUnderFakeClock } from "@/test-settle";
@@ -35,6 +36,7 @@ let statusAnswer: (() => Promise<Response> | Response) | null;
 let statusCalls: number;
 let writes: Write[];
 let previewAnswer: (body: Json) => Response;
+let enableJob: Json;
 let me: ReturnType<typeof makeMe>;
 let client: QueryClient;
 
@@ -111,6 +113,7 @@ beforeEach(() => {
   statusAnswer = null;
   statusCalls = 0;
   writes = [];
+  enableJob = job("j1", "ingress_self_route_enable");
   previewAnswer = (body) =>
     Response.json({ host: String(body.hostname ?? ""), directAddress: DIRECT, items: ITEMS });
   me = makeMe({ instanceAdmin: true });
@@ -175,7 +178,7 @@ beforeEach(() => {
           return Response.json({ jobId: "j2" }, { status: 202 });
         }
       }
-      if (path === `${BASE}/jobs/j1`) return Response.json(job("j1", "ingress_self_route_enable"));
+      if (path === `${BASE}/jobs/j1`) return Response.json(enableJob);
       if (path === `${BASE}/jobs/j2`) return Response.json(job("j2", "ingress_self_route_disable"));
       return Response.json({}, { status: 404 });
     }),
@@ -207,8 +210,18 @@ function mountCard() {
   return render(wrap(<SelfRouteCard envId={ENV} />));
 }
 
-async function card(): Promise<HTMLElement> {
+// region is the card as it is now, loading or not.
+async function region(): Promise<HTMLElement> {
   return waitUnderFakeClock(() => screen.getByRole("region", { name: "TierPlan's own route" }));
+}
+
+// card is the card once the status has been read.
+async function card(): Promise<HTMLElement> {
+  return waitUnderFakeClock(() => {
+    const found = screen.getByRole("region", { name: "TierPlan's own route" });
+    expect(found.querySelector('[data-slot="skeleton"]')).toBeNull();
+    return found;
+  });
 }
 
 async function button(name: string): Promise<HTMLButtonElement> {
@@ -306,5 +319,376 @@ describe("turning the route on", () => {
     expect(writes.filter((w) => w.path === `${BASE}/self`)).toEqual([
       { method: "POST", path: `${BASE}/self`, body: { hostname: HOST } },
     ]);
+  });
+});
+
+const STACK_LINES =
+  "services:\n  tierplan:\n    networks:\n      - tierplan-self\nnetworks:\n  tierplan-self:\n    external: true\n";
+const COMMAND = "docker service update --network-add tierplan-self tierplan_tierplan";
+
+function words(key: string): string {
+  return i18n.t(key, { ns: key.split(".")[0] });
+}
+
+// variantOf reads an Alert's variant from the classes it draws with.
+function variantOf(alert: HTMLElement): "warning" | "destructive" | "neutral" {
+  if (alert.className.includes("border-status-warning")) return "warning";
+  if (alert.className.includes("text-destructive")) return "destructive";
+  return "neutral";
+}
+
+// statusBlock is the card's first part: the dot with its word, then the detail line when there is one.
+function statusBlock(region: HTMLElement): HTMLElement {
+  return region.querySelector('[data-slot="card-content"] > div') as HTMLElement;
+}
+
+describe("every state", () => {
+  const on = { on: true, host: HOST, attached: true };
+  const cases: { name: string; route: Json; word: string; detail: string | null }[] = [
+    { name: "off", route: {}, word: "Off", detail: null },
+    { name: "serving", route: { ...on, state: "serving" }, word: "Serving", detail: null },
+    {
+      name: "pending",
+      route: { ...on, state: "pending" },
+      word: "Rolling out",
+      detail: "The proxies are still picking up the route.",
+    },
+    {
+      name: "waiting_certificate with a reason",
+      route: { ...on, state: "waiting_certificate", reason: "no_certificate" },
+      word: "Waiting for certificate",
+      detail: `No certificate has been issued for this hostname yet. Nothing is served on ${HOST} until it is ready. ${DIRECT} keeps working.`,
+    },
+    {
+      name: "waiting_certificate with no reason",
+      route: { ...on, state: "waiting_certificate", reason: "" },
+      word: "Waiting for certificate",
+      detail: `Nothing is served on ${HOST} until it is ready. ${DIRECT} keeps working.`,
+    },
+    {
+      name: "self_not_attached on a swarm",
+      route: { ...on, attached: false, state: "self_not_attached", reason: "self_not_attached" },
+      word: "Not attached",
+      detail: `TierPlan's own service isn't on the tierplan-self network yet. Nothing is served on ${HOST} until it is. Add the lines below to your stack file and deploy it again.`,
+    },
+    {
+      name: "self_not_attached on a standalone host",
+      route: {
+        ...on,
+        attached: false,
+        kind: "standalone",
+        state: "self_not_attached",
+        reason: "self_not_attached",
+      },
+      word: "Not attached",
+      detail:
+        "TierPlan's container isn't on the tierplan-self network yet. TierPlan connects it itself on the next check.",
+    },
+    {
+      name: "unknown",
+      route: { ...on, state: "unknown" },
+      word: "Unknown",
+      detail: "TierPlan couldn't read this just now.",
+    },
+  ];
+
+  it.each(cases)("draws each state from one map: $name", async ({ route: over, word, detail }) => {
+    selfRoute = route(over);
+    mountCard();
+    const region = await card();
+    const block = statusBlock(region);
+    const lines = Array.from(block.children).map((el) => el.textContent);
+    expect(lines).toEqual(detail === null ? [word] : [word, detail]);
+    // No error banner for any state, unknown included.
+    const alerts = Array.from(region.querySelectorAll<HTMLElement>('[data-slot="alert"]'));
+    expect(alerts.filter((a) => variantOf(a) === "destructive")).toEqual([]);
+  });
+
+  it("takes every state word a route also has from the route headline", () => {
+    for (const state of ["serving", "pending", "waiting_certificate", "unknown"] as const) {
+      expect(selfRouteHeadline(state)).toEqual(routeHeadline(state, false));
+    }
+    expect(selfRouteHeadline("self_not_attached")).toEqual(routeHeadline("not_attached", false));
+    expect(words(selfRouteHeadline("self_not_attached").labelKey)).toBe("Not attached");
+    expect(selfRouteHeadline("off").dot).toBe("pending");
+    expect(words(selfRouteHeadline("off").labelKey)).toBe("Off");
+  });
+
+  it("draws the off state as its body sentence and the direct address only", async () => {
+    mountCard();
+    const region = await card();
+    expect(
+      within(region).getByText(
+        "Serve TierPlan itself on a hostname through ingress, with a certificate. It uses its own network, so the other routes can't reach TierPlan.",
+      ),
+    ).toBeTruthy();
+    const terms = Array.from(region.querySelectorAll("dt")).map((dt) => dt.textContent);
+    expect(terms).toEqual(["Direct address"]);
+    expect(within(region).getByText(DIRECT)).toBeTruthy();
+    expect(
+      within(region).getByText(
+        "Keeps working. You can always reach TierPlan here, and turn the route off from here.",
+      ),
+    ).toBeTruthy();
+    expect(region.textContent).not.toContain("You sign in on each address separately");
+  });
+
+  it("lists the hostname, the direct address and the network while the route is on, never truncated", async () => {
+    const long = `a-very-long-name-that-goes-on-and-on-for-a-while.${HOST}`;
+    selfRoute = route({ on: true, host: long, state: "serving", attached: true });
+    mountCard();
+    const region = await card();
+    const terms = Array.from(region.querySelectorAll("dt")).map((dt) => dt.textContent);
+    expect(terms).toEqual(["Hostname", "Direct address", "Network"]);
+    const host = within(region).getByText(long);
+    expect(host.className).toContain("font-mono");
+    expect(host.className).toContain("break-all");
+    expect(host.className).not.toContain("truncate");
+    expect(within(region).getByText("tierplan-self").className).toContain("font-mono");
+    expect(within(region).getByText("Attached")).toBeTruthy();
+    expect(
+      within(region).getByText(
+        "You sign in on each address separately. Single sign-on still returns to the public URL.",
+      ),
+    ).toBeTruthy();
+    expect(within(region).queryByText(/Serve TierPlan itself/)).toBeNull();
+  });
+});
+
+describe("the snippet", () => {
+  const notAttached = {
+    on: true,
+    host: HOST,
+    attached: false,
+    state: "self_not_attached",
+    reason: "self_not_attached",
+  };
+  const shared = `TierPlan makes the tierplan-self network when you turn the route on. Run this after that. Direct access on ${DIRECT} isn't affected either way.`;
+
+  it("draws exactly one snippet form: the stack file lines", async () => {
+    selfRoute = route({ ...notAttached, snippet: { kind: "stack_file", text: STACK_LINES } });
+    mountCard();
+    const region = await card();
+    expect(within(region).getByText("Add TierPlan to the self network")).toBeTruthy();
+    expect(
+      within(region).getByText(
+        "TierPlan can't change its own service: an update would stop the task that sent it. Add these lines to your TierPlan stack file and deploy it again.",
+      ),
+    ).toBeTruthy();
+    const block = within(region).getByRole("region", { name: "the stack file lines" });
+    expect(block.querySelector("code")?.textContent).toBe(STACK_LINES);
+    expect(region.querySelectorAll("pre")).toHaveLength(1);
+    expect(within(region).getByText(/If the service has no `networks` entry yet/)).toBeTruthy();
+    expect(within(region).getByText(shared)).toBeTruthy();
+    expect(within(region).queryByRole("region", { name: "the service update command" })).toBeNull();
+    expect(region.textContent).not.toMatch(/token|password/i);
+  });
+
+  it("draws exactly one snippet form: the service update command", async () => {
+    selfRoute = route({ ...notAttached, snippet: { kind: "service_update", text: COMMAND } });
+    mountCard();
+    const region = await card();
+    expect(
+      within(region).getByText(
+        "TierPlan's service wasn't deployed from a stack file, so add the network with this command on a manager.",
+      ),
+    ).toBeTruthy();
+    const block = within(region).getByRole("region", { name: "the service update command" });
+    expect(block.querySelector("code")?.textContent).toBe(COMMAND);
+    expect(region.querySelectorAll("pre")).toHaveLength(1);
+    expect(within(region).getByText(shared)).toBeTruthy();
+    expect(within(region).queryByText(/If the service has no `networks` entry yet/)).toBeNull();
+  });
+
+  it("draws no snippet on a standalone host", async () => {
+    selfRoute = route({ ...notAttached, kind: "standalone" });
+    mountCard();
+    const region = await card();
+    expect(within(region).getByText(/TierPlan connects it itself on the next check/)).toBeTruthy();
+    expect(within(region).queryByText("Add TierPlan to the self network")).toBeNull();
+    expect(region.querySelectorAll("pre")).toHaveLength(0);
+  });
+});
+
+describe("the safeguards", () => {
+  it("warns when the page is used through the route", async () => {
+    selfRoute = route({ on: true, host: window.location.host, state: "serving", attached: true });
+    mountCard();
+    const region = await card();
+    const alert = within(region)
+      .getByText(/You're using TierPlan through this route/)
+      .closest('[data-slot="alert"]') as HTMLElement;
+    expect(alert.textContent).toBe(
+      `You're using TierPlan through this route. If you turn it off, this page may stop answering. Open ${DIRECT} to carry on.`,
+    );
+    expect(variantOf(alert)).toBe("neutral");
+    expect(within(alert).getByText(DIRECT).className).toContain("font-mono");
+  });
+
+  it("does not warn when the page comes from another address", async () => {
+    selfRoute = route({ on: true, host: HOST, state: "serving", attached: true });
+    mountCard();
+    const region = await card();
+    expect(within(region).queryByText(/You're using TierPlan through this route/)).toBeNull();
+  });
+
+  it("shows refusals known before the switch: TierPlan needs to run as a service", async () => {
+    selfRoute = route({
+      kind: "swarm_container",
+      refusal: { code: "self_route_needs_service", message: "The server's sentence." },
+    });
+    mountCard();
+    const region = await card();
+    const alert = within(region)
+      .getByText(/TierPlan runs as a plain container on a swarm node/)
+      .closest('[data-slot="alert"]') as HTMLElement;
+    expect(variantOf(alert)).toBe("warning");
+    expect(alert.textContent).toBe(
+      "TierPlan runs as a plain container on a swarm node, and the route needs it to run as a swarm service. See install-in-swarm.md.",
+    );
+    // The file name in mono, and not a link: the app does not link the docs.
+    expect(within(alert).getByText("install-in-swarm.md").className).toContain("font-mono");
+    expect(within(alert).queryByRole("link")).toBeNull();
+  });
+
+  it("shows refusals known before the switch: TierPlan can't tell where it runs, and the button stays enabled", async () => {
+    selfRoute = route({
+      here: "unknown",
+      kind: "",
+      state: "unknown",
+      refusal: { code: "self_route_not_here", message: "The server's sentence." },
+    });
+    mountCard();
+    const region = await card();
+    expect(statusBlock(region).textContent).toBe("Off");
+    const alert = within(region)
+      .getByText(/TierPlan can't tell whether it runs in this environment/)
+      .closest('[data-slot="alert"]') as HTMLElement;
+    expect(variantOf(alert)).toBe("warning");
+    expect(alert.textContent).toBe(
+      `TierPlan can't tell whether it runs in this environment, so it won't switch its route on here. Direct access on ${DIRECT} isn't affected.`,
+    );
+    const turnOn = await button("Turn on own route");
+    expect(turnOn.getAttribute("aria-disabled")).toBeNull();
+    expect(turnOn.disabled).toBe(false);
+  });
+
+  it("draws a refusal with no words of its own as the server's sentence", async () => {
+    selfRoute = route({ refusal: { code: "something_new", message: "The server's sentence." } });
+    mountCard();
+    const region = await card();
+    expect(within(region).getByText("The server's sentence.")).toBeTruthy();
+  });
+
+  it("turns the route off without a destructive button", async () => {
+    selfRoute = route({ on: true, host: HOST, state: "serving", attached: true });
+    mountCard();
+    fireEvent.click(await button("Turn off own route"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Turn off TierPlan's own route?" }),
+    );
+    expect(dialog.textContent).toContain(
+      `TierPlan stops serving ${HOST}. Direct access on ${DIRECT} keeps working.`,
+    );
+    // The off-preview runs as the dialog opens: there is no form.
+    await waitUnderFakeClock(() => expect(dialog.querySelector("ol")).toBeTruthy());
+    expect(writes).toEqual([{ method: "POST", path: `${BASE}/self/off/preview`, body: {} }]);
+    expect(itemHeadings(dialog)).toEqual(["Origin", "Self network"]);
+    expect(within(dialog).queryByText(/You're using TierPlan through this route/)).toBeNull();
+    const confirm = within(dialog).getByRole("button", {
+      name: "Turn off own route",
+    }) as HTMLButtonElement;
+    expect(confirm.getAttribute("data-variant")).toBe("default");
+    fireEvent.click(confirm);
+    await waitUnderFakeClock(() =>
+      expect(within(dialog).getByText("TierPlan's own route is off.")).toBeTruthy(),
+    );
+    expect(within(dialog).getByRole("heading", { name: "Turning own route off…" })).toBeTruthy();
+    expect(writes.filter((w) => w.path === `${BASE}/self`)).toEqual([
+      { method: "DELETE", path: `${BASE}/self`, body: {} },
+    ]);
+  });
+
+  it("warns in the switch-off review when the page is used through the route, and still lets it go", async () => {
+    selfRoute = route({ on: true, host: window.location.host, state: "pending", attached: true });
+    mountCard();
+    fireEvent.click(await button("Turn off own route"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Turn off TierPlan's own route?" }),
+    );
+    await waitUnderFakeClock(() => expect(dialog.querySelector("ol")).toBeTruthy());
+    const warning = within(dialog)
+      .getByText(
+        `You're using TierPlan through this route. This page may stop answering as the route goes. The change still goes through. Open ${DIRECT} to see the result.`,
+      )
+      .closest('[data-slot="alert"]') as HTMLElement;
+    expect(variantOf(warning)).toBe("warning");
+    expect(
+      (within(dialog).getByRole("button", { name: "Turn off own route" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("draws a failed job's sentence, then the hint with the direct address", async () => {
+    enableJob = {
+      ...job("j1", "ingress_self_route_enable"),
+      state: "failed",
+      items: [
+        {
+          id: "self_check",
+          kind: "step",
+          label: "Check the hostname",
+          state: "failed",
+          message: `${HOST} is already held by the stack shop.`,
+          detail: "",
+        },
+      ],
+    };
+    mountCard();
+    fireEvent.click(await button("Turn on own route"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Turn on TierPlan's own route?" }),
+    );
+    fireEvent.change(within(dialog).getByLabelText("Hostname"), { target: { value: HOST } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Check hostname" }));
+    await waitUnderFakeClock(() => expect(dialog.querySelector("ol")).toBeTruthy());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Turn on own route" }));
+    const sentence = await waitUnderFakeClock(() =>
+      within(dialog).getByText(`${HOST} is already held by the stack shop.`),
+    );
+    const alert = sentence.closest('[data-slot="alert"]') as HTMLElement;
+    expect(variantOf(alert)).toBe("destructive");
+    expect(alert.textContent).toContain(
+      `Nothing is lost. Turn it on again to carry on, or off to remove what was made. Direct access on ${DIRECT} still works.`,
+    );
+  });
+});
+
+describe("loading and errors", () => {
+  it("draws a skeleton while the status loads", async () => {
+    statusAnswer = () => new Promise<Response>(() => {});
+    mountCard();
+    const loading = await region();
+    expect(loading.querySelector('[data-slot="skeleton"]')?.className).toContain("h-16");
+    expect(within(loading).queryByRole("button")).toBeNull();
+  });
+
+  it("draws the read error with a retry that reads again", async () => {
+    statusAnswer = () =>
+      Response.json(
+        { title: "Problem", status: 500, type: "internal", detail: "internal error" },
+        { status: 500, headers: { "Content-Type": "application/problem+json" } },
+      );
+    mountCard();
+    const region = await card();
+    await waitUnderFakeClock(() =>
+      expect(within(region).getByText("Couldn't read the route status.")).toBeTruthy(),
+    );
+    const before = statusCalls;
+    statusAnswer = null;
+    fireEvent.click(within(region).getByRole("button", { name: "Retry reading the route status" }));
+    await button("Turn on own route");
+    expect(statusCalls).toBe(before + 1);
+    expect(within(region).queryByText("Couldn't read the route status.")).toBeNull();
   });
 });
