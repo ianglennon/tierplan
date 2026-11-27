@@ -880,6 +880,7 @@ describe("actionLabel (ingress)", () => {
     "ingress.vip_moved",
     "ingress.self_network_attached",
     "ingress.self_route_enabled",
+    "ingress.self_route_disabled",
   ];
 
   it("labels every ingress action and lists it in the Action filter", () => {
@@ -896,6 +897,9 @@ describe("actionLabel (ingress)", () => {
     );
     expect(actionLabel("ingress.self_route_enabled", real)).toBe(
       "Turned on TierPlan's own ingress route",
+    );
+    expect(actionLabel("ingress.self_route_disabled", real)).toBe(
+      "Turned off TierPlan's own ingress route",
     );
   });
 

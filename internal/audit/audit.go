@@ -429,6 +429,10 @@ const (
 	// details host, environment: the environment's name). A switch-on that failed is a failure row of the same action
 	// holding only the step and its code.
 	ActionIngressSelfRouteEnabled = "ingress.self_route_enabled"
+	// self_route_disabled: an instance admin switched TierPlan's own route off, alone or as the first step of switching
+	// ingress off, written in the release's transaction (D-11; details host, environment). A release that failed is a
+	// failure row of the same action holding only the step and its code.
+	ActionIngressSelfRouteDisabled = "ingress.self_route_disabled"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

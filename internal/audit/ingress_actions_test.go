@@ -206,6 +206,11 @@ var ingressActions = []ingressRow{
 		Proofs: []string{"TestEnableSelfRouteStoresTheClaimAndAudits"}, Failure: "TestAuditProofSelfRouteEnabledFailure",
 	},
 	{
+		Action: "ingress.self_route_disabled", Verb: "switch", Actor: "user", Class: "F",
+		DetailKeys: []string{"host", "environment"}, FailureKeys: []string{"step", "code"},
+		Proofs: []string{"TestAuditProofSelfRouteDisabled"}, Failure: "TestAuditProofSelfRouteDisabledFailure",
+	},
+	{
 		Action: "ingress.vip_moved", Verb: "vip_move", Actor: "system", Class: "A",
 		DetailKeys: []string{"from", "to", "reason"},
 		Proofs:     []string{"TestAuditProofVIPMoved"},

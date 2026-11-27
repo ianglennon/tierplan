@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,9 @@ const (
 	CodeSelfRouteCheckFailed = "self_route_check_failed"
 	// CodeSelfRouteClaimFailed is a claim the store could not write for a reason that is not a refusal.
 	CodeSelfRouteClaimFailed = "self_route_claim_failed"
+	// CodeSelfRouteReleaseFailed is a release the store could not write. The route is still on, and turning it off again
+	// tries again.
+	CodeSelfRouteReleaseFailed = "self_route_release_failed"
 )
 
 // SelfNetworkWait is how long a self route job waits, on the injected clock, for an ensure pass to report the self network as
@@ -57,10 +61,20 @@ var (
 	}
 )
 
+// The items of the switch-off in order, and their lines.
+var (
+	selfDisableItems  = []string{ItemSelfRelease, ItemSelfNetwork}
+	selfDisableLabels = map[string]string{
+		ItemSelfRelease: "Release the hostname",
+		ItemSelfNetwork: "Remove the " + ingress.SelfNetworkName + " network, unless it is still needed",
+	}
+)
+
 // selfCodeMessages are the sentences of the self route jobs' codes, built here and never from an engine's answer.
 var selfCodeMessages = map[string]string{
-	CodeSelfRouteCheckFailed: "The checks could not be run, so TierPlan's own route was not switched on. Try again.",
-	CodeSelfRouteClaimFailed: "TierPlan's own route could not be stored.",
+	CodeSelfRouteCheckFailed:   "The checks could not be run, so TierPlan's own route was not switched on. Try again.",
+	CodeSelfRouteClaimFailed:   "TierPlan's own route could not be stored.",
+	CodeSelfRouteReleaseFailed: "TierPlan's own route could not be released, so it is still on. Turn it off again.",
 }
 
 // The lines a self route job writes to its output.
@@ -68,6 +82,10 @@ const (
 	selfStillOffText    = "TierPlan's own route is still off."
 	selfNetPendingText  = "The " + ingress.SelfNetworkName + " network isn't there yet. The ingress keeps trying, and the route is served once it is."
 	selfNetCancelledLog = "the wait for TierPlan's own network ended with the job"
+	selfNetLaterText    = "The ingress hasn't looked at the " + ingress.SelfNetworkName + " network since. It removes the network on a later pass when nothing needs it."
+	selfNetKeptText     = "The " + ingress.SelfNetworkName + " network stays: the ingress still sends TierPlan's own HTTP-01 challenges over it."
+	selfNetInUseText    = "The " + ingress.SelfNetworkName + " network stays while something is still on it. If TierPlan's stack file names it, " +
+		"take those lines out and redeploy TierPlan; a later pass removes the network."
 )
 
 // EnableSelfRoute switches TierPlan's own route on in envID (D-17): it takes the environment's operation lock and starts a
@@ -314,4 +332,132 @@ func (s *Service) waitSelfObservation(ctx context.Context, envID string, after u
 		case <-tick:
 		}
 	}
+}
+
+// DisableSelfRoute switches TierPlan's own route off in envID (D-11): it takes the environment's operation lock and starts a
+// job that releases the claim with ingress.self_route_disabled in the same transaction (removeSelfRoute), wakes the ensure
+// loop and reports from its next pass whether the self network was removed or kept. No check of the route, the engine, the
+// certificate or where TierPlan runs stops it (T-28-53): the only refusals are a held lock (*LockedError) and no route on in
+// envID (ErrSelfRouteNotEnabled), each before a job starts.
+func (s *Service) DisableSelfRoute(ctx context.Context, actor audit.Actor, owner, envID string) (string, error) {
+	specs := make([]jobs.ItemSpec, 0, len(selfDisableItems))
+	for _, id := range selfDisableItems {
+		specs = append(specs, jobs.ItemSpec{ID: id, Label: selfDisableLabels[id], Kind: "step"})
+	}
+	pre := func(ctx context.Context, _ EnvInfo, _ EnableRequest) ([]Finding, error) {
+		claim, held, err := s.d.Store.SystemClaim(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !held || claim.EnvID != envID {
+			return nil, ErrSelfRouteNotEnabled
+		}
+		return nil, nil
+	}
+	// The environment is not read: nothing of it is needed to release the claim, and a read that fails must not stop it.
+	return s.startEnable(ctx, JobKindSelfRouteDisable, owner, EnvInfo{ID: envID}, EnableRequest{}, pre, specs,
+		func(jctx context.Context, r *jobs.Reporter, release func()) {
+			s.runSelfRouteDisable(jctx, r, release, actor, envID)
+		})
+}
+
+// runSelfRouteDisable runs the switch-off's items: the release, then the network's report, which never fails the job.
+func (s *Service) runSelfRouteDisable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, envID string) {
+	e := &selfRun{s: s, actor: actor, envID: envID, action: audit.ActionIngressSelfRouteDisabled, r: r, release: release, items: selfDisableItems}
+	if ctx.Err() != nil {
+		e.stop(ctx, 0, jobs.CodeCancelled, "", "")
+		return
+	}
+	seen := s.selfSeqOf(envID)
+	// Only this job audits a failed release; the row is written, and the lock freed, before the item ends (A-01).
+	onFail := func(item, code string) {
+		s.auditJobFailed(ctx, actor, audit.ActionIngressSelfRouteDisabled, envID, item, code)
+		release()
+	}
+	err := s.removeSelfRoute(ctx, actor, envID, r, onFail)
+	switch {
+	case errors.Is(err, ErrSelfRouteNotEnabled):
+		// Released in between by another way (the ingress switch-off): nothing is left to release.
+	case err != nil:
+		s.log().Warn("TierPlan's own route could not be released", "environment", envID, "error", err)
+		release()
+		if ctx.Err() != nil {
+			e.skipFrom(1, jobs.ItemCancelled, jobs.CodeCancelled)
+			return
+		}
+		e.skipFrom(1, jobs.ItemSkipped, CodeNotRun)
+		return
+	}
+	release()
+
+	e.running(ItemSelfNetwork)
+	o, ok, werr := s.waitSelfObservation(ctx, envID, seen, func(SelfObservation) bool { return true })
+	switch {
+	case werr != nil:
+		s.log().Info(selfNetCancelledLog, "environment", envID)
+		r.Output(selfNetLaterText)
+		r.Finish(ItemSelfNetwork, jobs.ItemCancelled, jobs.CodeCancelled, "", nil)
+	case !ok:
+		r.Output(selfNetLaterText)
+		e.done(ItemSelfNetwork, nil)
+	case !o.Exists:
+		e.done(ItemSelfNetwork, map[string]string{"network": "removed"})
+	case o.KeptInUse:
+		r.Output(selfNetInUseText)
+		e.done(ItemSelfNetwork, map[string]string{"network": "kept_in_use"})
+	default:
+		r.Output(selfNetKeptText)
+		e.done(ItemSelfNetwork, map[string]string{"network": "kept"})
+	}
+}
+
+// removeSelfRoute releases TierPlan's own route in envID: the claim and its route go with ingress.self_route_disabled in one
+// transaction, and the ensure loop is woken to take the self network away when nothing else wants it. It runs no check at all
+// (D-11), so no state of the route, the engine, the certificate or the environment stops it. It is the one release the
+// switch-off job and the ingress switch-off (28-31) share.
+//
+// r reports the release as ItemSelfRelease; it may be nil, and a job without that item ignores it. onFail, when set, is told
+// the item and the code of a release that failed or was cancelled, before the item ends, so only the switch-off job audits a
+// failure. With no route on in envID it returns ErrSelfRouteNotEnabled, with the item done {removed: false}.
+func (s *Service) removeSelfRoute(ctx context.Context, actor audit.Actor, envID string, r *jobs.Reporter, onFail func(item, code string)) error {
+	if r != nil {
+		r.Update(ItemSelfRelease, func(it *jobs.Item) { it.State = jobs.ItemRunning })
+	}
+	envName := envID
+	if info, err := s.d.Envs.Info(ctx, envID); err == nil && info.Name != "" {
+		envName = info.Name
+	}
+	hook := func(ctx context.Context, tx *sql.Tx, c ingressstore.SystemClaim) error {
+		return s.d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor: actor, Action: audit.ActionIngressSelfRouteDisabled, TargetType: "environment", TargetID: envID,
+			EnvID: envID, Result: audit.ResultSuccess,
+			Details: map[string]string{"host": c.Hostname, "environment": envName},
+		})
+	}
+	c, ok, err := s.d.Store.ClearSystemClaim(ctx, envID, actor.ID, time.Time{}, hook)
+	if err != nil {
+		code, state := CodeSelfRouteReleaseFailed, jobs.ItemFailed
+		if ctx.Err() != nil {
+			code, state = jobs.CodeCancelled, jobs.ItemCancelled
+		}
+		if onFail != nil {
+			onFail(ItemSelfRelease, code)
+		}
+		if r != nil {
+			msg := selfCodeMessages[code]
+			r.Finish(ItemSelfRelease, state, code, msg, nil)
+		}
+		return fmt.Errorf("ingressdeploy: release TierPlan's own route: %w", err)
+	}
+	if !ok {
+		if r != nil {
+			r.Finish(ItemSelfRelease, jobs.ItemDone, "", "", map[string]string{"removed": "false"})
+		}
+		return ErrSelfRouteNotEnabled
+	}
+	s.Wake()
+	if r != nil {
+		r.Finish(ItemSelfRelease, jobs.ItemDone, "", "", map[string]string{"host": c.Hostname, "removed": "true"})
+	}
+	return nil
 }

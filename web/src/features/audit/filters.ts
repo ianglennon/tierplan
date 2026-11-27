@@ -254,6 +254,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   // TierPlan's own ingress route (Phase 28).
   "ingress.self_network_attached",
   "ingress.self_route_enabled",
+  "ingress.self_route_disabled",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
