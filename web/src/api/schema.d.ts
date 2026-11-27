@@ -1888,6 +1888,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/ingress/self": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch TierPlan's own route on
+         * @description Takes the environment's operation lock and answers 202 with a job's ID at once. The job (ingress_self_route_enable) runs the preview's checks again as its first item, self_check, and a refusal ends it there with the refusing item's reason as the code (for example host_taken, vip_ingress_off, self_route_already_on or self_route_not_here) before anything is written. Otherwise self_claim stores the hostname for TierPlan with its audit entry (ingress.self_route_enabled), and self_network waits for the ingress to report the tierplan-self network. The job ends done once the claim is stored, even when the route is not served yet. Follow it at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 409 operation_locked while another operation holds the environment, naming it. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
+         */
+        post: operations["enableIngressSelfRoute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/self/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching TierPlan's own route on
+         * @description Says what serving TierPlan itself on the hostname through this environment's ingress would do, and what would stop it, and writes nothing: no claim, no network, no certificate. The answer is 200 whether or not anything refuses. items are, in order, self_hostname (the name, judged by the rules every claim is judged by), self_certificate, self_network (whether TierPlan is, or will be, on the tierplan-self network, with the next step as snippet for a swarm service that is not), self_origin (the origin TierPlan will also accept) and, when TierPlan's own certificate renews over HTTP-01, self_carve_out. Each item has a state (ok, warning or refused), the server's sentence and, for a warning or a refusal, its stable reason. Any refused item stops the switch-on. directAddress is the address that keeps reaching TierPlan whatever the route does, empty for the page's own origin. Answered with Cache-Control no-store. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
+         */
+        post: operations["previewIngressSelfRoute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/ingress/status": {
         parameters: {
             query?: never;
@@ -11063,6 +11103,46 @@ export interface components {
             enabled: boolean;
             /** @description The rows of the environment, never another environment's: the routes in hostname, path then service order, then the claims with no route in hostname order, then the reserved names in hostname order; empty when there are none */
             routes: components["schemas"]["IngressRouteBody"][] | null;
+        };
+        IngressSelfRouteItemBody: {
+            /** @description The item: self_hostname, self_certificate, self_network, self_origin and self_carve_out for a switch-on; self_origin_removed and self_network_removed for a switch-off */
+            code: string;
+            /** @description The server's sentence. Show it as sent */
+            message: string;
+            /** @description The stable code of a warning or a refusal, for example host_taken, vip_ingress_off, self_route_not_here or self_not_attached; absent when the item passed */
+            reason?: string;
+            /** @description On the self_network item of a swarm service that is not on the tierplan-self network: the next step that puts it there */
+            snippet?: components["schemas"]["IngressSelfSnippetBody"];
+            /**
+             * @description ok passes; warning tells you something and lets the switch go on; refused stops the switch-on
+             * @enum {string}
+             */
+            state: "ok" | "warning" | "refused";
+        };
+        IngressSelfRoutePreviewBody: {
+            /** @description The address that keeps reaching TierPlan whatever the route does; empty when that is the page's own origin */
+            directAddress: string;
+            /** @description The hostname as judged, lower-cased; for a switch-off, the hostname of the route that is on */
+            host: string;
+            /** @description The items in order. Any item whose state is refused stops the switch-on; the switch-off has none */
+            items: components["schemas"]["IngressSelfRouteItemBody"][] | null;
+        };
+        IngressSelfRouteRequest: {
+            /** @description The hostname TierPlan is to be served on, under one of the environment's registered domains, for example tierplan.apps.example.org */
+            hostname: string;
+        };
+        IngressSelfRouteStartBody: {
+            /** @description The job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
+            jobId: string;
+        };
+        IngressSelfSnippetBody: {
+            /**
+             * @description stack_file is lines to add to TierPlan's stack file; service_update is a docker service update command
+             * @enum {string}
+             */
+            kind: "stack_file" | "service_update";
+            /** @description The lines or the command, with TierPlan's service name filled in. Show it as sent */
+            text: string;
         };
         IngressStatusBody: {
             /** @description True while the proxy writes an access log */
@@ -22393,6 +22473,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngressRoutesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    enableIngressSelfRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressSelfRouteRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressSelfRouteStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressSelfRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressSelfRouteRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressSelfRoutePreviewBody"];
                 };
             };
             /** @description Error */

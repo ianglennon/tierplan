@@ -11382,6 +11382,120 @@
         ],
         "type": "object"
       },
+      "IngressSelfRouteItemBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "The item: self_hostname, self_certificate, self_network, self_origin and self_carve_out for a switch-on; self_origin_removed and self_network_removed for a switch-off",
+            "type": "string"
+          },
+          "message": {
+            "description": "The server's sentence. Show it as sent",
+            "type": "string"
+          },
+          "reason": {
+            "description": "The stable code of a warning or a refusal, for example host_taken, vip_ingress_off, self_route_not_here or self_not_attached; absent when the item passed",
+            "type": "string"
+          },
+          "snippet": {
+            "$ref": "#/components/schemas/IngressSelfSnippetBody",
+            "description": "On the self_network item of a swarm service that is not on the tierplan-self network: the next step that puts it there"
+          },
+          "state": {
+            "description": "ok passes; warning tells you something and lets the switch go on; refused stops the switch-on",
+            "enum": [
+              "ok",
+              "warning",
+              "refused"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "state",
+          "message"
+        ],
+        "type": "object"
+      },
+      "IngressSelfRoutePreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "directAddress": {
+            "description": "The address that keeps reaching TierPlan whatever the route does; empty when that is the page's own origin",
+            "type": "string"
+          },
+          "host": {
+            "description": "The hostname as judged, lower-cased; for a switch-off, the hostname of the route that is on",
+            "type": "string"
+          },
+          "items": {
+            "description": "The items in order. Any item whose state is refused stops the switch-on; the switch-off has none",
+            "items": {
+              "$ref": "#/components/schemas/IngressSelfRouteItemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "host",
+          "directAddress"
+        ],
+        "type": "object"
+      },
+      "IngressSelfRouteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "hostname": {
+            "description": "The hostname TierPlan is to be served on, under one of the environment's registered domains, for example tierplan.apps.example.org",
+            "maxLength": 253,
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostname"
+        ],
+        "type": "object"
+      },
+      "IngressSelfRouteStartBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId"
+        ],
+        "type": "object"
+      },
+      "IngressSelfSnippetBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "description": "stack_file is lines to add to TierPlan's stack file; service_update is a docker service update command",
+            "enum": [
+              "stack_file",
+              "service_update"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "description": "The lines or the command, with TierPlan's service name filled in. Show it as sent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
       "IngressStatusBody": {
         "additionalProperties": false,
         "properties": {
@@ -36181,6 +36295,128 @@
           }
         },
         "summary": "List the routes of an environment and what each is doing now",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/self": {
+      "post": {
+        "description": "Takes the environment's operation lock and answers 202 with a job's ID at once. The job (ingress_self_route_enable) runs the preview's checks again as its first item, self_check, and a refusal ends it there with the refusing item's reason as the code (for example host_taken, vip_ingress_off, self_route_already_on or self_route_not_here) before anything is written. Otherwise self_claim stores the hostname for TierPlan with its audit entry (ingress.self_route_enabled), and self_network waits for the ingress to report the tierplan-self network. The job ends done once the claim is stored, even when the route is not served yet. Follow it at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 409 operation_locked while another operation holds the environment, naming it. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.",
+        "operationId": "enableIngressSelfRoute",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngressSelfRouteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressSelfRouteStartBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Switch TierPlan's own route on",
+        "tags": [
+          "ingress"
+        ]
+      }
+    },
+    "/api/env/{envId}/ingress/self/preview": {
+      "post": {
+        "description": "Says what serving TierPlan itself on the hostname through this environment's ingress would do, and what would stop it, and writes nothing: no claim, no network, no certificate. The answer is 200 whether or not anything refuses. items are, in order, self_hostname (the name, judged by the rules every claim is judged by), self_certificate, self_network (whether TierPlan is, or will be, on the tierplan-self network, with the next step as snippet for a swarm service that is not), self_origin (the origin TierPlan will also accept) and, when TierPlan's own certificate renews over HTTP-01, self_carve_out. Each item has a state (ok, warning or refused), the server's sentence and, for a warning or a refusal, its stable reason. Any refused item stops the switch-on. directAddress is the address that keeps reaching TierPlan whatever the route does, empty for the page's own origin. Answered with Cache-Control no-store. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.",
+        "operationId": "previewIngressSelfRoute",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngressSelfRouteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngressSelfRoutePreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Preview switching TierPlan's own route on",
         "tags": [
           "ingress"
         ]
