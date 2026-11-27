@@ -190,53 +190,33 @@ func checkStandaloneSubnet(ctx context.Context, s *Service, in checkInput) ([]Fi
 	return nil, nil
 }
 
-// checkStandaloneHTTP01 refuses when TierPlan's own certificate uses the HTTP-01 challenge and TierPlan runs on this
-// host: the proxy takes port 80, so the renewal would break silently (D-04). TierPlan is on this host when the
-// environment is the local socket, or an agent host whose engine ID is the local engine's. What cannot be told is a
-// warning, never a silent pass: a challenge that cannot be read, a local engine that does not answer or has no ID, or a
-// host whose engine ID is not known.
+// The sentences of the standalone HTTP-01 check (UI-SPEC S4).
+const (
+	http01StandaloneConflict = "TierPlan runs on this host and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes. TierPlan couldn't find its own container to connect it to tierplan-self. Switch TierPlan's own certificate to DNS-01 first."
+	http01StandaloneUnknown  = "TierPlan could not tell whether its own certificate needs port 80, which the ingress takes. If it uses the HTTP-01 challenge and TierPlan runs on this host, switch it to DNS-01 first."
+)
+
+// checkStandaloneHTTP01 is checkHTTP01 for a standalone host, whose proxy takes port 80 (D-04, D-12): when TierPlan's own
+// certificate really renews over HTTP-01 and TierPlan runs on this host, the carve-out reaches it once TierPlan connects its own
+// container to the self network, which is a notice; a container it cannot find is a refusal. SelfLocation says where TierPlan
+// runs: the local-socket environment, or an agent host with the local engine's ID.
 func checkStandaloneHTTP01(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
-	if s.d.OwnChallenge == nil {
+	if s.d.OwnHTTP01InUse == nil {
 		return nil, nil
 	}
-	unknown := func() []Finding {
-		return []Finding{{
-			Code:     CodeHTTP01Unknown,
-			Message:  "TierPlan could not tell whether its own certificate needs port 80, which the ingress takes. If it uses the HTTP-01 challenge and TierPlan runs on this host, switch it to DNS-01 first.",
-			Severity: SeverityWarning,
-		}}
-	}
-	challenge, err := s.d.OwnChallenge(ctx)
+	inUse, err := s.d.OwnHTTP01InUse(ctx)
 	if err != nil {
-		s.log().Warn("could not read TierPlan's own challenge type for the ingress preflight", "error", err)
-		return unknown(), nil
+		s.log().Warn("could not read whether TierPlan's own certificate uses HTTP-01 for the ingress preflight", "error", err)
+		return []Finding{{Code: CodeHTTP01Unknown, Message: http01StandaloneUnknown, Severity: SeverityWarning}}, nil
 	}
-	if challenge != challengeHTTP01 {
+	if !inUse {
 		return nil, nil
 	}
-	conflict := []Finding{{
-		Code:     CodeHTTP01Conflict,
-		Message:  "TierPlan runs on this host and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes. Switch TierPlan's own certificate to DNS-01 first. A later version lifts this limit.",
-		Severity: SeverityError,
-	}}
-	if in.Info.Local {
-		return conflict, nil
-	}
-	if s.d.LocalSwarm == nil || in.Info.EngineID == "" {
-		return unknown(), nil
-	}
-	local, err := s.d.LocalSwarm(ctx)
+	place, _, err := s.SelfLocation(ctx, in.Info)
 	if err != nil {
-		s.log().Warn("could not read TierPlan's own engine for the ingress preflight", "error", err)
-		return unknown(), nil
+		return nil, err
 	}
-	switch {
-	case !local.Known || local.EngineID == "":
-		return unknown(), nil
-	case local.EngineID == in.Info.EngineID:
-		return conflict, nil
-	}
-	return nil, nil
+	return s.http01Place(place, http01StandaloneConflict, http01StandaloneUnknown), nil
 }
 
 // standaloneChecks are the checks of a standalone host, in the order their findings are listed.

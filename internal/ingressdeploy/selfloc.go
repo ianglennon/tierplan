@@ -79,6 +79,10 @@ type SelfPlace struct {
 	ContainerID string
 	// Attached is true when the container is on the self network.
 	Attached bool
+	// EnvHere is true when the engine says the environment is the one TierPlan runs in, even if TierPlan's own container
+	// could not be read, so Here is unknown. The HTTP-01 checks refuse on it rather than warn: TierPlan's renewal is on this
+	// port 80 whatever its container reads.
+	EnvHere bool
 }
 
 // SelfEnvironmentNamer is the optional second face of Deps.Envs that names the environment TierPlan runs in, so a refusal
@@ -119,9 +123,9 @@ func (s *Service) SelfLocation(ctx context.Context, info EnvInfo) (SelfPlace, []
 	facts, err := s.d.Self(ctx)
 	if err != nil {
 		s.log().Warn("could not read TierPlan's own container for its route", "error", err)
-		return s.selfUnknown(), selfRefusal(selfUnknownMessage), nil
+		return s.selfUnknownHere(), selfRefusal(selfUnknownMessage), nil
 	}
-	place := SelfPlace{Here: SelfHereYes, EnvName: info.Name, Attached: slices.Contains(facts.Networks, selfNetworkName)}
+	place := SelfPlace{Here: SelfHereYes, EnvName: info.Name, Attached: slices.Contains(facts.Networks, selfNetworkName), EnvHere: true}
 	if info.Swarm {
 		if !facts.Swarm {
 			place.Kind = SelfKindSwarmContainer
@@ -134,7 +138,7 @@ func (s *Service) SelfLocation(ctx context.Context, info EnvInfo) (SelfPlace, []
 	}
 	if facts.ContainerID == "" {
 		// A host TierPlan is said to run on, with no container found for it: nothing to put the route on.
-		return s.selfUnknown(), selfRefusal(selfUnknownMessage), nil
+		return s.selfUnknownHere(), selfRefusal(selfUnknownMessage), nil
 	}
 	place.Kind = SelfKindStandalone
 	place.ContainerID = facts.ContainerID
@@ -142,6 +146,9 @@ func (s *Service) SelfLocation(ctx context.Context, info EnvInfo) (SelfPlace, []
 }
 
 func (s *Service) selfUnknown() SelfPlace { return SelfPlace{Here: SelfHereUnknown} }
+
+// selfUnknownHere is an environment the engine says TierPlan runs in, whose own container could not be read.
+func (s *Service) selfUnknownHere() SelfPlace { return SelfPlace{Here: SelfHereUnknown, EnvHere: true} }
 
 func selfRefusal(msg string) []Finding {
 	return []Finding{{Code: CodeSelfRouteNotHere, Message: msg, Severity: SeverityError}}
@@ -171,7 +178,7 @@ func (s *Service) localMembership(ctx context.Context) (envs.SwarmMembership, bo
 
 // swarmHere is whether TierPlan runs on the swarm of the environment: its engine's cluster is the environment's, or, for a
 // worker (which does not learn the cluster) or a manager of an environment whose cluster is not known, its node is one of the
-// environment's. These are the rules checkHTTP01 applies.
+// environment's. They are the only copy of these rules: checkHTTP01 reads them through SelfLocation.
 func (s *Service) swarmHere(ctx context.Context, info EnvInfo) SelfHere {
 	local, ok := s.localMembership(ctx)
 	if !ok {
@@ -213,7 +220,8 @@ func sameSwarm(local envs.SwarmMembership, info EnvInfo) (match, known bool) {
 }
 
 // standaloneHere is whether TierPlan runs on the standalone host: the environment is TierPlan's own local socket, or its
-// engine is the one TierPlan's engine is. These are the rules checkStandaloneHTTP01 applies.
+// engine is the one TierPlan's engine is. They are the only copy of these rules: checkStandaloneHTTP01 reads them through
+// SelfLocation.
 func (s *Service) standaloneHere(ctx context.Context, info EnvInfo) SelfHere {
 	if info.Local {
 		return SelfHereYes

@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -296,43 +298,133 @@ func TestPreflightAddressPool(t *testing.T) {
 	})
 }
 
-// TestPreflightHTTP01Conflict: TierPlan's own certificate on HTTP-01, on the swarm it runs on, is refused (D-09).
+// The facts of TierPlan's own container the HTTP-01 tests give the deployer: a swarm service off and on the self network, and a
+// plain container.
+var (
+	selfService      = ingressdeploy.SelfFacts{ContainerID: "c1", Swarm: true, ServiceName: "tierplan_tierplan", ServiceID: "svc1", StackNamespace: "tierplan", Networks: []string{"tierplan_default"}}
+	selfServiceOnNet = ingressdeploy.SelfFacts{ContainerID: "c1", Swarm: true, ServiceName: "tierplan_tierplan", ServiceID: "svc1", StackNamespace: "tierplan", Networks: []string{"tierplan_default", "tierplan-self"}}
+	selfPlain        = ingressdeploy.SelfFacts{ContainerID: "c2", Networks: []string{"bridge"}}
+)
+
+// ownURLs are an instance's public URL and agent URL, for the carve-out notice's hosts.
+func ownURLs() ingressdeploy.SelfURLs {
+	return ingressdeploy.SelfURLs{PublicURL: "https://TierPlan.example.org", AgentURL: "https://tierplan.internal:7480"}
+}
+
+// selfReads answers TierPlan's own container with facts, or with err when it is set.
+func selfReads(facts ingressdeploy.SelfFacts, err error) func(context.Context) (ingressdeploy.SelfFacts, error) {
+	return func(context.Context) (ingressdeploy.SelfFacts, error) {
+		if err != nil {
+			return ingressdeploy.SelfFacts{}, err
+		}
+		return facts, nil
+	}
+}
+
+// TestPreflightHTTP01Conflict: with TierPlan's own certificate on HTTP-01, the swarm TierPlan runs on as a service on the self
+// network is told the carve-out keeps the renewal working; where the carve-out cannot reach TierPlan the switch is refused with
+// the fix; elsewhere is nothing, and what cannot be told is a warning (D-09, D-12, SELF-04).
 func TestPreflightHTTP01Conflict(t *testing.T) {
+	type want int
+	const (
+		nothing want = iota
+		notice
+		refused
+		plainRefused
+		warned
+	)
+	sameCluster := envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "elsewhere"}
 	cases := []struct {
 		name    string
 		inUse   bool
 		local   envs.SwarmMembership
-		refused bool
+		facts   ingressdeploy.SelfFacts
+		selfErr error
+		want    want
 	}{
-		{"http-01 on the same swarm", true, envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "elsewhere"}, true},
-		{"not http-01 on the same swarm", false, envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, false},
-		{"http-01 elsewhere", true, envs.SwarmMembership{Known: true, Member: true, ClusterID: "another-cluster", NodeID: "other-node"}, false},
-		{"http-01 on a host that is no swarm node", true, envs.SwarmMembership{Known: true}, false},
-		{"http-01 on a worker of this swarm", true, envs.SwarmMembership{Known: true, Member: true, NodeID: "node-1"}, true},
+		{name: "a service on tierplan-self", inUse: true, local: sameCluster, facts: selfServiceOnNet, want: notice},
+		{name: "a service not on tierplan-self", inUse: true, local: sameCluster, facts: selfService, want: refused},
+		{name: "a worker of this swarm, not on tierplan-self", inUse: true, local: envs.SwarmMembership{Known: true, Member: true, NodeID: "node-1"}, facts: selfService, want: refused},
+		{name: "a plain container on this swarm", inUse: true, local: sameCluster, facts: selfPlain, want: plainRefused},
+		{name: "on this swarm, its own container unread", inUse: true, local: sameCluster, selfErr: errors.New("no container"), want: refused},
+		{name: "not on HTTP-01, on this swarm", inUse: false, local: sameCluster, facts: selfService, want: nothing},
+		{name: "elsewhere", inUse: true, local: envs.SwarmMembership{Known: true, Member: true, ClusterID: "another-cluster", NodeID: "other-node"}, facts: selfService, want: nothing},
+		{name: "a host that is no swarm node", inUse: true, local: envs.SwarmMembership{Known: true}, facts: selfPlain, want: nothing},
+		{name: "cannot tell", inUse: true, local: envs.SwarmMembership{}, facts: selfService, want: warned},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
 				d.OwnHTTP01InUse = func(context.Context) (bool, error) { return tc.inUse, nil }
 				d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) { return tc.local, nil }
+				d.Self = selfReads(tc.facts, tc.selfErr)
+				d.SelfURLs = ownURLs
 			}})
 			res, err := r.svc.Preview(testsupport.Context(t), r.envID, ingressdeploy.EnableRequest{})
 			if err != nil {
 				t.Fatalf("Preview: %v", err)
 			}
-			f, ok := findingOf(res.Findings, ingressdeploy.CodeHTTP01Conflict)
-			if ok != tc.refused {
-				t.Fatalf("findings = %+v, refused = %v, want %v", res.Findings, ok, tc.refused)
+			conflict, isRefused := findingOf(res.Findings, ingressdeploy.CodeHTTP01Conflict)
+			carve, isNotice := findingOf(res.Findings, ingressdeploy.CodeHTTP01CarveOut)
+			_, isWarned := findingOf(res.Findings, ingressdeploy.CodeHTTP01Unknown)
+			switch tc.want {
+			case notice:
+				if isRefused || isWarned || !isNotice || carve.Severity != ingressdeploy.SeverityNotice {
+					t.Fatalf("findings = %+v, want only the carve-out notice", res.Findings)
+				}
+				wantMsg := "TierPlan's own certificate uses the HTTP-01 challenge. The ingress sends only /.well-known/acme-challenge/ requests for " +
+					"tierplan.example.org and tierplan.internal to TierPlan, over the tierplan-self network, so the certificate keeps renewing."
+				if carve.Message != wantMsg {
+					t.Errorf("message = %q, want %q", carve.Message, wantMsg)
+				}
+				if want := []string{"tierplan.example.org", "tierplan.internal"}; !slices.Equal(carve.Items, want) {
+					t.Errorf("items = %q, want %q", carve.Items, want)
+				}
+				wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
+			case refused, plainRefused:
+				if !isRefused || isNotice || isWarned || conflict.Severity != ingressdeploy.SeverityError {
+					t.Fatalf("findings = %+v, want ingress_http01_conflict as an error", res.Findings)
+				}
+				wantMsg := "TierPlan runs on this swarm and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes on every node. " +
+					"Add the tierplan-self network to TierPlan's service, or switch TierPlan's own certificate to DNS-01. Then turn ingress on again."
+				if tc.want == plainRefused {
+					wantMsg = "TierPlan runs on this swarm and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes on every node. " +
+						"Switch TierPlan's own certificate to DNS-01. Then turn ingress on again."
+				}
+				if conflict.Message != wantMsg {
+					t.Errorf("message = %q, want %q", conflict.Message, wantMsg)
+				}
+				wantRefusal(t, r, ingressdeploy.EnableRequest{}, ingressdeploy.CodeHTTP01Conflict)
+			case warned:
+				if isRefused || isNotice || !isWarned {
+					t.Fatalf("findings = %+v, want only ingress_http01_unknown", res.Findings)
+				}
+			default:
+				if isRefused || isNotice || isWarned {
+					t.Fatalf("findings = %+v, want no HTTP-01 finding", res.Findings)
+				}
 			}
-			if !tc.refused {
-				return
-			}
-			if f.Severity != ingressdeploy.SeverityError || !strings.Contains(f.Message, "DNS-01") || !strings.Contains(f.Message, "later version") {
-				t.Errorf("finding = %+v, want an error that says to switch to DNS-01 and that a later version lifts it", f)
-			}
-			wantRefusal(t, r, ingressdeploy.EnableRequest{}, ingressdeploy.CodeHTTP01Conflict)
 		})
 	}
+
+	t.Run("one host reads as one name", func(t *testing.T) {
+		r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
+			d.OwnHTTP01InUse = func(context.Context) (bool, error) { return true, nil }
+			d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) { return sameCluster, nil }
+			d.Self = selfReads(selfServiceOnNet, nil)
+			d.SelfURLs = func() ingressdeploy.SelfURLs {
+				return ingressdeploy.SelfURLs{PublicURL: "https://tierplan.example.org", AgentURL: "https://tierplan.example.org:7480"}
+			}
+		}})
+		res, err := r.svc.Preview(testsupport.Context(t), r.envID, ingressdeploy.EnableRequest{})
+		if err != nil {
+			t.Fatalf("Preview: %v", err)
+		}
+		f, ok := findingOf(res.Findings, ingressdeploy.CodeHTTP01CarveOut)
+		if !ok || !strings.Contains(f.Message, "requests for tierplan.example.org to TierPlan") || !slices.Equal(f.Items, []string{"tierplan.example.org"}) {
+			t.Errorf("finding = %+v, want the one host named once", f)
+		}
+	})
 
 	t.Run("unreadable is a warning", func(t *testing.T) {
 		r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
@@ -340,6 +432,7 @@ func TestPreflightHTTP01Conflict(t *testing.T) {
 			d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) {
 				return envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, nil
 			}
+			d.Self = selfReads(selfService, nil)
 		}})
 		res, err := r.svc.Preview(testsupport.Context(t), r.envID, ingressdeploy.EnableRequest{})
 		if err != nil {
@@ -350,6 +443,33 @@ func TestPreflightHTTP01Conflict(t *testing.T) {
 		}
 		wantAllDone(t, r.enable(ingressdeploy.EnableRequest{}))
 	})
+}
+
+// TestNoLaterVersionSentence: the Phase 24 and 25 refusal promised a later version would lift the limit; D-12 lifts it where
+// the carve-out works and says what to do where it does not, so the promise is gone from every source file of the package.
+func TestNoLaterVersionSentence(t *testing.T) {
+	old := "A later version " + "lifts this limit."
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	read := 0
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		read++
+		if strings.Contains(string(b), old) {
+			t.Errorf("%s still says %q", f, old)
+		}
+	}
+	if read == 0 {
+		t.Fatal("no source file read")
+	}
 }
 
 // TestPreflightHTTP01SaysWhenItCannotTell: where TierPlan's own certificate uses HTTP-01 and it cannot be told whether the
@@ -377,6 +497,7 @@ func TestPreflightHTTP01SaysWhenItCannotTell(t *testing.T) {
 			r := newRig(t, rigOptions{deps: func(d *ingressdeploy.Deps) {
 				d.OwnHTTP01InUse = func(context.Context) (bool, error) { return tc.inUse, nil }
 				d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) { return tc.local, tc.localErr }
+				d.Self = selfReads(selfService, nil)
 			}})
 			if tc.noCluster {
 				r.envs.set(func(i *ingressdeploy.EnvInfo) { i.ClusterID = "" })
@@ -587,6 +708,7 @@ func TestPreflightOrderIsStable(t *testing.T) {
 			d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) {
 				return envs.SwarmMembership{Known: true, Member: true, ClusterID: testClusterID, NodeID: "node-1"}, nil
 			}
+			d.Self = selfReads(selfService, nil)
 		},
 		config: func(c *dockertest.FakeConfig) {
 			c.ServiceRows = []dockertest.FakeService{
