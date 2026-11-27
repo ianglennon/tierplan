@@ -30,6 +30,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingresshub"
 	"github.com/ianglennon/tierplan/internal/ingresshub/ingresstest"
 	"github.com/ianglennon/tierplan/internal/ingressrecon"
+	"github.com/ianglennon/tierplan/internal/ingressrender"
 	"github.com/ianglennon/tierplan/internal/ingressrender/traefiktest"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
@@ -125,7 +126,13 @@ type swarmEnv struct {
 
 	// depOpts add to the deployer's dependencies each time startDeploy builds it (TierPlan's own container, Phase 28).
 	depOpts []func(*swarmEnv, *ingressdeploy.Deps)
+
+	// selfIn is what the reconciler renders as TierPlan's own route (ingressrecon Deps.Self, Phase 28); unset renders none.
+	selfIn atomic.Pointer[selfInputFunc]
 }
+
+// selfInputFunc is the reconciler's Deps.Self.
+type selfInputFunc func(ctx context.Context, envID string) (ingressrender.SelfInput, int64, bool)
 
 // startSwarmEnv starts the swarm and everything around it. It does not enable ingress. Each opt adds to the deployer's
 // dependencies before it is built, after the agents are connected.
@@ -190,7 +197,13 @@ func startSwarmEnv(t *testing.T, opts ...func(*swarmEnv, *ingressdeploy.Deps)) *
 	e.istore = ingressstore.New(ingressstore.Deps{St: e.st, Vault: e.vlt, Notifier: e.notifier})
 	istoreRef.Store(e.istore)
 	e.certs = ingresscert.NewStore(ingresscert.StoreDeps{St: e.st, Vault: e.vlt, Notifier: e.notifier, Audit: e.aud})
-	e.recon = ingressrecon.New(ingressrecon.Deps{Model: e.istore, Certs: e.certs, Notifier: e.notifier, Log: e.log})
+	e.recon = ingressrecon.New(ingressrecon.Deps{Model: e.istore, Certs: e.certs, Notifier: e.notifier, Log: e.log,
+		Self: func(ctx context.Context, envID string) (ingressrender.SelfInput, int64, bool) {
+			if f := e.selfIn.Load(); f != nil {
+				return (*f)(ctx, envID)
+			}
+			return ingressrender.SelfInput{}, 0, false
+		}})
 	e.runReconciler()
 	e.srv.Nodes.Set(e.envID, e.swarmNodeID(e.mgr), e.swarmNodeID(e.wrk))
 

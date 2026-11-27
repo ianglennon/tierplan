@@ -167,8 +167,10 @@ func newTLSMux(cfg stubConfig) http.Handler {
 	return mux
 }
 
-// clientIP answers with the address the middleware derived and the forwarding header it was given.
+// clientIP answers with the address the middleware derived and the forwarding header it was given. It logs the request's
+// TCP peer, so a test can tell which address the request came from (the proxy's, on the self network).
 func clientIP(w http.ResponseWriter, r *http.Request) {
+	log.Printf("client-ip peer=%s client=%s", r.RemoteAddr, httpx.ClientIP(r.Context()))
 	w.Header().Set("Content-Type", "text/plain")
 	_, _ = fmt.Fprintf(w, "client=%s\nxff=%s\n", httpx.ClientIP(r.Context()), strings.Join(r.Header.Values("X-Forwarded-For"), ", ")) //nolint:gosec // G705: text/plain from a test stub, never rendered as HTML
 }
