@@ -241,6 +241,7 @@ func TestFrozenIngressNamesDoNotChange(t *testing.T) {
 		{"RefuseNodeAlreadyEnrolled", RefuseNodeAlreadyEnrolled, "node_already_enrolled"},
 		{"RefuseRateLimited", RefuseRateLimited, "rate_limited"},
 		{"RefuseInsecureTransport", RefuseInsecureTransport, "insecure_transport"},
+		{"RefuseSelfNetworkPeer", RefuseSelfNetworkPeer, "self_network_peer"},
 		{"RefuseInternal", RefuseInternal, "internal_error"},
 		{"CloseProtocolError", CloseProtocolError, "protocol_error"},
 		{"CloseRevoked", CloseRevoked, "revoked"},

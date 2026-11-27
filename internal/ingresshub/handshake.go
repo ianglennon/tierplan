@@ -23,6 +23,9 @@ import (
 // nonceLen is the length of both handshake nonces.
 const nonceLen = 32
 
+// detailSelfNetworkPeer is what a node that reached TierPlan through its own ingress route is told.
+const detailSelfNetworkPeer = "The ingress proxy connects to TierPlan directly, never through its own route."
+
 // peerInfo is what the handler knows about the connection that the signed handshake must agree with.
 type peerInfo struct {
 	ip string
@@ -76,6 +79,16 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 	var a ingresswire.Auth
 	if err := json.Unmarshal(data, &a); err != nil || a.T != ingresswire.TypeAuth {
 		h.turnAway(ctx, c, ip, "", ingresswire.RefuseAuthRejected, "the handshake message is malformed", "malformed", 0)
+		return accepted{}, false
+	}
+
+	// A peer on TierPlan's own self network is a connect relayed through TierPlan's own ingress route. It is
+	// refused before anything is verified: the live trusted set would otherwise let it skip the channel
+	// binding, and the proxy must reach TierPlan directly (SELF-05, D-10 point 3, A-05). A peer trusted only
+	// through TIERPLAN_TRUSTED_PROXIES is not on the self network and goes on as before.
+	if httpx.PeerOnSelfNetwork(r.Context()) {
+		h.log.Info("ingress handshake refused", "ip", ip, "mode", knownMode(a.Mode), "code", ingresswire.RefuseSelfNetworkPeer, "reason", ingresswire.RefuseSelfNetworkPeer)
+		h.turnAway(ctx, c, ip, knownMode(a.Mode), ingresswire.RefuseSelfNetworkPeer, detailSelfNetworkPeer, ingresswire.RefuseSelfNetworkPeer, 0)
 		return accepted{}, false
 	}
 
