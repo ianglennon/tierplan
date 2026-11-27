@@ -363,10 +363,9 @@ func (u *holderURLs) read() ingressdeploy.SelfURLs {
 	return ingressdeploy.SelfURLs{PublicURL: u.public, AgentURL: u.agent, ListenPort: 7480}
 }
 
-// TestHolderOriginsKeepTheDirectAddress (D-07, D-10): once the public URL is the route host, the agent URL's origin, the
-// direct address Settings require then, stays in the set while the route is on, so a browser on it can still switch the
-// route off. Off the route host the agent URL adds nothing, and with no claim nothing is added at all. The set is read from
-// the stored URLs on every call, normalised.
+// TestHolderOriginsKeepTheDirectAddress (D-07, D-10, CR-01): the agent URL's origin, TierPlan's own direct address, is in
+// the set whenever an agent URL is set, with the route on or off and wherever the public URL points. The route host's origin
+// is there only while the claim exists. The set is read from the stored URLs on every call, normalised.
 func TestHolderOriginsKeepTheDirectAddress(t *testing.T) {
 	const agent = "https://tierplan.internal:7480"
 	h, src, _ := newHolderRig(t, true, nil)
@@ -376,8 +375,8 @@ func TestHolderOriginsKeepTheDirectAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	urls.set("https://tierplan.example.org:7480", agent)
-	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin}) {
-		t.Fatalf("public URL off the route host: origins = %q, want [%q]", got, holderOrigin)
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin, agent}) {
+		t.Fatalf("public URL off the route host: origins = %q, want [%q %q]", got, holderOrigin, agent)
 	}
 	urls.set("https://"+holderHost, agent)
 	if got := h.ExtraOrigins(); !slices.Equal(got, []string{holderOrigin, agent}) {
@@ -396,13 +395,35 @@ func TestHolderOriginsKeepTheDirectAddress(t *testing.T) {
 	if err := h.Reload(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if got := h.ExtraOrigins(); !slices.Equal(got, []string{agent}) {
+		t.Fatalf("route off: origins = %q, want [%q]: the direct address outlives the claim", got, agent)
+	}
+	urls.set("https://"+holderHost, "")
 	if got := h.ExtraOrigins(); len(got) != 0 {
-		t.Fatalf("route off: origins = %q, want none", got)
+		t.Fatalf("route off, no agent URL: origins = %q, want none", got)
 	}
 }
 
-// TestHolderDirectAddressCanStillChangeThings: with the public URL on the route host, a change from the agent URL's origin
-// is accepted while the route is on; with the public URL elsewhere the same origin is refused, as before.
+// holderPost posts to a router built over the holder and the stored public URL, from origin, and answers the status.
+func holderPost(h *selfRoute, urls *holderURLs, origin string) int {
+	r := httpx.New(httpx.Options{
+		PublicOrigin: func() string { return httpx.OriginOf(urls.read().PublicURL) },
+		ExtraOrigins: h.ExtraOrigins,
+		Logger:       slog.New(slog.DiscardHandler),
+	})
+	httpx.Register(r, huma.Operation{OperationID: "postHolder", Method: http.MethodPost, Path: "/api/holder"}, rbac.Public,
+		func(context.Context, *struct{}) (*holderEchoOut, error) { return &holderEchoOut{}, nil })
+	req := httptest.NewRequest(http.MethodPost, "/api/holder", nil)
+	req.RemoteAddr = "192.0.2.10:41000"
+	req.Host = "tierplan.internal:7480"
+	req.Header.Set("Origin", origin)
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// TestHolderDirectAddressCanStillChangeThings: a change from the agent URL's origin is accepted while the route is on,
+// whichever host the public URL names.
 func TestHolderDirectAddressCanStillChangeThings(t *testing.T) {
 	const agent = "https://tierplan.internal:7480"
 	h, _, _ := newHolderRig(t, true, nil)
@@ -411,29 +432,56 @@ func TestHolderDirectAddressCanStillChangeThings(t *testing.T) {
 	if err := h.Reload(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	post := func(public string) int {
+	for _, public := range []string{"https://" + holderHost, "https://tierplan.example.org:7480"} {
 		urls.set(public, agent)
-		r := httpx.New(httpx.Options{
-			PublicOrigin: func() string { return httpx.OriginOf(urls.read().PublicURL) },
-			ExtraOrigins: h.ExtraOrigins,
-			Logger:       slog.New(slog.DiscardHandler),
-		})
-		httpx.Register(r, huma.Operation{OperationID: "postHolder", Method: http.MethodPost, Path: "/api/holder"}, rbac.Public,
-			func(context.Context, *struct{}) (*holderEchoOut, error) { return &holderEchoOut{}, nil })
-		req := httptest.NewRequest(http.MethodPost, "/api/holder", nil)
-		req.RemoteAddr = "192.0.2.10:41000"
-		req.Host = "tierplan.internal:7480"
-		req.Header.Set("Origin", agent)
-		rec := httptest.NewRecorder()
-		r.Handler().ServeHTTP(rec, req)
-		return rec.Code
+		if code := holderPost(h, urls, agent); code != http.StatusOK {
+			t.Errorf("public URL %s: a change from %s answered %d, want 200", public, agent, code)
+		}
 	}
-	if code := post("https://" + holderHost); code != http.StatusOK {
-		t.Errorf("public URL on the route host: a change from %s answered %d, want 200", agent, code)
+	urls.set("https://tierplan.example.org:7480", agent)
+	if code := holderPost(h, urls, "https://elsewhere.example.org"); code != http.StatusForbidden {
+		t.Errorf("a change from an origin in no setting answered %d, want 403", code)
 	}
-	if code := post("https://tierplan.example.org:7480"); code != http.StatusForbidden {
-		t.Errorf("public URL off the route host: a change from %s answered %d, want 403", agent, code)
-	}
+}
+
+// TestHolderDirectAddressSurvivesTheRelease (CR-01): with the public URL on the route host, no way the claim goes, a switch-
+// off, a deleted environment or a claim that could never be read, refuses a change from the direct address. Sign-in is one
+// such change, so a refusal there would lock every browser out.
+func TestHolderDirectAddressSurvivesTheRelease(t *testing.T) {
+	const agent = "https://tierplan.internal:7480"
+	t.Run("released", func(t *testing.T) {
+		h, src, _ := newHolderRig(t, true, nil)
+		urls := &holderURLs{}
+		urls.set("https://"+holderHost, agent)
+		h.wire(selfInputs{urls: urls.read})
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		src.set(ingressstore.SystemClaim{}, false)
+		if err := h.Reload(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if code := holderPost(h, urls, agent); code != http.StatusOK {
+			t.Fatalf("after the release: a change from %s answered %d, want 200", agent, code)
+		}
+		if code := holderPost(h, urls, holderOrigin); code != http.StatusOK {
+			// The public URL itself is still the route host: the public origin is always accepted.
+			t.Fatalf("after the release: a change from the public origin answered %d, want 200", code)
+		}
+	})
+	t.Run("claim never read", func(t *testing.T) {
+		h, src, _ := newHolderRig(t, true, nil)
+		src.fail(errors.New("database is locked"))
+		urls := &holderURLs{}
+		urls.set("https://"+holderHost, agent)
+		h.wire(selfInputs{urls: urls.read})
+		if err := h.Reload(context.Background()); err == nil {
+			t.Fatal("Reload with a failing read: want the error")
+		}
+		if code := holderPost(h, urls, agent); code != http.StatusOK {
+			t.Fatalf("claim unreadable: a change from %s answered %d, want 200", agent, code)
+		}
+	})
 }
 
 // logCapture keeps every record a slog handler is given.

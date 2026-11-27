@@ -263,8 +263,8 @@ owner is the system), `GET .../ingress/status` (`selfRoute`) and a read-only lin
 
 The public URL is not changed. While the route is on, TierPlan also accepts changes from `https://<route host>`, an origin it
 takes from the stored route and never from a header (see [reverse-proxy.md](reverse-proxy.md#the-public-url-decides-everything)).
-If you later set the public URL to the route host, the agent URL's origin is accepted too, so the direct address keeps
-working (see [What keeps working on 7480](#what-keeps-working-on-7480)).
+The agent URL's origin is accepted too whenever an agent URL is set, with the route on or off, so if you later set the
+public URL to the route host the direct address keeps working (see [What keeps working on 7480](#what-keeps-working-on-7480)).
 
 ### The tierplan-self network
 
@@ -354,15 +354,15 @@ is a plain call on the API that never goes through the route, and nothing refuse
 the route itself, which may be cut off as the route goes. Switching ingress off for the environment releases the route first,
 as the `self_route` step of the job, before the proxies go.
 
-TierPlan accepts changes from the public URL's origin and, while the route is on, the route's. Settings allow the public URL
-to be the route host only while an agent URL that the ingress does not serve is set, and after that save the agent URL's
-origin stays in the set while the route is on, so a browser on it can still change anything, switching the route off
-included. All of these come from TierPlan's stored settings and the stored route, never from a header.
+TierPlan accepts changes from the public URL's origin, from the agent URL's origin whenever an agent URL is set, and, while
+the route is on, from the route's. Settings allow the public URL to be the route host only while an agent URL that the
+ingress does not serve is set, and the agent URL's origin stays in the set whether the route is on or off, so a browser on
+it can always change anything and sign in, switching the route off included, and after the route is gone it can move the
+public URL back. All of these come from TierPlan's stored settings and the stored route, never from a header.
 
 The card's **Direct address** is that address: the public URL's origin while the public URL is not the route host, and the
-agent URL's origin once it is. Changes from it are always accepted. With neither URL set it is the address the page is open
-on. If the agent URL's origin differs from the public URL's while the public URL is direct, the agent URL reaches TierPlan
-but changes from it are refused; use the public URL or the card's address.
+agent URL's origin once it is. Changes from it are always accepted, and so are changes from the agent URL's origin. With
+neither URL set it is the address the page is open on.
 
 ### Agents and proxies
 

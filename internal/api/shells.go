@@ -92,7 +92,7 @@ type ShellsDeps struct {
 	Instance ShellInstance
 	// ExtraOrigins returns the further origins a shell WebSocket may be opened from, read on
 	// every upgrade (D-07): the route host's origin while TierPlan's own route is on, plus the
-	// agent URL's while the public URL is the route host, the same set the mutation guard reads
+	// agent URL's whenever one is set, the same set the mutation guard reads
 	// (httpx.Options.ExtraOrigins). The server derives it from the stored claim and the stored
 	// URLs, never from a request. Nil or empty is none.
 	ExtraOrigins func() []string

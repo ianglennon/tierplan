@@ -276,8 +276,8 @@ func urlOrigin(raw string) string {
 
 // directAddress is the address that keeps reaching TierPlan whatever the route does (UI-SPEC A-03, A6), and one TierPlan
 // accepts changes from (D-07): the public URL's origin when its host is not the route's; else the agent URL's, which the
-// origin set holds while the public URL is the route host and which Settings require then (D-10), and which with no public
-// URL is reached as the page's own origin; else "" (the page's own origin).
+// origin set holds whenever an agent URL is set and which Settings require while the public URL is the route host (D-10),
+// and which with no public URL is reached as the page's own origin; else "" (the page's own origin).
 func directAddress(urls SelfURLs, host string) string {
 	if h := urlHost(urls.PublicURL); h != "" && h != ingress.NormalizeHost(host) {
 		return urlOrigin(urls.PublicURL)

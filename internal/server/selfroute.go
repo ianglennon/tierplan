@@ -38,7 +38,7 @@ type selfSnapshot struct {
 	EnvID   string
 	Host    string
 	// Origins are the extra origins the claim gives a mutation: the route host's, while the claim exists (D-07). ExtraOrigins
-	// adds the direct address to them when the public URL is the route host.
+	// adds the agent URL's, the direct address, whether or not the claim exists.
 	Origins []string
 	// Obs is the latest observation of TierPlan's own environment, HasObs whether there is one.
 	Obs    ingressdeploy.SelfObservation
@@ -193,26 +193,19 @@ func (h *selfRoute) TrustedPrefixes() []netip.Prefix {
 	return slices.Clone(h.snap.Load().Prefixes)
 }
 
-// ExtraOrigins is the route host's origin while the system claim exists, else none (httpx.Options.ExtraOrigins and the
-// shell WebSocket's origin patterns). While the claim exists and the public URL's host is the route host, the agent URL's
-// origin is added too: the direct address Settings require then (D-10), which stays in the set so that a browser on it can
-// still make changes, the route's switch-off included (D-07). It comes from the stored claim and the stored URLs only, read
-// on every call, never from a request.
+// ExtraOrigins is the set a mutation and the shell WebSocket may also come from besides the public URL's origin
+// (httpx.Options.ExtraOrigins, D-07): the route host's origin while the system claim exists, and the agent URL's origin
+// whenever an agent URL is set. The agent URL is TierPlan's own direct address, which Settings never let be an ingress host
+// (D-10), so it stays accepted with the route on or off and whatever the public URL names: no release, no claim that cannot
+// be read and no deleted environment can leave a browser without an address it may change things from, sign-in included
+// (D-11). It comes from the stored claim and the stored URLs only, read on every call, never from a request.
 func (h *selfRoute) ExtraOrigins() []string {
-	s := h.snap.Load()
-	out := slices.Clone(s.Origins)
-	if len(out) == 0 || s.Host == "" {
-		return out
-	}
+	out := slices.Clone(h.snap.Load().Origins)
 	in := h.in.Load()
 	if in == nil || in.urls == nil {
 		return out
 	}
-	urls := in.urls()
-	if ingress.NormalizeHost(hostOf(urls.PublicURL)) != s.Host {
-		return out
-	}
-	if o := httpx.OriginOf(urls.AgentURL); o != "" && !slices.Contains(out, o) {
+	if o := httpx.OriginOf(in.urls().AgentURL); o != "" && !slices.Contains(out, o) {
 		out = append(out, o)
 	}
 	return out
