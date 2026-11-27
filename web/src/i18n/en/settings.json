@@ -20,14 +20,16 @@
       "submit": "Save settings",
       "pending": "Saving…",
       "publicUrl": {
-        "helper": "The address people use to reach TierPlan. It must start with https://. If TierPlan runs under a path, include it, for example https://example.com/tierplan. It controls cookies and request origin checks."
+        "helper": "The address people use to reach TierPlan. It must start with https://. If TierPlan runs under a path, include it, for example https://example.com/tierplan. It controls cookies and request origin checks.",
+        "ingressHost": "This is the hostname of TierPlan's own route. With no agent URL set, agents and proxies dial the public URL, and they must never go through ingress. Set an agent URL that isn't an ingress hostname first, then save."
       },
       "agentUrl": {
         "label": "Agent URL",
         "helper": "Leave empty to use the public URL. Set it if your hosts reach TierPlan at a different address, such as an internal hostname. It must start with https://.",
         "httpsOnly": "Agents connect over HTTPS only. Use an address that starts with https://, such as https://tierplan.internal:7480.",
         "placeholder": "https://tierplan.internal:7480",
-        "locked": "Set by the TIERPLAN_AGENT_URL environment variable."
+        "locked": "Set by the TIERPLAN_AGENT_URL environment variable.",
+        "ingressHost": "Ingress serves this hostname. Agents and proxies connect straight to TierPlan and never through ingress. Use a hostname that reaches TierPlan directly, such as https://tierplan.internal:7480."
       },
       "confirm": {
         "title": "Change the public URL?",

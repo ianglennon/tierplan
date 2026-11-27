@@ -68,6 +68,20 @@ const KEY = {
   invalidUrl: "setup.errors.publicUrl",
 } as const;
 
+// The stable codes of a URL that would send agents and proxies through ingress (D-10, UI-SPEC S3).
+// Each names its own field, whatever location the server reports: clearing the agent URL under a
+// public URL that is the route's host is refused on the public URL.
+const INGRESS_HOST: Readonly<Record<string, { field: FieldName; messageKey: string }>> = {
+  public_url_is_ingress_host: {
+    field: "publicUrl",
+    messageKey: "settings.general.publicUrl.ingressHost",
+  },
+  agent_url_is_ingress_host: {
+    field: "agentUrl",
+    messageKey: "settings.general.agentUrl.ingressHost",
+  },
+};
+
 // Where the fields sit on screen, which is where focus goes first on an error.
 const FIELD_ORDER: FieldName[] = ["instanceName", "publicUrl", "agentUrl"];
 
@@ -230,14 +244,26 @@ function SettingsForm({ settings }: { settings: Settings }) {
       setFormError(KEY.server);
       return;
     }
-    const routed: { field: FieldName; messageKey: string }[] = routeServerFieldErrors(problem)
-      .filter((r) => r.field === "instanceName" || r.field === "publicUrl")
-      .map((r) => ({ field: r.field as FieldName, messageKey: r.messageKey }));
+    // The ingress-host refusals have their own sentences; the rest go through the shared router.
+    const isIngressHost = (message: string) => Object.hasOwn(INGRESS_HOST, message);
+    const routed: { field: FieldName; messageKey: string }[] = problem.fields.flatMap((f) => {
+      const known = isIngressHost(f.message) ? INGRESS_HOST[f.message] : undefined;
+      return known ? [known] : [];
+    });
+    const rest: Problem = {
+      ...problem,
+      fields: problem.fields.filter((f) => !isIngressHost(f.message)),
+    };
+    if (rest.fields.length > 0 || routed.length === 0) {
+      routed.push(
+        ...routeServerFieldErrors(rest)
+          .filter((r) => r.field === "instanceName" || r.field === "publicUrl")
+          .map((r) => ({ field: r.field as FieldName, messageKey: r.messageKey })),
+      );
+    }
     // The setup wizard has no agent URL, so its router does not know this field.
     if (
-      problem.fields.some(
-        (f) => f.location === "body.agentUrl" || f.message === "invalid_agent_url",
-      )
+      rest.fields.some((f) => f.location === "body.agentUrl" || f.message === "invalid_agent_url")
     ) {
       routed.push({ field: "agentUrl", messageKey: KEY.invalidUrl });
     }
@@ -245,8 +271,14 @@ function SettingsForm({ settings }: { settings: Settings }) {
       setFormError(KEY.server);
       return;
     }
+    // Stable sort: on screen order, and within a field the ingress sentence that came first wins.
     routed.sort((x, y) => FIELD_ORDER.indexOf(x.field) - FIELD_ORDER.indexOf(y.field));
-    for (const r of routed) form.setError(r.field, { type: "server", message: r.messageKey });
+    const shown = new Set<FieldName>();
+    for (const r of routed) {
+      if (shown.has(r.field)) continue;
+      shown.add(r.field);
+      form.setError(r.field, { type: "server", message: r.messageKey });
+    }
     // Focus follows the first field the server pointed at.
     form.setFocus(routed[0]?.field ?? "instanceName");
   }

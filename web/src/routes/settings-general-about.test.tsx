@@ -792,11 +792,12 @@ describe("General tab: ingress hostnames", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Change public URL" }));
   }
 
-  // Neither a toast nor a form-level alert says anything about a field refusal.
+  // Neither a toast nor the form-level Alert says anything about a field refusal (the field's own
+  // FieldError is the only role=alert in the form).
   function nothingElseSpeaks() {
     expect(document.querySelector("[data-sonner-toast]")).toBeNull();
-    expect(within(instanceForm()).queryByRole("alert")).toBeNull();
     expect(instanceForm().querySelector("[data-slot=alert]")).toBeNull();
+    expect(screen.queryByText("Something went wrong. Try again.")).toBeNull();
   }
 
   it("routes the public URL refusal to its field", async () => {
