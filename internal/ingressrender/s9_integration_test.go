@@ -156,7 +156,7 @@ func TestS9ShellWebSocketThroughTraefik(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, "wss://"+s9Front+"/ws", &websocket.DialOptions{HTTPClient: s.tr.StreamClient(s.ca.Pool(), s9Front)})
+	conn, _, err := websocket.Dial(ctx, "wss://"+s9Front+"/ws", &websocket.DialOptions{HTTPClient: s.tr.StreamClient(s.ca.Pool(), s9Front)}) //nolint:bodyclose // a WebSocket upgrade response has no body to close
 	if err != nil {
 		t.Fatalf("dial wss://%s/ws: %v", s9Front, err)
 	}

@@ -93,7 +93,7 @@ func newTLSMux(cfg stubConfig) http.Handler {
 	mux := http.NewServeMux()
 	proto := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = io.WriteString(w, r.Proto)
+		_, _ = io.WriteString(w, r.Proto) //nolint:gosec // G705: text/plain from a test stub, never rendered as HTML
 	}
 	mux.HandleFunc("/proto", proto)
 	mux.HandleFunc("/{$}", proto)
@@ -112,7 +112,7 @@ func newTLSMux(cfg stubConfig) http.Handler {
 // clientIP answers with the address the middleware derived and the forwarding header it was given.
 func clientIP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
-	_, _ = fmt.Fprintf(w, "client=%s\nxff=%s\n", httpx.ClientIP(r.Context()), strings.Join(r.Header.Values("X-Forwarded-For"), ", "))
+	_, _ = fmt.Fprintf(w, "client=%s\nxff=%s\n", httpx.ClientIP(r.Context()), strings.Join(r.Header.Values("X-Forwarded-For"), ", ")) //nolint:gosec // G705: text/plain from a test stub, never rendered as HTML
 }
 
 // events is the event feed: headers at once, then a comment line every sseEvery, each flushed.
@@ -186,7 +186,7 @@ func (c stubConfig) ws(w http.ResponseWriter, r *http.Request) {
 func plainChallenge(w http.ResponseWriter, r *http.Request) {
 	if tok, ok := strings.CutPrefix(r.URL.Path, acmeChallengePrefix); ok && tok != "" && !strings.Contains(tok, "/") {
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = io.WriteString(w, tok+".stub")
+		_, _ = io.WriteString(w, tok+".stub") //nolint:gosec // G705: text/plain from a test stub, never rendered as HTML
 		return
 	}
 	if hj, ok := w.(http.Hijacker); ok {
@@ -386,7 +386,7 @@ func holdEvents(ctx context.Context, hc *http.Client, url string) error {
 }
 
 func holdWS(ctx context.Context, hc *http.Client, url string) error {
-	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: hc})
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPClient: hc}) //nolint:bodyclose // a WebSocket upgrade response has no body to close
 	if err != nil {
 		return err
 	}
