@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/audit/audittest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
@@ -202,6 +203,22 @@ func TestSelfRoutePreviewAndEnable(t *testing.T) {
 	if len(job.Items) == 0 || job.Items[0].ID != ingressdeploy.ItemSelfCheck {
 		t.Errorf("job items = %+v, want self_check first", job.Items)
 	}
+	wantSelfRouteRequester(t, f, audit.ActionIngressSelfRouteEnabled)
+}
+
+// wantSelfRouteRequester (28-UAT 7): the job's audit rows of the action carry the client's address and user agent, though
+// the job wrote them after the request had ended.
+func wantSelfRouteRequester(t *testing.T, f *selfRouteFix, action string) {
+	t.Helper()
+	rows := audittest.Rows(t, f.st, action)
+	if len(rows) == 0 {
+		t.Fatalf("no %s row", action)
+	}
+	for _, r := range rows {
+		if r.IP != authIP || r.UserAgent != authUA {
+			t.Errorf("%s row IP %q, user agent %q, want %q and %q", action, r.IP, r.UserAgent, authIP, authUA)
+		}
+	}
 }
 
 // selfRouteOp is one of the four self route operations.
@@ -347,6 +364,7 @@ func TestSelfRouteDisableIsNeverRefusedByAState(t *testing.T) {
 	if _, held, err := f.ingressStore.SystemClaim(testsupport.Context(t)); err != nil || held {
 		t.Fatalf("after the switch-off: claim held %v (%v), want none", held, err)
 	}
+	wantSelfRouteRequester(t, f, audit.ActionIngressSelfRouteDisabled)
 
 	for _, o := range []selfRouteOp{selfRouteOps[2], selfRouteOps[3]} {
 		rec := f.credCall(t, f.admin, o.method, f.selfPath(o.rest), o.body)

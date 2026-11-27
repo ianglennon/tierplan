@@ -51,7 +51,16 @@ type IngressSelfRouteRequest struct {
 // IngressSelfRouteInput is the path and the body of the preview and the switch-on.
 type IngressSelfRouteInput struct {
 	EnvironmentPathInput
-	Body IngressSelfRouteRequest
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      IngressSelfRouteRequest
+}
+
+// IngressSelfRouteOffInput is the path of the switch-off, with the user agent its audit row records.
+type IngressSelfRouteOffInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
 // IngressSelfSnippetBody is the next step that puts TierPlan's swarm service on the self network.
@@ -194,7 +203,9 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 		if err != nil {
 			return nil, err
 		}
-		id, err := d.Service.EnableSelfRoute(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID, request(in.Body))
+		// The job writes its audit rows after this request ends, so the client's address and user agent go with it (28-UAT 7).
+		by := ingressdeploy.Requester{IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent}
+		id, err := d.Service.EnableSelfRoute(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID, request(in.Body), by)
 		if err != nil {
 			return nil, fail(ctx, "switch TierPlan's own route on", err)
 		}
@@ -237,12 +248,13 @@ func RegisterIngressSelfRoute(r *httpx.Router, d IngressDeployDeps) {
 		DefaultStatus: http.StatusAccepted,
 		Tags:          []string{"ingress"},
 		Middlewares:   adminGate,
-	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *EnvironmentPathInput) (*IngressSelfRouteStartOutput, error) {
+	}, rbac.Require(rbac.PermIngressManage), func(ctx context.Context, in *IngressSelfRouteOffInput) (*IngressSelfRouteStartOutput, error) {
 		p, err := gate(ctx)
 		if err != nil {
 			return nil, err
 		}
-		id, err := d.Service.DisableSelfRoute(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID)
+		by := ingressdeploy.Requester{IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent}
+		id, err := d.Service.DisableSelfRoute(ctx, p.AuditActor(), stackJobOwner(p), in.EnvID, by)
 		if err != nil {
 			return nil, fail(ctx, "switch TierPlan's own route off", err)
 		}

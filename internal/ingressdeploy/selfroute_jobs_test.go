@@ -53,10 +53,23 @@ func receive(t *testing.T, c <-chan struct{}, what string) {
 	}
 }
 
+// selfRequester is the client every self route switch in these tests comes from: its address and user agent go on the
+// job's audit rows, which are written after the request has ended (28-UAT 7).
+var selfRequester = ingressdeploy.Requester{IP: "192.0.2.44", UserAgent: "uat-browser/1.0"}
+
+// wantRequester fails the test unless the audit row carries selfRequester's address and user agent.
+func wantRequester(t *testing.T, row audit.Row) {
+	t.Helper()
+	if row.IP != selfRequester.IP || row.UserAgent != selfRequester.UserAgent {
+		t.Errorf("%s row IP %q, user agent %q, want %q and %q: the requesting client's", row.Action, row.IP, row.UserAgent,
+			selfRequester.IP, selfRequester.UserAgent)
+	}
+}
+
 // enableSelf starts a self route switch-on and returns its job's ID.
 func (r *rig) enableSelf(host string) string {
 	r.t.Helper()
-	id, err := r.svc.EnableSelfRoute(testsupport.Context(r.t), testActor, testOwner, r.envID, ingressdeploy.SelfRouteRequest{Hostname: host})
+	id, err := r.svc.EnableSelfRoute(testsupport.Context(r.t), testActor, testOwner, r.envID, ingressdeploy.SelfRouteRequest{Hostname: host}, selfRequester)
 	if err != nil {
 		r.t.Fatalf("EnableSelfRoute: %v", err)
 	}
@@ -132,6 +145,7 @@ func TestEnableSelfRouteStoresTheClaimAndAudits(t *testing.T) {
 	if rows[0].ActorName != testActor.Name || rows[0].EnvID != r.envID || rows[0].TargetID != r.envID {
 		t.Errorf("row = %+v, want by %s on %s", rows[0], testActor.Name, r.envID)
 	}
+	wantRequester(t, rows[0])
 	audittest.AssertNoSecrets(t, rows, switchCanary)
 }
 
@@ -175,6 +189,7 @@ func TestAuditProofSelfRouteEnabledFailure(t *testing.T) {
 	if len(rows) != 1 {
 		t.Errorf("%d ingress.self_route_enabled rows, want only the failure: %+v", len(rows), rows)
 	}
+	wantRequester(t, rows[0])
 	audittest.AssertNoSecrets(t, rows, switchCanary)
 }
 
@@ -252,7 +267,7 @@ func (r *rig) claimSelfRoute(dom ingress.Domain) {
 // disableSelf starts a self route switch-off and returns its job's ID.
 func (r *rig) disableSelf() string {
 	r.t.Helper()
-	id, err := r.svc.DisableSelfRoute(testsupport.Context(r.t), testActor, testOwner, r.envID)
+	id, err := r.svc.DisableSelfRoute(testsupport.Context(r.t), testActor, testOwner, r.envID, selfRequester)
 	if err != nil {
 		r.t.Fatalf("DisableSelfRoute: %v", err)
 	}
@@ -308,7 +323,7 @@ func TestDisableSelfRouteAlwaysReleases(t *testing.T) {
 	}
 
 	before := len(r.hub.List(func(jobs.Job) bool { return true }))
-	if _, err := r.svc.DisableSelfRoute(ctx, testActor, testOwner, r.envID); !errors.Is(err, ingressdeploy.ErrSelfRouteNotEnabled) {
+	if _, err := r.svc.DisableSelfRoute(ctx, testActor, testOwner, r.envID, selfRequester); !errors.Is(err, ingressdeploy.ErrSelfRouteNotEnabled) {
 		t.Errorf("a second switch-off = %v, want ErrSelfRouteNotEnabled", err)
 	}
 	if after := len(r.hub.List(func(jobs.Job) bool { return true })); after != before {
@@ -351,6 +366,7 @@ func TestAuditProofSelfRouteDisabled(t *testing.T) {
 	if got := rows[0].Details; len(got) != 2 || got["host"] != srHost || got["environment"] != "prod" {
 		t.Errorf("details = %v, want exactly host %s and environment prod", got, srHost)
 	}
+	wantRequester(t, rows[0])
 	audittest.AssertNoSecrets(t, rows, switchCanary)
 }
 
@@ -388,6 +404,7 @@ func TestAuditProofSelfRouteDisabledFailure(t *testing.T) {
 	if len(rows) != 1 {
 		t.Errorf("%d ingress.self_route_disabled rows, want only the failure: %+v", len(rows), rows)
 	}
+	wantRequester(t, rows[0])
 	audittest.AssertNoSecrets(t, rows, switchCanary)
 }
 
@@ -459,7 +476,7 @@ func TestTwoSelfRouteEnablesLeaveOne(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("the first switch-on never reached its check")
 		}
-		_, err := r.svc.EnableSelfRoute(ctx, testActor, testOwner, r.envID, ingressdeploy.SelfRouteRequest{Hostname: "tp2.apps.example.org"})
+		_, err := r.svc.EnableSelfRoute(ctx, testActor, testOwner, r.envID, ingressdeploy.SelfRouteRequest{Hostname: "tp2.apps.example.org"}, selfRequester)
 		var locked *ingressdeploy.LockedError
 		if !errors.As(err, &locked) {
 			t.Errorf("a second switch-on while the first runs = %v, want a *LockedError", err)
@@ -495,7 +512,7 @@ func TestTwoSelfRouteEnablesLeaveOne(t *testing.T) {
 		selfWaitNone(r)
 
 		id1 := r.enableSelf(srHost)
-		id2, err := r.svc.EnableSelfRoute(ctx, testActor, testOwner, env2, ingressdeploy.SelfRouteRequest{Hostname: "tp.other.example.org"})
+		id2, err := r.svc.EnableSelfRoute(ctx, testActor, testOwner, env2, ingressdeploy.SelfRouteRequest{Hostname: "tp.other.example.org"}, selfRequester)
 		if err != nil {
 			t.Fatalf("EnableSelfRoute in the second environment: %v", err)
 		}

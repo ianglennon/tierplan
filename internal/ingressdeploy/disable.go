@@ -503,7 +503,7 @@ func (e *disableRun) done(item string, result map[string]string) {
 // is not run, ingress stays on; only this job writes that failure's audit row, with the step self_route (the removeVIP
 // pattern).
 func (e *disableRun) selfRoute(ctx context.Context) error {
-	err := e.s.removeSelfRoute(ctx, e.actor, e.envID, nil, nil)
+	err := e.s.removeSelfRoute(ctx, e.actor, Requester{}, e.envID, nil, nil)
 	switch {
 	case errors.Is(err, ErrSelfRouteNotEnabled):
 		e.done(ItemSelfRoute, map[string]string{"removed": "false"})

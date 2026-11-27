@@ -99,8 +99,9 @@ const (
 // the next ensure pass to report the self network. It returns the job's ID; a held lock is a *LockedError.
 //
 // The job ends done once the claim is stored, even when the route is not served yet: a swarm service that is not on the self
-// network (self_not_attached) or a certificate still to come is the ensure loop's to finish, and the status says so.
-func (s *Service) EnableSelfRoute(ctx context.Context, actor audit.Actor, owner, envID string, req SelfRouteRequest) (string, error) {
+// network (self_not_attached) or a certificate still to come is the ensure loop's to finish, and the status says so. by is
+// the client the switch came from, for the job's audit rows.
+func (s *Service) EnableSelfRoute(ctx context.Context, actor audit.Actor, owner, envID string, req SelfRouteRequest, by Requester) (string, error) {
 	info, err := s.d.Envs.Info(ctx, envID)
 	if err != nil {
 		return "", err
@@ -113,7 +114,7 @@ func (s *Service) EnableSelfRoute(ctx context.Context, actor audit.Actor, owner,
 	pre := func(context.Context, EnvInfo, EnableRequest) ([]Finding, error) { return nil, nil }
 	return s.startEnable(ctx, JobKindSelfRouteEnable, owner, info, EnableRequest{}, pre, specs,
 		func(jctx context.Context, r *jobs.Reporter, release func()) {
-			s.runSelfRouteEnable(jctx, r, release, actor, envID, req)
+			s.runSelfRouteEnable(jctx, r, release, actor, by, envID, req)
 		})
 }
 
@@ -121,6 +122,7 @@ func (s *Service) EnableSelfRoute(ctx context.Context, actor audit.Actor, owner,
 type selfRun struct {
 	s       *Service
 	actor   audit.Actor
+	by      Requester
 	envID   string
 	action  string
 	r       *jobs.Reporter
@@ -132,7 +134,7 @@ type selfRun struct {
 // ends with its code and sentence and the items after it as not run, or cancelled when the job was.
 func (e *selfRun) stop(ctx context.Context, i int, code, msg, detail string) {
 	item := e.items[i]
-	e.s.auditJobFailed(ctx, e.actor, e.action, e.envID, item, code)
+	e.s.auditJobFailedBy(ctx, e.actor, e.by, e.action, e.envID, item, code)
 	e.release()
 	if code == jobs.CodeCancelled {
 		e.r.Finish(item, jobs.ItemCancelled, code, "", nil)
@@ -172,8 +174,8 @@ func (e *selfRun) done(item string, result map[string]string) {
 }
 
 // runSelfRouteEnable runs the switch-on's items, one at a time.
-func (s *Service) runSelfRouteEnable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, envID string, req SelfRouteRequest) {
-	e := &selfRun{s: s, actor: actor, envID: envID, action: audit.ActionIngressSelfRouteEnabled, r: r, release: release, items: selfEnableItems}
+func (s *Service) runSelfRouteEnable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, by Requester, envID string, req SelfRouteRequest) {
+	e := &selfRun{s: s, actor: actor, by: by, envID: envID, action: audit.ActionIngressSelfRouteEnabled, r: r, release: release, items: selfEnableItems}
 	if ctx.Err() != nil {
 		e.stop(ctx, 0, jobs.CodeCancelled, "", "")
 		return
@@ -219,7 +221,7 @@ func (s *Service) runSelfRouteEnable(ctx context.Context, r *jobs.Reporter, rele
 	hook := func(ctx context.Context, tx *sql.Tx, c ingressstore.SystemClaim) error {
 		return s.d.Audit.RecordTx(ctx, tx, audit.Entry{
 			Actor: actor, Action: audit.ActionIngressSelfRouteEnabled, TargetType: "environment", TargetID: envID,
-			EnvID: envID, Result: audit.ResultSuccess,
+			EnvID: envID, Result: audit.ResultSuccess, IP: by.IP, UserAgent: by.UserAgent,
 			Details: map[string]string{"host": c.Hostname, "environment": envName},
 		})
 	}
@@ -356,8 +358,8 @@ const selfReleaseLockPoll = 100 * time.Millisecond
 // engine, the certificate or where TierPlan runs stops it (T-28-53), and nor does a stack operation that holds the
 // environment (WR-04): the job waits for the lock up to Deps.SelfReleaseLockWait, then releases without it, since the release
 // is one transaction of its own and the ensure loop reads the claim again under the lock. The only refusal is no route on in
-// envID (ErrSelfRouteNotEnabled), before a job starts.
-func (s *Service) DisableSelfRoute(ctx context.Context, actor audit.Actor, owner, envID string) (string, error) {
+// envID (ErrSelfRouteNotEnabled), before a job starts. by is the client the switch came from, for the job's audit rows.
+func (s *Service) DisableSelfRoute(ctx context.Context, actor audit.Actor, owner, envID string, by Requester) (string, error) {
 	specs := make([]jobs.ItemSpec, 0, len(selfDisableItems))
 	for _, id := range selfDisableItems {
 		specs = append(specs, jobs.ItemSpec{ID: id, Label: selfDisableLabels[id], Kind: "step"})
@@ -374,7 +376,7 @@ func (s *Service) DisableSelfRoute(ctx context.Context, actor audit.Actor, owner
 		func(jctx context.Context, r *jobs.Reporter) {
 			release := s.selfReleaseLock(jctx, owner, envID, r.JobID())
 			defer release()
-			s.runSelfRouteDisable(jctx, r, release, actor, envID)
+			s.runSelfRouteDisable(jctx, r, release, actor, by, envID)
 		})
 	if err != nil {
 		return "", err
@@ -415,8 +417,8 @@ func (s *Service) selfReleaseLock(ctx context.Context, owner, envID, jobID strin
 }
 
 // runSelfRouteDisable runs the switch-off's items: the release, then the network's report, which never fails the job.
-func (s *Service) runSelfRouteDisable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, envID string) {
-	e := &selfRun{s: s, actor: actor, envID: envID, action: audit.ActionIngressSelfRouteDisabled, r: r, release: release, items: selfDisableItems}
+func (s *Service) runSelfRouteDisable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, by Requester, envID string) {
+	e := &selfRun{s: s, actor: actor, by: by, envID: envID, action: audit.ActionIngressSelfRouteDisabled, r: r, release: release, items: selfDisableItems}
 	if ctx.Err() != nil {
 		e.stop(ctx, 0, jobs.CodeCancelled, "", "")
 		return
@@ -424,10 +426,10 @@ func (s *Service) runSelfRouteDisable(ctx context.Context, r *jobs.Reporter, rel
 	seen := s.selfSeqOf(envID)
 	// Only this job audits a failed release; the row is written, and the lock freed, before the item ends (A-01).
 	onFail := func(item, code string) {
-		s.auditJobFailed(ctx, actor, audit.ActionIngressSelfRouteDisabled, envID, item, code)
+		s.auditJobFailedBy(ctx, actor, by, audit.ActionIngressSelfRouteDisabled, envID, item, code)
 		release()
 	}
-	err := s.removeSelfRoute(ctx, actor, envID, r, onFail)
+	err := s.removeSelfRoute(ctx, actor, by, envID, r, onFail)
 	switch {
 	case errors.Is(err, ErrSelfRouteNotEnabled):
 		// Released in between by another way (the ingress switch-off): nothing is left to release.
@@ -472,7 +474,7 @@ func (s *Service) runSelfRouteDisable(ctx context.Context, r *jobs.Reporter, rel
 // r reports the release as ItemSelfRelease; it may be nil, and a job without that item ignores it. onFail, when set, is told
 // the item and the code of a release that failed or was cancelled, before the item ends, so only the switch-off job audits a
 // failure. With no route on in envID it returns ErrSelfRouteNotEnabled, with the item done {removed: false}.
-func (s *Service) removeSelfRoute(ctx context.Context, actor audit.Actor, envID string, r *jobs.Reporter, onFail func(item, code string)) error {
+func (s *Service) removeSelfRoute(ctx context.Context, actor audit.Actor, by Requester, envID string, r *jobs.Reporter, onFail func(item, code string)) error {
 	if r != nil {
 		r.Update(ItemSelfRelease, func(it *jobs.Item) { it.State = jobs.ItemRunning })
 	}
@@ -483,7 +485,7 @@ func (s *Service) removeSelfRoute(ctx context.Context, actor audit.Actor, envID 
 	hook := func(ctx context.Context, tx *sql.Tx, c ingressstore.SystemClaim) error {
 		return s.d.Audit.RecordTx(ctx, tx, audit.Entry{
 			Actor: actor, Action: audit.ActionIngressSelfRouteDisabled, TargetType: "environment", TargetID: envID,
-			EnvID: envID, Result: audit.ResultSuccess,
+			EnvID: envID, Result: audit.ResultSuccess, IP: by.IP, UserAgent: by.UserAgent,
 			Details: map[string]string{"host": c.Hostname, "environment": envName},
 		})
 	}
