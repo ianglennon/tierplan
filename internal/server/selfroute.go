@@ -345,3 +345,46 @@ func (h *selfRoute) remember(in *selfInputs, envID string, out ingressrender.Sel
 		in.notify(envID)
 	}
 }
+
+// registerSelfInstallHook adds the self-route holder's install hook to the HTTPS runtime, after the HSTS policy's (D-14): an
+// ACME install or the fallback to self-signed reaches the proxies in the same step, not on the next poll.
+func registerSelfInstallHook(rt *httpsRuntime, h *selfRoute) {
+	rt.AddOnInstall(h.onInstall)
+}
+
+// onInstall is called after every install of a certificate TierPlan serves. It has ownTrust look at what is served now and,
+// when the trust set changed, wakes the reconciler of TierPlan's own environment, so the new trust is rendered at once. The
+// re-sign for new names and a replaced supplied pair do not install; the reconciler's poll of the own version catches them.
+//
+// It runs on the installing goroutine, with the self-signed source's lock held, so it reads nothing that can block: no
+// database, and whether TierPlan renews over HTTP-01 from SelfInput's last answer.
+func (h *selfRoute) onInstall() {
+	in := h.in.Load()
+	if in == nil || in.trust == nil {
+		return
+	}
+	if !in.trust.Observe() {
+		return
+	}
+	if env := h.wakeEnv(in); env != "" && in.notify != nil {
+		in.notify(env)
+	}
+}
+
+// wakeEnv is the environment whose bundle carries TierPlan's trust or carve-out, without a database read: the claim's, or
+// with no claim the one TierPlan runs in while the carve-out is needed. "" is none.
+func (h *selfRoute) wakeEnv(in *selfInputs) string {
+	s := h.snap.Load()
+	env := h.selfEnv(s)
+	if env == "" || s.Claimed {
+		return env
+	}
+	if !s.Attached || !h.http01Cached() || in.urls == nil {
+		return ""
+	}
+	u := in.urls()
+	if len(selfACMEHosts(hostOf(u.PublicURL), hostOf(u.AgentURL))) == 0 {
+		return ""
+	}
+	return env
+}

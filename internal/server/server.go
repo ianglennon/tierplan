@@ -1116,6 +1116,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	selfURLs := instanceSelfURLs(inst, cfg.Listen)
 	ownTr := newOwnTrust(rt.servedChain, tlsSrc.Leaf, tlsClock.Now)
 	selfRt.wire(selfInputs{trust: ownTr, urls: selfURLs, http01: ownHTTP01InUse(acmeWire.mgr), notify: ingressNotifier.Notify})
+	// A certificate install (Let's Encrypt, or the fallback to self-signed) moves the trust set and wakes TierPlan's own
+	// environment's reconciler in the same step (D-14).
+	registerSelfInstallHook(rt, selfRt)
 	// One sampler hub serves every viewer of any container's stats (D-29 to D-31).
 	statsHub := api.NewStatsHub(aggregator, api.StatsHubOptions{Log: log})
 	registryStore := registry.NewStore(st, vlt, nil)

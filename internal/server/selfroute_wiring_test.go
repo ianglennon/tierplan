@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"slices"
 	"sync"
@@ -282,3 +283,82 @@ type fixedClock struct{ t time.Time }
 
 func (c fixedClock) Now() time.Time                       { return c.t }
 func (c fixedClock) After(time.Duration) <-chan time.Time { return nil }
+
+// installRig is a holder wired to a real HTTPS runtime and its trust set, with the install hook registered as the server
+// registers it.
+func installRig(t *testing.T, claimed, http01 bool) (*selfRoute, *httpsRuntime, *ownTrust, *notified) {
+	t.Helper()
+	h, _, _ := newHolderRig(t, claimed, nil)
+	if err := h.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	selfPair, selfLeaf := genCert(t, "tierplan.example.org")
+	rt := newHTTPSRuntime()
+	rt.Install(tlsKindSelfSigned, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &selfPair, nil })
+	trust := newOwnTrust(rt.servedChain, func() *x509.Certificate { return selfLeaf }, func() time.Time { return fixedNow })
+	trust.PEM()
+	notes := &notified{}
+	h.wire(selfInputs{
+		trust: trust,
+		urls: func() ingressdeploy.SelfURLs {
+			return ingressdeploy.SelfURLs{PublicURL: wiringPublicURL, ListenPort: 7480}
+		},
+		http01: func(context.Context) (bool, error) { return http01, nil },
+		notify: notes.notify,
+	})
+	registerSelfInstallHook(rt, h)
+	return h, rt, trust, notes
+}
+
+func TestInstallWakesTheReconciler(t *testing.T) {
+	h, rt, trust, notes := installRig(t, true, false)
+	h.Observe(attachedObs(holderEnv))
+	_, before := trust.PEM()
+
+	lePair, leLeaf := genCert(t, "le.tierplan.example.org")
+	rt.Install(tlsKindACME, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &lePair, nil })
+
+	if got := notes.got(); !slices.Equal(got, []string{holderEnv}) {
+		t.Fatalf("notified %v after an install, want env-1 once", got)
+	}
+	pemBytes, after := trust.PEM()
+	if after == before {
+		t.Fatal("the trust version did not move with the install")
+	}
+	if !trust.has(t, leLeaf) {
+		t.Fatalf("the trust set does not hold the installed certificate: %d bytes", len(pemBytes))
+	}
+	// The reconciler's self input carries the new version.
+	if _, ver, ok := h.SelfInput(context.Background(), holderEnv); !ok || ver != after {
+		t.Fatalf("SelfInput version %d ok %t, want %d", ver, ok, after)
+	}
+
+	t.Run("the carve-out alone wakes TierPlan's environment once HTTP-01 is known", func(t *testing.T) {
+		h, rt, _, notes := installRig(t, false, true)
+		h.Observe(attachedObs(holderEnv))
+		// SelfInput's answer is what the hook reads; it reads no database itself.
+		if _, _, ok := h.SelfInput(context.Background(), holderEnv); !ok {
+			t.Fatal("no carve-out input")
+		}
+		pair, _ := genCert(t, "again.tierplan.example.org")
+		rt.Install(tlsKindACME, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &pair, nil })
+		if got := notes.got(); !slices.Equal(got, []string{holderEnv}) {
+			t.Fatalf("notified %v, want env-1 once", got)
+		}
+	})
+
+	t.Run("no claim and no carve-out: nothing is woken", func(t *testing.T) {
+		h, rt, trust, notes := installRig(t, false, false)
+		h.Observe(attachedObs(holderEnv))
+		_, _, _ = h.SelfInput(context.Background(), holderEnv)
+		_, v0 := trust.PEM()
+		pair, _ := genCert(t, "none.tierplan.example.org")
+		rt.Install(tlsKindACME, func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &pair, nil })
+		if _, v1 := trust.PEM(); v1 == v0 {
+			t.Fatal("the install did not reach the trust set")
+		}
+		if got := notes.got(); len(got) != 0 {
+			t.Fatalf("notified %v, want nothing with no claim and no carve-out need", got)
+		}
+	})
+}
