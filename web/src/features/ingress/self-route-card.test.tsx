@@ -322,6 +322,69 @@ describe("turning the route on", () => {
   });
 });
 
+// UI-SPEC S1b: a malformed value gets an inline error under the Hostname field, in plain text. The server judges the
+// name; its sentence for ingress_host_invalid is drawn under the field as sent. Other refusals stay above the form.
+describe("a malformed hostname (UI-SPEC S1b)", () => {
+  const BAD = "tier plan.example.org";
+  const INVALID = `The hostname “${BAD}” is not valid: the label “tier plan” may hold only letters, digits and hyphens.`;
+
+  function refusing(reason: string, message: string) {
+    previewAnswer = (body) =>
+      Response.json({
+        host: String(body.hostname ?? ""),
+        directAddress: DIRECT,
+        items: [{ code: "self_hostname", state: "refused", reason, message }, ...ITEMS.slice(1)],
+      });
+  }
+
+  async function checkHost(value: string): Promise<{ dialog: HTMLElement; field: HTMLInputElement }> {
+    mountCard();
+    fireEvent.click(await button("Turn on own route"));
+    const dialog = await waitUnderFakeClock(() =>
+      screen.getByRole("dialog", { name: "Turn on TierPlan's own route?" }),
+    );
+    const field = within(dialog).getByLabelText("Hostname") as HTMLInputElement;
+    fireEvent.change(field, { target: { value } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Check hostname" }));
+    await waitUnderFakeClock(() => expect(dialog.querySelector("ol")).toBeTruthy());
+    return { dialog, field };
+  }
+
+  function inlineError(dialog: HTMLElement): HTMLElement | null {
+    return dialog.querySelector<HTMLElement>("[data-slot=field-error]");
+  }
+
+  it("draws the server's sentence under the field, tied to it, and marks the field invalid", async () => {
+    refusing("ingress_host_invalid", INVALID);
+    const { dialog, field } = await checkHost(BAD);
+    const error = inlineError(dialog);
+    expect(error?.textContent).toBe(INVALID);
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(field.getAttribute("aria-describedby")?.split(" ")).toContain(error?.id);
+    // Plain text: no link, no list, no alert box.
+    expect(error?.querySelector("a, ul, [data-slot=alert]")).toBeNull();
+    // The field stays in the form, below what the server refused with.
+    expect(field.compareDocumentPosition(error as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("clears the inline error once the hostname is edited", async () => {
+    refusing("ingress_host_invalid", INVALID);
+    const { dialog, field } = await checkHost(BAD);
+    expect(inlineError(dialog)).toBeTruthy();
+    fireEvent.change(field, { target: { value: HOST } });
+    expect(inlineError(dialog)).toBeNull();
+    expect(field.getAttribute("aria-invalid")).not.toBe("true");
+  });
+
+  it("keeps a refusal of a well-formed name above the form, not under the field", async () => {
+    refusing("ingress_host_taken", `${HOST} is already held by the stack web.`);
+    const { dialog, field } = await checkHost(HOST);
+    expect(inlineError(dialog)).toBeNull();
+    expect(field.getAttribute("aria-invalid")).not.toBe("true");
+    expect(dialog.textContent).toContain(`${HOST} is already held by the stack web.`);
+  });
+});
+
 describe("the switch-on's Done alert when TierPlan is left off the network (UI-SPEC S1b)", () => {
   function leftOff(attached: string): Json {
     return {
