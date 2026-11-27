@@ -41,9 +41,9 @@ func writeIndex(writes []string, prefix, id string) int {
 	return slices.IndexFunc(writes, func(w string) bool { return strings.HasPrefix(w, prefix) && strings.Contains(w, id) })
 }
 
-// TestDisableIngressRemovesVIPFirst is the tracer of D-17: switching ingress off on a swarm whose virtual IP is on runs a
-// first item, virtual_ip, that removes the keepalived service, its secret and its row before the proxy service is touched, and
-// the preview names the address and the secret.
+// TestDisableIngressRemovesVIPFirst is the tracer of D-17: switching ingress off on a swarm whose virtual IP is on runs, right
+// after self_route (D-11), virtual_ip, which removes the keepalived service, its secret and its row before the proxy service
+// is touched, and the preview names the address and the secret.
 func TestDisableIngressRemovesVIPFirst(t *testing.T) {
 	f := newVIPIngressFix(t)
 	ctx := testsupport.Context(t)
@@ -70,8 +70,9 @@ func TestDisableIngressRemovesVIPFirst(t *testing.T) {
 	if job.State != jobs.JobDone {
 		t.Fatalf("job state = %q, want done; items = %+v", job.State, job.Items)
 	}
-	if len(job.Items) == 0 || job.Items[0].ID != "virtual_ip" {
-		t.Fatalf("the first item = %+v, want virtual_ip", job.Items)
+	// TierPlan's own route is released first (D-11); the virtual IP is the first thing of the swarm's to go.
+	if len(job.Items) < 2 || job.Items[0].ID != "self_route" || job.Items[1].ID != "virtual_ip" {
+		t.Fatalf("the first items = %+v, want self_route then virtual_ip", job.Items)
 	}
 	if it := itemOf(job, ingressdeploy.ItemVirtualIP); it.State != jobs.ItemDone || it.Result["removed"] != "true" {
 		t.Errorf("virtual_ip = %q %v, want done and removed", it.State, it.Result)

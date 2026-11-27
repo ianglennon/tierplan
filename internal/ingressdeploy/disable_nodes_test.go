@@ -134,9 +134,10 @@ func TestDisableFailsWhenTheSwarmNodeListCannotBeRead(t *testing.T) {
 		infos = &infoHook{Environments: d.Envs}
 		d.Envs = infos
 	}})
-	// The volumes step reads the environment afresh, which is the second read of a switch-off (the first is Disable's own); the
-	// cluster reads of the swarm fail from there on.
-	infos.at, infos.fn = 2, func() { reads.fail.Store(true) }
+	// The volumes step reads the environment afresh, which is the third read of a switch-off (the first is Disable's own, the
+	// second the self_route item's release, for its audit row's environment name); the cluster reads of the swarm fail from
+	// there on.
+	infos.at, infos.fn = 3, func() { reads.fail.Store(true) }
 
 	job := f.disable(seesAll)
 	if job.State == jobs.JobDone {

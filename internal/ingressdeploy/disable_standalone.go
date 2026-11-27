@@ -24,13 +24,14 @@ const CodeDisableProxyFailed = "disable_proxy_failed"
 // container that is not the proxy: the project's down would remove it too, and it is not TierPlan's to remove (WR-A3).
 const CodeForeignContainer = "ingress_foreign_container"
 
-// standaloneDisableItems are the items of the standalone disable job in the order they run. The proxy goes before the
-// network, which an attached container would keep, and the network before the volume, which holds every private key and so
-// is the last thing of the host's to go (PROH-25-06).
-var standaloneDisableItems = []string{ItemSwitchOff, ItemProxy, ItemNetwork, ItemVolumes, ItemToken, ItemNodes}
+// standaloneDisableItems are the items of the standalone disable job in the order they run. TierPlan's own route is released
+// first (D-11). The proxy goes before the network, which an attached container would keep, and the network before the volume,
+// which holds every private key and so is the last thing of the host's to go (PROH-25-06).
+var standaloneDisableItems = []string{ItemSelfRoute, ItemSwitchOff, ItemProxy, ItemNetwork, ItemVolumes, ItemToken, ItemNodes}
 
 // standaloneDisableLabels are the lines of the standalone job's steps.
 var standaloneDisableLabels = map[string]string{
+	ItemSelfRoute: "Release TierPlan's own route",
 	ItemSwitchOff: "Stop serving routes",
 	ItemProxy:     "Remove the proxy container",
 	ItemNetwork:   "Remove the ingress network",
