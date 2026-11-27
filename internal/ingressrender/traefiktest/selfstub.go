@@ -163,6 +163,45 @@ func SelfSignedLeaf(t testing.TB, names ...string) (certPEM, keyPEM []byte) {
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 }
 
+// ResignedLeaf is SelfSignedLeaf for a key that already exists (PKCS#8 PEM, as SelfSignedLeaf returns
+// it): what TierPlan makes when it signs its certificate again for other names (internal/server). The
+// result has a new serial and does not verify against the old leaf (F2b), so a proxy trusts it only
+// when its trust file holds it.
+func ResignedLeaf(t testing.TB, keyPEM []byte, names ...string) []byte {
+	t.Helper()
+	if len(names) == 0 {
+		t.Fatal("traefiktest: ResignedLeaf needs a name")
+	}
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		t.Fatal("traefiktest: no key in the PEM")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("traefiktest: parse the key: %v", err)
+	}
+	key, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("traefiktest: the key is a %T, want ECDSA", parsed)
+	}
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial(t),
+		Subject:               pkix.Name{CommonName: names[0], Organization: []string{"TierPlan"}},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              names,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("traefiktest: create the re-signed certificate: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
 // StubOptions configure StartSelfStub.
 type StubOptions struct {
 	// CertPEM and KeyPEM are the stub's TLS pair; the certificate's first DNS name is what a client
@@ -293,6 +332,47 @@ func (s *Stub) Get(t testing.TB, certPEM []byte, path string) (status int, body 
 		t.Fatalf("traefiktest: GET https://%s%s: %v", s.ip, path, err)
 	}
 	return status, body
+}
+
+// SwapCert changes the stub's certificate the way TierPlan changes its own: it writes certPEM and keyPEM
+// over the files the stub was started with, sends the stub SIGHUP and returns when the stub serves the
+// new leaf, which a direct request verifying against certPEM alone sees in /serial. The stub drains its
+// old connections when it reloads, so a proxy in front has to verify the new leaf on its next one.
+func (s *Stub) SwapCert(t testing.TB, certPEM, keyPEM []byte) {
+	t.Helper()
+	leaf := firstCert(t, certPEM)
+	if len(leaf.DNSNames) == 0 {
+		t.Fatal("traefiktest: the new certificate has no DNS name to verify")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	for _, f := range []struct {
+		path string
+		data []byte
+	}{{"/tls/tls.crt", certPEM}, {"/tls/tls.key", keyPEM}} {
+		if err := s.ctr.CopyToContainer(ctx, f.data, f.path, 0o644); err != nil {
+			t.Fatalf("traefiktest: copy %s into the stub: %v", f.path, err)
+		}
+	}
+	// The stub is the container's process 1; busybox kill sends the signal.
+	code, out, err := s.ctr.Exec(ctx, []string{"kill", "-HUP", "1"})
+	if err != nil || code != 0 {
+		var msg []byte
+		if out != nil {
+			msg, _ = io.ReadAll(out)
+		}
+		t.Fatalf("traefiktest: send SIGHUP to the stub: exit %d %v %s", code, err, msg)
+	}
+	want := leaf.SerialNumber.Text(16)
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	testsupport.Poll(t, testsupport.Deadline, "the stub to serve the leaf with serial "+want, func() (bool, string) { // testsupport: external, a real container reloading
+		status, body, err := s.get(pool, leaf.DNSNames[0], "/serial")
+		if err != nil {
+			return false, err.Error()
+		}
+		return status == http.StatusOK && strings.TrimSpace(body) == want, fmt.Sprintf("status %d serial %q", status, body)
+	})
 }
 
 // IP is the stub's address on the environment's network.

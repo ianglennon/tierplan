@@ -17,6 +17,13 @@
 //	/ingress/connect  the same
 //	/client-ip        the client address httpx.ClientIPMiddleware derives, with the trusted ranges taken from
 //	                  TIERPLAN_STUB_TRUSTED, and the X-Forwarded-For header it saw
+//	/serial           the serial number (hex) of the certificate the stub serves now
+//
+// On SIGHUP the stub reads -cert and -key again and serves the new pair to every new handshake. It then
+// drains the connections it already has (HTTP/2 GOAWAY, in-flight requests finish), so a proxy in front
+// has to open new connections and verify the new certificate: the strictest form of TierPlan changing
+// its certificate under a running route (Phase 28, A-02, A-03). A pair that does not load is logged and
+// the old one kept.
 //
 // "selfstub hold" is the client of the long idle hold: it holds an event feed and a WebSocket open for a
 // given time and says which one was cut first.
@@ -36,9 +43,11 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -58,7 +67,48 @@ const (
 	tlsFirstByte = 0x16
 	// peekTimeout bounds the wait for a connection's first byte.
 	peekTimeout = 10 * time.Second
+	// drainTimeout bounds how long a replaced server waits for its connections to finish after a
+	// reload; a long-lived stream still open then is cut.
+	drainTimeout = time.Minute
 )
+
+// certStore is the TLS pair the stub serves, read from its files at start and again on each reload.
+type certStore struct {
+	certFile, keyFile string
+	cur               atomic.Pointer[tls.Certificate]
+}
+
+// load reads the pair from the files and serves it from the next handshake on. On an error the pair
+// served so far stays.
+func (c *certStore) load() error {
+	pair, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
+	if err != nil {
+		return err
+	}
+	if pair.Leaf == nil {
+		if pair.Leaf, err = x509.ParseCertificate(pair.Certificate[0]); err != nil {
+			return err
+		}
+	}
+	c.cur.Store(&pair)
+	return nil
+}
+
+// get is tls.Config.GetCertificate: the pair served now.
+func (c *certStore) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	if p := c.cur.Load(); p != nil {
+		return p, nil
+	}
+	return nil, errors.New("no certificate loaded")
+}
+
+// serial is the served leaf's serial number in hex, or "" before a pair is loaded.
+func (c *certStore) serial() string {
+	if p := c.cur.Load(); p != nil && p.Leaf != nil {
+		return p.Leaf.SerialNumber.Text(16)
+	}
+	return ""
+}
 
 // stubConfig is what the handlers need.
 type stubConfig struct {
@@ -66,6 +116,8 @@ type stubConfig struct {
 	sseEvery, pingEvery time.Duration
 	// trusted are the proxy ranges /client-ip honours X-Forwarded-For from.
 	trusted []netip.Prefix
+	// serial is the served certificate's serial for /serial; nil answers "".
+	serial func() string
 }
 
 // parseTrusted reads a comma-separated list of prefixes; an empty string is none.
@@ -106,6 +158,12 @@ func newTLSMux(cfg stubConfig) http.Handler {
 	mux.HandleFunc("/agent/connect", reached)
 	mux.HandleFunc("/ingress/connect", reached)
 	mux.Handle("/client-ip", httpx.ClientIPMiddleware(cfg.trusted)(http.HandlerFunc(clientIP)))
+	mux.HandleFunc("/serial", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		if cfg.serial != nil {
+			_, _ = io.WriteString(w, cfg.serial())
+		}
+	})
 	return mux
 }
 
@@ -232,6 +290,52 @@ func (l *chanListener) Close() error {
 
 func (l *chanListener) Addr() net.Addr { return l.addr }
 
+// requeue hands a connection back to whichever server accepts next, or closes it once the listener is.
+func (l *chanListener) requeue(c net.Conn) {
+	select {
+	case l.ch <- c:
+	case <-l.done:
+		_ = c.Close()
+	}
+}
+
+// generation is one server's view of a chanListener: closing it stops that server accepting while the
+// listener goes on feeding the next one, so a reload replaces the server with no gap.
+type generation struct {
+	parent *chanListener
+	once   sync.Once
+	done   chan struct{}
+}
+
+func newGeneration(parent *chanListener) *generation {
+	return &generation{parent: parent, done: make(chan struct{})}
+}
+
+func (g *generation) Accept() (net.Conn, error) {
+	select {
+	case c := <-g.parent.ch:
+		select {
+		case <-g.done:
+			// Closed while this connection arrived: it belongs to the next server.
+			go g.parent.requeue(c)
+			return nil, net.ErrClosed
+		default:
+			return c, nil
+		}
+	case <-g.done:
+		return nil, net.ErrClosed
+	case <-g.parent.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (g *generation) Close() error {
+	g.once.Do(func() { close(g.done) })
+	return nil
+}
+
+func (g *generation) Addr() net.Addr { return g.parent.addr }
+
 // dispatch hands a connection to the TLS or the plain side by its first byte.
 func dispatch(conn net.Conn, tlsSide, plainSide *chanListener) {
 	_ = conn.SetReadDeadline(time.Now().Add(peekTimeout))
@@ -292,13 +396,65 @@ func serve(args []string) error {
 			go dispatch(conn, tlsSide, plainSide)
 		}
 	}()
-	srv := &http.Server{
-		Handler:           newTLSMux(stubConfig{sseEvery: *sseEvery, pingEvery: *pingEvery, trusted: trusted}),
-		ReadHeaderTimeout: peekTimeout,
-		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
+	store := &certStore{certFile: *certFile, keyFile: *keyFile}
+	if err := store.load(); err != nil {
+		return err
 	}
-	log.Printf("selfstub listening on %s", ln.Addr())
-	return srv.ServeTLS(tlsSide, *certFile, *keyFile)
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	cfg := stubConfig{sseEvery: *sseEvery, pingEvery: *pingEvery, trusted: trusted, serial: store.serial}
+	log.Printf("selfstub listening on %s, certificate serial %s", ln.Addr(), store.serial())
+	return serveTLS(tlsSide, cfg, store, hup)
+}
+
+// serveTLS runs the TLS side until its listener fails. Each reload signal loads the pair again and, when
+// it loads, starts a new server on the listener and shuts the previous one down gracefully, which sends
+// GOAWAY on its HTTP/2 connections and lets their requests finish.
+func serveTLS(side *chanListener, cfg stubConfig, store *certStore, reload <-chan os.Signal) error {
+	failed := make(chan error, 1)
+	start := func() *http.Server {
+		srv := &http.Server{
+			Handler:           newTLSMux(cfg),
+			ReadHeaderTimeout: peekTimeout,
+			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: store.get},
+		}
+		gen := newGeneration(side)
+		go func() {
+			if err := srv.ServeTLS(gen, "", ""); !errors.Is(err, http.ErrServerClosed) {
+				select {
+				case failed <- err:
+				default:
+				}
+			}
+		}()
+		return srv
+	}
+	cur := start()
+	for {
+		select {
+		case err := <-failed:
+			return err
+		case <-reload:
+			if err := store.load(); err != nil {
+				log.Printf("reload: keeping the certificate served so far: %v", err)
+				continue
+			}
+			prev := cur
+			cur = start()
+			log.Printf("reloaded: certificate serial %s", store.serial())
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+				defer cancel()
+				if err := prev.Shutdown(ctx); err != nil {
+					log.Printf("reload: the previous server's connections did not drain: %v", err)
+					_ = prev.Close()
+					return
+				}
+				log.Printf("reload: the previous server's connections drained")
+			}()
+		}
+	}
 }
 
 // hold opens an event feed and a WebSocket and keeps both for -for. It exits 0 and prints "held <time>"
