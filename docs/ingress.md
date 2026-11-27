@@ -27,6 +27,7 @@ to [On a standalone host](#on-a-standalone-host) describe a swarm; that section 
 - [Let's Encrypt limits](#lets-encrypt-limits)
 - [Virtual IP](#virtual-ip)
 - [Where the virtual IP will not work](#where-the-virtual-ip-will-not-work)
+- [Stable codes](#stable-codes)
 
 ## What switching on creates
 
@@ -121,7 +122,7 @@ kind `ingress_ensure`.
 | `ingress_subnet_overlaps` | The subnet you gave overlaps an existing network. |
 | `ingress_name_taken` | The host already holds a container, network or volume under a name ingress uses that is not TierPlan's. Remove or rename it. |
 | `ingress_name_shadowed` | Not a preview finding: the switch-on job checks it once it has made the ingress network, because only then is the network's ID known. A container on the host, in any state, is joined to a network by a name that is the start of that ID (such a name is made only of the digits 0-9 and the letters a-f). Docker reads a name it cannot find as the start of a network's ID, so after a reboot that container could join the ingress network under a name of its own. Ingress stays off and the job names the container. Disconnect it from that network or remove it and switch on again, or switch off and on again, which makes the network with a new ID. While ingress is on, every pass of the ensure loop runs the same check, and again after anything it brings up: on a hit the proxy is taken down and kept down while that network is there, and the status reports `name_shadowed` in `lastEnsure`; the server log names the container and the network name it is stored on. Once the container is disconnected or removed, the next pass brings the proxy back up. |
-| `ingress_http01_conflict` | TierPlan's own certificate uses HTTP-01 and the host is TierPlan's own host. This includes the local socket environment, and an agent environment whose engine is the one TierPlan itself talks to. Switch TierPlan's own certificate to DNS-01 first (see [https.md](https.md)). A later version lifts this limit. |
+| `ingress_http01_conflict` | TierPlan's own certificate uses HTTP-01, the host is TierPlan's own host, and TierPlan cannot find its own container to connect it to `tierplan-self`, so the carve-out cannot reach it. TierPlan's own host includes the local socket environment, and an agent environment whose engine is the one TierPlan itself talks to. Switch TierPlan's own certificate to DNS-01 first (see [https.md](https.md)). When TierPlan finds its container, this is not a refusal: see [TierPlan's own certificate and HTTP-01](#tierplans-own-certificate-and-http-01). |
 
 **Existing stacks join on their next deploy.** As on a swarm, switching on changes no stack. A stack that holds a route
 is attached to the `tierplan-ingress` network by its next deploy, and the preview and the status list the stacks that
@@ -178,7 +179,7 @@ container still uses is not removed: the job fails and names that container, and
 The proxies take port 80 on every node. If TierPlan itself runs on a node of the swarm and its own certificate is
 ordered with the HTTP-01 challenge, which also needs port 80, the next renewal would fail weeks later without any
 warning. So in this version the switch is refused with `ingress_http01_conflict`: switch TierPlan's own certificate to
-DNS-01 first (see [https.md](https.md)), then switch ingress on. A later version lifts this limit.
+DNS-01 first (see [https.md](https.md)), then switch ingress on.
 When TierPlan runs outside the swarm, nothing conflicts and nothing is shown.
 
 TierPlan decides where it runs from its own Docker socket: the cluster it reports (a manager), or its node (a manager or a
@@ -722,3 +723,38 @@ will not work, or will not work reliably, in these places:
 
 When the nodes cannot hear each other's adverts, each elects itself and the address is answered by more than one node: see
 [Not supported yet](#not-supported-yet) and the [residual risks](#residual-risks).
+
+## Stable codes
+
+The codes that TierPlan's own route, the `tierplan-self` network and the HTTP-01 carve-out write, as the code writes them.
+The codes of switching ingress itself on and off are in the sections above.
+
+| Code | What it means and what to do |
+| --- | --- |
+| `self_route_not_here` | Switching TierPlan's own route on is refused: TierPlan runs in another environment, which the sentence names, or it cannot tell from its own Docker socket which one it runs in. Turn the route on in the environment TierPlan runs in. |
+| `self_route_needs_service` | Refused: TierPlan runs as a plain container on a swarm node. The route needs TierPlan to run as a swarm service. Deploy it from the stack file in [install-in-swarm.md](install-in-swarm.md), then try again. |
+| `self_route_base_path` | Refused: TierPlan's public URL has a path. The route serves TierPlan at the root of its hostname, so take the path out of the public URL first. |
+| `self_route_no_url` | Refused: neither a public URL nor an agent URL is set. Set TierPlan's public URL in Settings first. |
+| `self_route_already_on` | Refused: the install already has its own route, in this environment or in another. There is one per install. Turn it off first to serve TierPlan on another hostname. |
+| `self_certificate_terms` | Refused: no certificate can be ordered for the hostname, because Let's Encrypt's terms have not been accepted. Accept them under Ingress certificates on the HTTPS page. |
+| `self_certificate_paused` | Refused: certificate work is paused after a restore. Resume it under Ingress certificates on the HTTPS page. |
+| `self_certificate_pending` | A warning, not a refusal: the hostname has no valid certificate yet. TierPlan orders one when the route is switched on, and the route waits (`waiting_certificate`) until it is ready. |
+| `ingress_host_is_agent_url` | A claim, a stack's route or TierPlan's own route, is refused for the host that agents and proxies dial: the agent URL's host, or the public URL's when no agent URL is set. Choose another hostname, or set an agent URL on another host first. |
+| `agent_url_is_ingress_host` | Settings refuse (422) an agent URL whose host the ingress serves, TierPlan's own route's or a stack's. Use a hostname that reaches TierPlan directly. |
+| `public_url_is_ingress_host` | Settings refuse (422) a public URL whose host the ingress serves while no agent URL that the ingress does not serve is set. Clearing the agent URL under such a public URL is refused with the same code. Set a direct agent URL first, or in the same save. |
+| `instance_admin_required` | 403: the self route's previews, switching it on and switching it off need an instance admin as well as `ingress.manage` on the environment. The refusal is audited as `permission.denied`. |
+| `self_route_not_on` | 409: the switch-off, or its preview, was asked of an environment where TierPlan's own route is not on. |
+| `self_route_check_failed` | The switch-on job could not read what its check needs, so nothing was judged and nothing was written. Try again. |
+| `self_route_claim_failed` | The switch-on job could not store the route, for a reason that is not a refusal. Nothing is served. Try again. |
+| `self_route_held` | The switch-on job lost the claim to another switch-on, in another environment, that stored its route after this job's check. The job reads `partial`. Turn that route off first if you want it here. |
+| `self_route_release_failed` | The route could not be released and is still on. Turn it off again. It also ends the `self_route` step of an ingress switch-off, which then stops; switch off again. |
+| `disable_self_network_failed` | The `self_network` step of an ingress switch-off could not read or remove `tierplan-self`, for a reason other than something still being on it. Switch off again. |
+| `tierplan_attached` | Not a failure: the `self_network` step of an ingress switch-off kept `tierplan-self`, because TierPlan's own task or container is still on it. See [Folding and removing](#folding-and-removing). |
+| `self_not_attached` | TierPlan's own route is on, but TierPlan's swarm service is not on `tierplan-self` yet, so nothing is served on the hostname. It is the route's state, the reason of its condition and a warning in the switch-on preview. Add the stack-file lines (see [Turning it on](#turning-it-on)). |
+| `not_observed` | The reason of the route's network condition before an ensure pass has looked at `tierplan-self`. The route's state reads `unknown` until the next pass, within a minute. |
+| `self_network_foreign` | In the server log: a network called `tierplan-self` exists without both of TierPlan's labels (`tierplan.component=ingress` and `tierplan.ingress.role=self`). TierPlan never attaches, adopts or trusts it. Remove or rename it. |
+| `ingress_render_self_input` | The proxies' configuration for TierPlan's own route or the carve-out could not be made from what TierPlan knows of itself (a base path in the public URL, or no address of TierPlan's on the network). The proxies keep the configuration they had, and the server log names the field. |
+| `self_network_peer` | An agent's or an ingress proxy's connect reached TierPlan through its own route and was refused. The agent's or the proxy's log names the code. Point the agent at the agent URL, which must not be an ingress hostname. |
+| `ingress_http01_conflict` | Switching ingress on is refused: TierPlan runs in this environment, its own certificate uses HTTP-01, and the carve-out cannot reach it. See [TierPlan's own certificate and HTTP-01](#tierplans-own-certificate-and-http-01). |
+| `ingress_http01_unknown` | A warning: TierPlan could not tell whether its own certificate needs port 80 here. The switch goes ahead. Check by hand, or use DNS-01. |
+| `ingress_http01_carve_out` | A notice in the switch-on preview, not a finding: TierPlan's own certificate uses HTTP-01 and keeps renewing through the carve-out. Nothing needs doing. |
