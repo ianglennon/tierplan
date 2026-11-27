@@ -486,6 +486,7 @@
           "self_route_needs_service": "TierPlan runs as a plain container on a swarm node, and the route needs it to run as a swarm service. See <mono>install-in-swarm.md</mono>.",
           "self_route_not_here": "TierPlan can't tell whether it runs in this environment, so it won't switch its route on here. Direct access on <mono>{{direct}}</mono> isn't affected."
         },
+        "foreignMembers": "Something other than the ingress proxy and TierPlan is on the tierplan-self network: <mono>{{members}}</mono>. TierPlan believes no client address forwarded over it until that leaves the network. Take it off tierplan-self.",
         "usingRoute": "You're using TierPlan through this route. If you turn it off, this page may stop answering. Open <mono>{{direct}}</mono> to carry on.",
         "signIn": "You sign in on each address separately. Single sign-on still returns to the public URL.",
         "showProgress": "Show progress",

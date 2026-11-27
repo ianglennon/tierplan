@@ -242,6 +242,19 @@ func TestHolderTrustedPrefixesFollowTheObservation(t *testing.T) {
 			t.Fatalf("origins = %q, want only the claim's", got)
 		}
 	})
+	t.Run("a foreign member on the network: none until it leaves (CR-02)", func(t *testing.T) {
+		h := reloaded(t)
+		o := attachedObs(holderEnv)
+		o.ForeignMembers = []string{"shop_web"}
+		h.Observe(o)
+		if got := h.TrustedPrefixes(); len(got) != 0 {
+			t.Fatalf("prefixes = %v, want none while a stack's service is on the network", got)
+		}
+		h.Observe(attachedObs(holderEnv))
+		if got := h.TrustedPrefixes(); !slices.Equal(got, wantSelfPrefixes) {
+			t.Fatalf("prefixes = %v, want %v once it left", got, wantSelfPrefixes)
+		}
+	})
 	t.Run("an ingress subnet overlapping the subnet: none", func(t *testing.T) {
 		h := reloaded(t)
 		o := attachedObs(holderEnv)

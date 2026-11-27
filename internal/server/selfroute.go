@@ -176,7 +176,9 @@ func (h *selfRoute) publish(cur, next selfSnapshot) {
 	if own {
 		o := next.Obs
 		next.Attached, next.Observed, next.Backend, next.Kind = o.Attached, o.Observed, o.BackendHost, o.Kind
-		if o.Exists && o.Attached && !o.Foreign {
+		// A member of the network that is neither the proxy nor TierPlan could forge any client address: nothing is trusted
+		// until it leaves (CR-02).
+		if o.Exists && o.Attached && !o.Foreign && len(o.ForeignMembers) == 0 {
 			next.Prefixes = ingress.SelfTrustedPrefixes(o.Facts())
 		}
 	}

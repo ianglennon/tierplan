@@ -272,8 +272,13 @@ The proxies and TierPlan reach each other over a network of their own, `tierplan
 switched on, or when ingress is switched on and the carve-out needs it (see the next section), and labels it
 `tierplan.component=ingress` and `tierplan.ingress.role=self`. On a swarm it is an overlay that is not attachable, so a
 plain `docker run --network tierplan-self` is refused; on a standalone host it is a bridge. Only the proxies and TierPlan
-are on it. A network called `tierplan-self` without both labels is not TierPlan's: TierPlan never attaches, adopts or
-trusts it, and logs `self_network_foreign`.
+belong on it. A stack TierPlan deploys cannot reach it: a compose file that declares a network of that name, points at it
+as an external network or names it as a network mode is refused with `self_network_reserved`, whoever deploys it. The one
+exception is the swarm stack TierPlan's own service runs in, which may name it as an external network (the lines below).
+Each ensure pass also lists what is on the network. Anything other than the proxies and TierPlan, a service or container
+someone joined by hand, is named on the card and in the server log with `self_network_foreign_member`, and while it is
+there TierPlan believes no forwarded address from the network. A network called `tierplan-self` without both labels is not
+TierPlan's: TierPlan never attaches, adopts or trusts it, and logs `self_network_foreign`.
 
 The network is what lets TierPlan believe the client address the proxy sends. While TierPlan is on it, its subnet, minus its
 gateway, is added to the trusted proxies, without `TIERPLAN_TRUSTED_PROXIES`. The connection TierPlan sees comes from inside
@@ -951,6 +956,8 @@ The codes of switching ingress itself on and off are in the sections above.
 | `tierplan_attached` | Not a failure: the `self_network` step of an ingress switch-off kept `tierplan-self`, because TierPlan's own task or container is still on it. See [Folding and removing](#folding-and-removing). |
 | `self_not_attached` | TierPlan's own route is on, but TierPlan's swarm service is not on `tierplan-self` yet, so nothing is served on the hostname. It is the route's state, the reason of its condition and a warning in the switch-on preview. Add the stack-file lines (see [Turning it on](#turning-it-on)). |
 | `not_observed` | The reason of the route's network condition before an ensure pass has looked at `tierplan-self`. The route's state reads `unknown` until the next pass, within a minute. |
+| `self_network_reserved` | A stack's check refuses its compose file: it declares a network called `tierplan-self`, points at it as an external network, or names it as a network mode. Every member of that network can send TierPlan a client address it believes and answer the name the proxies reach TierPlan by, so only TierPlan and the proxies are on it. Use another network. Only the swarm stack TierPlan's own service runs in may name it, as an external network. |
+| `self_network_foreign_member` | On the card and in the server log: a service or container other than the ingress proxy and TierPlan is on `tierplan-self`. Until it leaves, TierPlan believes no client address forwarded over the network, so sign-in throttling and the audit log record the proxy's address. Take it off the network. |
 | `self_network_foreign` | In the server log: a network called `tierplan-self` exists without both of TierPlan's labels (`tierplan.component=ingress` and `tierplan.ingress.role=self`). TierPlan never attaches, adopts or trusts it. Remove or rename it. |
 | `ingress_render_self_input` | The proxies' configuration for TierPlan's own route or the carve-out could not be made from what TierPlan knows of itself (a base path in the public URL, or no address of TierPlan's on the network). The proxies keep the configuration they had, and the server log names the field. |
 | `self_network_peer` | An agent's or an ingress proxy's connect reached TierPlan through its own route and was refused. The agent's or the proxy's log names the code. Point the agent at the agent URL, which must not be an ingress hostname. |

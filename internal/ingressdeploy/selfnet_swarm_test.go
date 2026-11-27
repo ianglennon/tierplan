@@ -308,7 +308,7 @@ func TestSelfObservationAfterAPass(t *testing.T) {
 		Subnet: netip.MustParsePrefix("10.9.0.0/24"), Gateway: netip.MustParseAddr("10.9.0.1"),
 		IngressSubnets: []netip.Prefix{netip.MustParsePrefix(ing.Subnets[0])},
 		BridgeGateways: []netip.Addr{netip.MustParseAddr("172.17.0.1"), netip.MustParseAddr("172.19.0.1")},
-		Attached:       true, Kind: ingressdeploy.SelfKindSwarmService, BackendHost: tpServiceName, Observed: true,
+		Attached:       true, Kind: ingressdeploy.SelfKindSwarmService, Namespace: "tierplan", BackendHost: tpServiceName, Observed: true,
 	}
 	if !reflect.DeepEqual(o, want) {
 		t.Errorf("observation =\n%+v\nwant\n%+v", o, want)
@@ -444,4 +444,59 @@ func TestEnsureLeavesTierPlanSelfWhileTierPlanIsOnIt(t *testing.T) {
 	if got := r.proxyNetworks(); !slices.Equal(got, []string{ingress.NetworkName}) {
 		t.Errorf("proxy networks after the removal = %v, want only %s", got, ingress.NetworkName)
 	}
+}
+
+// TestSelfNetworkForeignMembersAreReported (CR-02): a service on tierplan-self that is neither the proxy nor TierPlan's own
+// is named in the observation's ForeignMembers and logged with self_network_foreign_member; the proxy and TierPlan's own
+// service never are. The stack namespace of TierPlan's own service is what SelfStackNamespace answers.
+func TestSelfNetworkForeignMembersAreReported(t *testing.T) {
+	withMembers := func(extra ...dockertest.FakeService) func(*dockertest.FakeConfig) {
+		return func(c *dockertest.FakeConfig) {
+			c.Networks = append(c.Networks, premadeSelf(ingress.SelfNetworkLabels(), "10.9.0.0/24", "10.9.0.1"))
+			for i := range c.ServiceRows {
+				if c.ServiceRows[i].ID == tpServiceID {
+					c.ServiceRows[i].Networks = append(c.ServiceRows[i].Networks, "self-net-id")
+				}
+			}
+			c.ServiceRows = append(c.ServiceRows, extra...)
+		}
+	}
+	t.Run("only the proxy and TierPlan", func(t *testing.T) {
+		r, facts := newSelfRig(t, selfRigOptions{config: withMembers()})
+		facts.setAttached(true)
+		r.claimSelf()
+		r.round()
+		r.round()
+		o, ok := r.svc.SelfObservationOf(r.envID)
+		if !ok || !o.Exists || len(o.ForeignMembers) != 0 {
+			t.Fatalf("observation = %+v, %v; want TierPlan's network with no foreign member", o, ok)
+		}
+		if got := r.svc.SelfStackNamespace(r.envID); got != "tierplan" {
+			t.Errorf("SelfStackNamespace = %q, want tierplan", got)
+		}
+		if got := r.svc.SelfStackNamespace("env-elsewhere"); got != "" {
+			t.Errorf("SelfStackNamespace of an unobserved environment = %q, want none", got)
+		}
+	})
+	t.Run("a stack's service joined it", func(t *testing.T) {
+		logs := &logBuffer{}
+		r, facts := newSelfRig(t, selfRigOptions{
+			config: withMembers(
+				dockertest.FakeService{ID: "shop-web-id", Name: "shop_web", Running: 1, Desired: 1, Networks: []string{"self-net-id"}},
+				dockertest.FakeService{ID: "shop-db-id", Name: "shop_db", Running: 1, Desired: 1, Networks: []string{ingress.SelfNetworkName}},
+				dockertest.FakeService{ID: "other-id", Name: "other_app", Running: 1, Desired: 1, Networks: []string{"tierplan_default"}},
+			),
+			deps: func(d *ingressdeploy.Deps) { d.Log = slog.New(slog.NewTextHandler(logs, nil)) },
+		})
+		facts.setAttached(true)
+		r.claimSelf()
+		r.round()
+		o, ok := r.svc.SelfObservationOf(r.envID)
+		if !ok || !slices.Equal(o.ForeignMembers, []string{"shop_db", "shop_web"}) {
+			t.Fatalf("observation = %+v, %v; want the foreign members [shop_db shop_web]", o, ok)
+		}
+		if !strings.Contains(logs.String(), ingressdeploy.CodeSelfNetworkForeignMember) {
+			t.Errorf("the log does not carry %s:\n%s", ingressdeploy.CodeSelfNetworkForeignMember, logs.String())
+		}
+	})
 }

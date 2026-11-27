@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/moby/moby/api/types/swarm"
 
@@ -243,6 +244,11 @@ func specNamesNetwork(stored json.RawMessage, row dockerx.NetworkRow) bool {
 // or the self role. It is never attached, adopted or trusted (T-28-37); the person removes or renames it.
 const CodeSelfNetworkForeign = "self_network_foreign"
 
+// CodeSelfNetworkForeignMember is the log code, and the card's warning, of a service or container on TierPlan's own self
+// network that is neither the proxy nor TierPlan (CR-02). TierPlan believes no forwarded address from the network while one
+// is there.
+const CodeSelfNetworkForeignMember = "self_network_foreign_member"
+
 // selfBridgeNetworks are the local bridges whose gateways a connection from the node itself can carry. Their gateways go into
 // the observation so the trusted set never holds them (D-06).
 var selfBridgeNetworks = []string{"bridge", "docker_gwbridge"}
@@ -270,11 +276,17 @@ type SelfObservation struct {
 	Attached bool
 	// Kind is where TierPlan runs (SelfPlace.Kind), "" when it is not here or cannot be told.
 	Kind string
+	// Namespace is the swarm stack namespace of TierPlan's own service when Kind is SelfKindSwarmService, "" otherwise.
+	Namespace string
 	// BackendHost is the name the proxy reaches TierPlan by on the network: TierPlan's swarm service name, or on a standalone
 	// host the alias TierPlan connects itself with (SelfBackendAlias).
 	BackendHost string
 	// Foreign is a network of the reserved name that is not TierPlan's.
 	Foreign bool
+	// ForeignMembers name, sorted, the services (on a swarm) or containers (on a standalone host) on TierPlan's own self
+	// network that are neither the proxy nor TierPlan's own (CR-02). While there is one, the trusted-proxy set is withheld:
+	// such a member could send any client address and have it believed. Empty unless Exists.
+	ForeignMembers []string
 	// KeptInUse is TierPlan's own network left in place, though not wanted, because TierPlan (its service, or on a standalone
 	// host its container) or something else is still on it.
 	KeptInUse bool
@@ -306,6 +318,17 @@ func (s *Service) SelfObservationOf(envID string) (SelfObservation, bool) {
 	return o, ok
 }
 
+// SelfStackNamespace is the swarm stack namespace of TierPlan's own service in the environment, as the last pass observed
+// it, "" when TierPlan does not run there as a service of a stack or no pass has observed it. The stack check lets that one
+// stack point at tierplan-self (CR-02). It reads memory only.
+func (s *Service) SelfStackNamespace(envID string) string {
+	o, ok := s.SelfObservationOf(envID)
+	if !ok || o.Kind != SelfKindSwarmService {
+		return ""
+	}
+	return o.Namespace
+}
+
 // observeSelf reads the self network, the ingress networks and the node's bridges on a manager and publishes what it found. A
 // read that fails publishes nothing, so the last observation stands rather than one with a part missing.
 func (s *Service) observeSelf(ctx context.Context, sp *selfPass) {
@@ -319,13 +342,13 @@ func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(fun
 	o := SelfObservation{EnvID: envID, Wanted: sp.known && sp.wanted, Kind: sp.place.Kind, Observed: true}
 	switch sp.place.Kind {
 	case SelfKindSwarmService:
-		o.BackendHost = sp.place.ServiceName
+		o.BackendHost, o.Namespace = sp.place.ServiceName, sp.place.Namespace
 	case SelfKindStandalone:
 		o.BackendHost = SelfBackendAlias
 	}
 	err := read(func(c *dockerx.Client) error {
 		o.Exists, o.NetworkID, o.Subnet, o.Gateway, o.Foreign = false, "", netip.Prefix{}, netip.Addr{}, false
-		o.IngressSubnets, o.BridgeGateways = nil, nil
+		o.IngressSubnets, o.BridgeGateways, o.ForeignMembers = nil, nil, nil
 		rows, err := c.Networks(ctx)
 		if err != nil {
 			return err
@@ -349,6 +372,9 @@ func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(fun
 				}
 				o.Exists, o.NetworkID = true, d.ID
 				o.Subnet, o.Gateway = firstIPAM(d.IPAM)
+				if o.ForeignMembers, err = foreignSelfMembers(ctx, c, sp, d.ID); err != nil {
+					return err
+				}
 			}
 		}
 		for _, name := range selfBridgeNetworks {
@@ -375,6 +401,53 @@ func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(fun
 	o.KeptInUse = o.Exists && sp.known && !sp.wanted && (sp.place.Attached || sp.net.keptInUse)
 	s.publishSelf(o)
 	return o, true
+}
+
+// foreignSelfMembers names, sorted, what is on the self network networkID besides the proxy and TierPlan's own: on a swarm the
+// services whose spec or virtual IPs name it, from the manager's records, other than the proxy service and TierPlan's own
+// service; on a standalone host the containers attached to it other than the proxy container and TierPlan's own (CR-02). A
+// container connected to an overlay at engine level on a node that holds it is not seen on a swarm (the S5 caveat, residual
+// risk 76).
+func foreignSelfMembers(ctx context.Context, c *dockerx.Client, sp *selfPass, networkID string) ([]string, error) {
+	var out []string
+	if sp.info.Swarm {
+		refs, err := c.ServiceRefs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range refs {
+			on := func(id string) bool { return id == networkID || id == ingress.SelfNetworkName }
+			if !slices.ContainsFunc(ref.Networks, on) && !slices.ContainsFunc(ref.VIPNetworks, on) {
+				continue
+			}
+			if ref.Name == ingress.ServiceName || (sp.place.ServiceID != "" && ref.ID == sp.place.ServiceID) ||
+				(sp.place.ServiceName != "" && ref.Name == sp.place.ServiceName) {
+				continue
+			}
+			out = append(out, ref.Name)
+		}
+	} else {
+		rows, err := c.ContainerRowsOnNetwork(ctx, ingress.SelfNetworkName)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if ingress.OwnsProxyContainer(row.Labels) || sameContainer(row.ID, sp.place.ContainerID) {
+				continue
+			}
+			out = append(out, row.Name)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
+}
+
+// sameContainer is whether two container IDs, either of which may be the short form, name the same container.
+func sameContainer(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
 }
 
 // firstIPAM is the first pool of a network with a valid subnet, and its gateway when the engine reports one.
@@ -412,6 +485,11 @@ func (s *Service) publishSelf(o SelfObservation) {
 	if o.Foreign && o.Wanted && (!had || !prev.Foreign || !prev.Wanted) {
 		s.log().Warn("a network named "+ingress.SelfNetworkName+" exists that is not TierPlan's, so the proxy is not attached to it: remove or rename it",
 			"environment", o.EnvID, "code", CodeSelfNetworkForeign)
+	}
+	if len(o.ForeignMembers) > 0 && (!had || !slices.Equal(prev.ForeignMembers, o.ForeignMembers)) {
+		s.log().Warn("something other than the proxy and TierPlan is on "+ingress.SelfNetworkName+", so TierPlan believes no client address "+
+			"forwarded from it until it leaves: remove it from that network", "environment", o.EnvID, "members", strings.Join(o.ForeignMembers, ", "),
+			"code", CodeSelfNetworkForeignMember)
 	}
 	if o.KeptInUse && (!had || !prev.KeptInUse) {
 		s.log().Info("TierPlan's own network "+ingress.SelfNetworkName+" is no longer needed but is kept while something is still on it. "+

@@ -50,7 +50,17 @@ func ingressPolicyFor(ctx context.Context, d StacksDeps, p *rbac.Principal, envI
 	if err != nil {
 		return nil, err
 	}
-	return &stacks.IngressPolicy{StackID: stackID, World: world}, nil
+	pol := &stacks.IngressPolicy{StackID: stackID, World: world}
+	if n, ok := d.SelfRoute.(selfStackNamer); ok {
+		pol.SelfNamespace = n.SelfStackNamespace(envID)
+	}
+	return pol, nil
+}
+
+// selfStackNamer is the optional face of StacksDeps.SelfRoute that names the swarm stack TierPlan's own service runs in, the
+// one stack the check lets point at tierplan-self (CR-02). Without it no stack may.
+type selfStackNamer interface {
+	SelfStackNamespace(envID string) string
 }
 
 // ingressCanView says which environments a message about a held name may name: the environment's own, and, for a

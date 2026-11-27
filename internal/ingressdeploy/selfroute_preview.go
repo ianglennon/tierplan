@@ -372,6 +372,9 @@ type SelfRouteFacts struct {
 	Refusal *Finding
 	// Snippet is the D-03 next step while TierPlan's swarm service is not on the self network; nil otherwise.
 	Snippet *SelfSnippet
+	// ForeignMembers are what the last pass found on the self network besides the proxy and TierPlan (CR-02): while there is
+	// one, TierPlan believes no client address forwarded from it. Empty for none.
+	ForeignMembers []string
 }
 
 // SelfRouteFacts reads the facts of TierPlan's own route in envID. A read of where TierPlan runs that fails is an unknown
@@ -396,6 +399,7 @@ func (s *Service) SelfRouteFacts(ctx context.Context, envID string) (SelfRouteFa
 	f.Direct = directAddress(s.selfURLs(), f.Host)
 	if o, ok := s.SelfObservationOf(envID); ok && o.Observed {
 		f.Attached, f.AttachedKnown = o.Attached, true
+		f.ForeignMembers = slices.Clone(o.ForeignMembers)
 	}
 	if r, ok := firstError(findings); ok {
 		f.Refusal = &r

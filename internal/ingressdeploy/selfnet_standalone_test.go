@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/audit/audittest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 )
@@ -292,4 +293,28 @@ func TestStandaloneEnsureRemovesTheBridgeWhenUnwanted(t *testing.T) {
 			t.Errorf("the pass did not say TierPlan cannot connect itself; logs:\n%s", logs)
 		}
 	})
+}
+
+// TestStandaloneSelfNetworkForeignMembersAreReported (CR-02): a container on the self bridge that is neither the proxy nor
+// TierPlan's own is named in the observation's ForeignMembers; the proxy never is.
+func TestStandaloneSelfNetworkForeignMembersAreReported(t *testing.T) {
+	r, _ := newStandaloneSelfRig(t, standaloneSelfOptions{})
+	r.claimSelf()
+	r.round()
+	if o := r.observation(); !o.Exists || len(o.ForeignMembers) != 0 {
+		t.Fatalf("observation = %+v, want TierPlan's bridge with no foreign member", o)
+	}
+	r.sys.mu.Lock()
+	r.sys.base.Containers = append(r.sys.base.Containers,
+		dockertest.FakeContainer{ID: "c1", Names: []string{"/tierplan"}, State: "running",
+			Networks: map[string]dockertest.FakeEndpoint{ingress.SelfNetworkName: {}}},
+		dockertest.FakeContainer{ID: "evil-1", Names: []string{"/shop-web-1"}, State: "running",
+			Networks: map[string]dockertest.FakeEndpoint{ingress.SelfNetworkName: {}}},
+	)
+	r.sys.reconfigure()
+	r.sys.mu.Unlock()
+	r.round()
+	if o := r.observation(); !slices.Equal(o.ForeignMembers, []string{"shop-web-1"}) {
+		t.Fatalf("observation = %+v, want the foreign member shop-web-1 only", o)
+	}
 }

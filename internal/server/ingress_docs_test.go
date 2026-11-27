@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/ingressrender"
 	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/proto/ingresswire"
 	"github.com/ianglennon/tierplan/proto/wire"
 )
@@ -103,6 +104,8 @@ func TestIngressDocsListEveryStableCode(t *testing.T) {
 		{"stackops.ReasonSelfNotAttached", stackops.ReasonSelfNotAttached},
 		{"stackops.ReasonNotObserved", stackops.ReasonNotObserved},
 		{"ingressdeploy.CodeSelfNetworkForeign", ingressdeploy.CodeSelfNetworkForeign},
+		{"ingressdeploy.CodeSelfNetworkForeignMember", ingressdeploy.CodeSelfNetworkForeignMember},
+		{"stacks.CodeSelfNetworkReserved", stacks.CodeSelfNetworkReserved},
 		{"ingressrender.CodeSelfInput", ingressrender.CodeSelfInput},
 		// Agents and proxies never through ingress: the handshake refusals.
 		{"wire.ReasonSelfNetworkPeer", wire.ReasonSelfNetworkPeer},

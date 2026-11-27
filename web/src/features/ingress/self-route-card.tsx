@@ -321,6 +321,20 @@ export function SelfRouteCard({ envId }: { envId: string }) {
           </AlertDescription>
         </Alert>
       ) : null}
+      {self.foreignMembers?.length ? (
+        <Alert variant="warning">
+          <AlertDescription className="break-words">
+            <span>
+              <Trans
+                i18nKey="ingressPage.settings.selfRoute.foreignMembers"
+                ns="ingressPage"
+                values={{ members: self.foreignMembers.join(", ") }}
+                components={{ mono }}
+              />
+            </span>
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {on && usingRoute(self.host) ? (
         <Alert>
           <AlertDescription className="break-words">

@@ -163,17 +163,31 @@ func (c *Client) RunningContainers(ctx context.Context) ([]ContainerRow, error) 
 // ContainersOnNetwork names the containers, stopped ones too, that are attached to the network of that name, sorted. An
 // attached container is what keeps an engine from removing the network. It is read-only and works on any engine.
 func (c *Client) ContainersOnNetwork(ctx context.Context, network string) ([]string, error) {
+	rows, err := c.ContainerRowsOnNetwork(ctx, network)
+	if err != nil {
+		return nil, err
+	}
+	names := []string{}
+	for _, row := range rows {
+		names = append(names, row.Name)
+	}
+	return names, nil
+}
+
+// ContainerRowsOnNetwork lists the containers, stopped ones too, that are attached to the network of that name, as
+// ContainersOnNetwork names them, with their IDs and labels. It is read-only and works on any engine.
+func (c *Client) ContainerRowsOnNetwork(ctx context.Context, network string) ([]ContainerRow, error) {
 	cs, err := c.cur().ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("list containers on %s: %w", c.t.Describe(), err)
 	}
-	names := []string{}
+	out := []ContainerRow{}
 	for _, row := range containerRows(cs.Items) {
 		if slices.ContainsFunc(row.Networks, func(n ContainerNet) bool { return n.Name == network }) {
-			names = append(names, row.Name)
+			out = append(out, row)
 		}
 	}
-	return names, nil
+	return out, nil
 }
 
 // PublishedPort is one host TCP port a container binds, as ContainersPublishing reads it.

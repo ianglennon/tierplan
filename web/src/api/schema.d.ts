@@ -11160,6 +11160,8 @@ export interface components {
             carveOut: boolean;
             /** @description The address that keeps reaching TierPlan whatever the route does, a full URL with the port; empty when that is the page's own origin */
             directAddress: string;
+            /** @description The services (on a swarm) or containers (on a standalone host) the last pass found on tierplan-self besides the ingress proxy and TierPlan itself, by name. While there is one, TierPlan believes no client address forwarded over that network (self_network_foreign_member): remove them from it. Absent when there are none */
+            foreignMembers?: string[] | null;
             /**
              * @description yes: TierPlan runs in this environment. unknown: TierPlan cannot tell, so it refuses to switch its route on here (refusal says so)
              * @enum {string}

@@ -99,6 +99,8 @@ type IngressSelfRouteBody struct {
 	Refusal       *IngressSelfRefusalBody `json:"refusal,omitempty" doc:"Why the route cannot be switched on here, known before the switch is pressed; absent when nothing stands in the way"`
 	Snippet       *IngressSelfSnippetBody `json:"snippet,omitempty" doc:"In state self_not_attached on a swarm, the next step that puts TierPlan's service on the tierplan-self network; absent otherwise"`
 	CarveOut      bool                    `json:"carveOut" doc:"True when TierPlan's own certificate renews over the HTTP-01 challenge here, so the proxies carry the challenge to TierPlan"`
+	// ForeignMembers is the self_network_foreign_member warning (CR-02).
+	ForeignMembers []string `json:"foreignMembers,omitempty" doc:"The services (on a swarm) or containers (on a standalone host) the last pass found on tierplan-self besides the ingress proxy and TierPlan itself, by name. While there is one, TierPlan believes no client address forwarded over that network (self_network_foreign_member): remove them from it. Absent when there are none"`
 }
 
 // IngressStatusOutput wraps IngressStatusBody for huma.
@@ -720,7 +722,7 @@ func (d IngressDeployDeps) selfRouteStatus(ctx context.Context, envID string, en
 	}
 	body := &IngressSelfRouteBody{
 		Here: string(f.Here), On: f.On, Host: f.Host, State: selfStateOff, DirectAddress: f.Direct, Kind: f.Kind,
-		Attached: f.Attached, Network: ingress.SelfNetworkName, CarveOut: f.CarveOut,
+		Attached: f.Attached, Network: ingress.SelfNetworkName, CarveOut: f.CarveOut, ForeignMembers: f.ForeignMembers,
 	}
 	if body.Here != string(ingressdeploy.SelfHereYes) {
 		body.Here, body.Kind = string(ingressdeploy.SelfHereUnknown), ""

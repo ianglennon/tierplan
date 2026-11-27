@@ -651,6 +651,33 @@ describe("the safeguards", () => {
     expect(within(alert).getByText(DIRECT).className).toContain("font-mono");
   });
 
+  it("warns, naming them, when something other than the proxy and TierPlan is on tierplan-self", async () => {
+    selfRoute = route({
+      on: true,
+      host: HOST,
+      state: "serving",
+      attached: true,
+      foreignMembers: ["shop_db", "shop_web"],
+    });
+    mountCard();
+    const region = await card();
+    const alert = within(region)
+      .getByText(/Something other than the ingress proxy and TierPlan/)
+      .closest('[data-slot="alert"]') as HTMLElement;
+    expect(alert.textContent).toBe(
+      "Something other than the ingress proxy and TierPlan is on the tierplan-self network: shop_db, shop_web. TierPlan believes no client address forwarded over it until that leaves the network. Take it off tierplan-self.",
+    );
+    expect(variantOf(alert)).toBe("warning");
+    expect(within(alert).getByText("shop_db, shop_web").className).toContain("font-mono");
+  });
+
+  it("does not warn of members when only the proxy and TierPlan are on the network", async () => {
+    selfRoute = route({ on: true, host: HOST, state: "serving", attached: true });
+    mountCard();
+    const region = await card();
+    expect(within(region).queryByText(/Something other than the ingress proxy/)).toBeNull();
+  });
+
   it("does not warn when the page comes from another address", async () => {
     selfRoute = route({ on: true, host: HOST, state: "serving", attached: true });
     mountCard();
