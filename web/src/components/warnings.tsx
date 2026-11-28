@@ -678,8 +678,8 @@ const INGRESS_RENDER_CODES = [
 ] as const;
 
 // The title and body of one ingress item (D-10, D-29, D-32, D-41, D-45), or null for an id this
-// build has no words for. The server sends facts, never sentences. Every value is plain text, and
-// the item carries no link: there is no ingress page until Phase 27.
+// build has no words for. The server sends facts, never sentences. Every value is plain text. The
+// item's link and the "nothing to dismiss" rule live in IngressEntry, not here.
 function ingressItemCopy(w: Warning, t: Translate): { title: string; body: string } | null {
   const g = w.ingress;
   const hostname = g?.hostname ?? "";
@@ -745,15 +745,37 @@ function ingressItemCopy(w: Warning, t: Translate): { title: string; body: strin
   }
 }
 
-// One ingress certificate item: words only, no link, and nothing to dismiss. It derives from live
-// state and ends when its cause does.
-function IngressEntry({ w }: { w: Warning }) {
+// The one link of an ingress item, or null when it has nothing to follow. The link is chosen here, not in
+// ingressItemCopy, so no id can leave it off (like HttpsEntry's). A certificate item opens its environment's
+// Certificates tab filtered to the named hostname.
+function IngressLink({ w, close }: { w: Warning; close: () => void }) {
+  const t = useT();
+  const envId = w.ingress?.envId;
+  if (w.id !== "ingress_cert_expiring" || !envId) return null;
+  const host = w.ingress?.hostname;
+  return (
+    <Link
+      to="/env/$envId/ingress/certificates"
+      params={{ envId }}
+      search={host ? { host } : {}}
+      className={`${linkClass} text-sm ${touchLink}`}
+      onClick={close}
+    >
+      {t("bell.ingress.link.certificate")}
+    </Link>
+  );
+}
+
+// One ingress item: the title and body the kind words, then its one link, and nothing to dismiss. It derives from
+// live state and ends when its cause does.
+function IngressEntry({ w, close }: { w: Warning; close: () => void }) {
   const t = useT();
   const copy = ingressItemCopy(w, t);
   if (!copy) return null;
   return (
     <BellItem id={w.id} title={copy.title}>
       <ItemDescription className="line-clamp-none wrap-anywhere">{copy.body}</ItemDescription>
+      <IngressLink w={w} close={close} />
     </BellItem>
   );
 }
@@ -1667,7 +1689,7 @@ export function HealthBell() {
                     case "https":
                       return <HttpsEntry key={entry.key} w={entry.w} close={actions.close} />;
                     case "ingress":
-                      return <IngressEntry key={entry.key} w={entry.w} />;
+                      return <IngressEntry key={entry.key} w={entry.w} close={actions.close} />;
                     case "keyBackup":
                       return (
                         <Item

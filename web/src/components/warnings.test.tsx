@@ -136,6 +136,7 @@ function makeRouter() {
       page("/settings/backup"),
       page("/settings/https"),
       page("/env/$envId"),
+      page("/env/$envId/ingress/certificates"),
       page("/env/$envId/services"),
       page("/env/$envId/services/$serviceId"),
       page("/env/$envId/stacks"),
@@ -2233,10 +2234,11 @@ const itemOf = (id: string) => {
 };
 
 describe("HealthBell ingress certificate items", () => {
-  it("words a certificate 14 days out with its hostname and end date, and no link", async () => {
+  it("words a certificate 14 days out with its hostname and end date, and links to its certificate", async () => {
     const end = "2026-12-01T09:00:00Z";
     items = [
       ingressWarning("ingress_cert_expiring", {
+        envId: "e1",
         hostname: "app.example.com",
         source: "acme",
         issuer: "production",
@@ -2251,7 +2253,12 @@ describe("HealthBell ingress certificate items", () => {
     expect(itemOf("ingress_cert_expiring").textContent).toContain(
       `The certificate for app.example.com expires on ${certDay(end)} and has not renewed.`,
     );
-    expect(within(itemOf("ingress_cert_expiring")).queryAllByRole("link")).toHaveLength(0);
+    const links = within(itemOf("ingress_cert_expiring")).getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe(
+      "/env/e1/ingress/certificates?host=app.example.com",
+    );
+    expect(links[0]?.textContent).toBe("View certificate");
     expect(screen.queryByRole("button", { name: /dismiss|acknowledge/i })).toBeNull();
   });
 

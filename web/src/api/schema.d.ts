@@ -18647,6 +18647,8 @@ export interface components {
              * @description For ingress_cert_expiring: the warning reached, 14 or 7 days before expiry
              */
             days?: number;
+            /** @description For ingress_cert_expiring and ingress_cert_renewal_failed: the environment of the named certificate, so the bell can open its Certificates tab; absent for ingress_certs_paused */
+            envId?: string;
             /** @description For ingress_cert_expiring and ingress_cert_renewal_failed: the most urgent hostname */
             hostname?: string;
             /**
@@ -18686,6 +18688,8 @@ export interface components {
              * @enum {string}
              */
             code: "ingress_render_unsafe_value" | "ingress_render_strip_root" | "ingress_render_template_delimiter" | "ingress_render_name_collision" | "ingress_render_read_failed" | "ingress_render_failed" | "ingress_schema_unsupported";
+            /** @description The environment of the named failure, so the bell can open that environment's Routes tab */
+            envId?: string;
             /** @description The hostname of the route that could not be rendered; absent when the failure is not about one route */
             hostname?: string;
             /**

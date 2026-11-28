@@ -29714,6 +29714,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "envId": {
+            "description": "For ingress_cert_expiring and ingress_cert_renewal_failed: the environment of the named certificate, so the bell can open its Certificates tab; absent for ingress_certs_paused",
+            "type": "string"
+          },
           "hostname": {
             "description": "For ingress_cert_expiring and ingress_cert_renewal_failed: the most urgent hostname",
             "type": "string"
@@ -29776,6 +29780,10 @@
               "ingress_render_failed",
               "ingress_schema_unsupported"
             ],
+            "type": "string"
+          },
+          "envId": {
+            "description": "The environment of the named failure, so the bell can open that environment's Routes tab",
             "type": "string"
           },
           "hostname": {

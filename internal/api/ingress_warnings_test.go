@@ -55,6 +55,9 @@ func TestIngressExpiringCertificateReachesTheBell(t *testing.T) {
 	if in.Hostname != "web.apps.example.com" || in.Days != 14 || in.NotAfter == nil || !in.NotAfter.Equal(end) || in.More != 0 {
 		t.Errorf("the item is %+v, want the hostname, days 14, the end and no others", in)
 	}
+	if in.EnvID != f.envA {
+		t.Errorf("the item names environment %q, want %q (the bell opens its Certificates tab)", in.EnvID, f.envA)
+	}
 
 	// An environment Admin lacks the global settings.read the feed needs, so they are refused, and nothing of
 	// the certificates reaches them (A8: they see their certificates through the API list).

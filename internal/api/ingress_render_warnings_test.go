@@ -48,6 +48,9 @@ func TestIngressRenderFailureReachesTheBell(t *testing.T) {
 	if in.Hostname != "app.example.com" || in.Path != "/api" || in.Code != "ingress_render_unsafe_value" || in.More != 0 {
 		t.Errorf("the item is %+v, want the route, the code and no others", in)
 	}
+	if in.EnvID != f.envA {
+		t.Errorf("the item names environment %q, want %q (the bell opens its Routes tab)", in.EnvID, f.envA)
+	}
 
 	// An environment Admin lacks the global settings.read the feed needs; whatever they are answered, it names no
 	// render failure.
@@ -137,8 +140,8 @@ func TestIngressRenderItemIsDerivedOnRead(t *testing.T) {
 	}
 }
 
-// T-21-45: the item is facts only: its JSON has the keys id and ingressRender, and ingressRender only hostname, path,
-// code and more, whatever the failure was handed.
+// T-21-45: the item is facts only: its JSON has the keys id and ingressRender, and ingressRender only envId (an
+// identifier), hostname, path, code and more, whatever the failure was handed.
 func TestIngressRenderItemCarriesFactsOnly(t *testing.T) {
 	t.Parallel()
 	f := newIngressFix(t)
@@ -175,8 +178,8 @@ func TestIngressRenderItemCarriesFactsOnly(t *testing.T) {
 	if err := json.Unmarshal(item["ingressRender"], &body); err != nil {
 		t.Fatalf("decode the body: %v", err)
 	}
-	if keys := sortedKeys(body); !slices.Equal(keys, []string{"code", "hostname", "more", "path"}) {
-		t.Errorf("the body has the keys %v, want code, hostname, more and path", keys)
+	if keys := sortedKeys(body); !slices.Equal(keys, []string{"code", "envId", "hostname", "more", "path"}) {
+		t.Errorf("the body has the keys %v, want code, envId, hostname, more and path", keys)
 	}
 }
 

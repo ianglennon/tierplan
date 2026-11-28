@@ -219,6 +219,9 @@
       "link": "View"
     },
     "ingress": {
+      "link": {
+        "certificate": "View certificate"
+      },
       "more_one": "and {{count}} more",
       "more_other": "and {{count}} more",
       "render": {
