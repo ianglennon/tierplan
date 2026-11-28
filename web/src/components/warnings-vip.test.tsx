@@ -66,8 +66,13 @@ function renderBell() {
     ),
   });
   const home = createRoute({ getParentRoute: () => root, path: "/", component: () => null });
+  const nodes = createRoute({
+    getParentRoute: () => root,
+    path: "/env/$envId/ingress/nodes",
+    component: () => <p data-testid="page">nodes</p>,
+  });
   const router = createRouter({
-    routeTree: root.addChildren([home]),
+    routeTree: root.addChildren([home, nodes]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   render(
@@ -100,7 +105,7 @@ async function drawn(): Promise<Drawn[]> {
     return {
       id: el.getAttribute("data-warning") ?? "",
       title,
-      body: el.textContent?.slice(title.length) ?? "",
+      body: el.querySelector('[data-slot="item-description"]')?.textContent ?? "",
       el,
     };
   });
@@ -126,7 +131,7 @@ const item = (id: string, rest: Record<string, unknown> = {}, severity = "warnin
 });
 
 describe("virtual IP bell items (tracer)", () => {
-  it("draws an address nobody holds: its title, its words and nothing to click", async () => {
+  it("draws an address nobody holds: its title, its words and one link to the ingress nodes", async () => {
     envItems = [
       item(
         "vip_no_holder",
@@ -139,7 +144,27 @@ describe("virtual IP bell items (tracer)", () => {
     expect(body).toBe(
       "No node holds 192.168.1.250/24, so ingress doesn't answer on it. This began 3 h ago. Check that a proxy is ready on at least one node.",
     );
-    expect(el.querySelector("a, button")).toBeNull();
+    const links = el.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("/env/e1/ingress/nodes");
+    expect(links[0]?.textContent).toBe("View ingress nodes");
+    expect(el.querySelector("button")).toBeNull();
+  });
+
+  it.each([
+    "vip_no_holder",
+    "vip_multiple_holders",
+    "vip_holder_unheard",
+    "vip_moved",
+    "vip_foreign_router",
+    "vip_clock_skew",
+    "vip_privileged_lost",
+  ])("%s draws one link to the ingress nodes", async (id) => {
+    envItems = [item(id, { vip: { address: "10.0.0.9/24" }, node: "node-a", count: 1 })];
+    const { el } = await itemOf(id);
+    const links = el.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("/env/e1/ingress/nodes");
   });
 });
 
@@ -177,7 +202,7 @@ describe("virtual IP bell items (each ID)", () => {
     expect(body).toBe(
       "node-a was the last to hold 192.168.1.250/24. TierPlan last heard from it 5 min ago, and no other node has taken the address since. If node-a is down, ingress doesn't answer on 192.168.1.250/24.",
     );
-    expect(el.querySelector("a, button")).toBeNull();
+    expect(el.querySelector("button")).toBeNull();
   });
 
   it("vip_moved names the latest move once, and counts several", async () => {

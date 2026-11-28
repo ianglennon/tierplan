@@ -220,7 +220,8 @@
     },
     "ingress": {
       "link": {
-        "certificate": "View certificate"
+        "certificate": "View certificate",
+        "routes": "View routes"
       },
       "more_one": "and {{count}} more",
       "more_other": "and {{count}} more",
@@ -284,6 +285,7 @@
       }
     },
     "vip": {
+      "link": "View ingress nodes",
       "noHolder": {
         "title": "No node holds the virtual IP on {{env}}",
         "body": "No node holds {{address}}, so ingress doesn't answer on it. This began {{time}}. Check that a proxy is ready on at least one node."

@@ -136,6 +136,7 @@ function makeRouter() {
       page("/settings/backup"),
       page("/settings/https"),
       page("/env/$envId"),
+      page("/env/$envId/ingress"),
       page("/env/$envId/ingress/certificates"),
       page("/env/$envId/services"),
       page("/env/$envId/services/$serviceId"),
@@ -2314,6 +2315,7 @@ describe("HealthBell ingress certificate items", () => {
     const next = "2026-11-13T14:05:00Z";
     items = [
       ingressWarning("ingress_cert_renewal_failed", {
+        envId: "e1",
         hostname: "app.example.com",
         issuer: "production",
         source: "acme",
@@ -2331,7 +2333,12 @@ describe("HealthBell ingress certificate items", () => {
     );
     expect(text).toContain(`Next attempt ${certTime(next)}.`);
     expect(text).toContain("and 1 more");
-    expect(within(itemOf("ingress_cert_renewal_failed")).queryAllByRole("link")).toHaveLength(0);
+    const links = within(itemOf("ingress_cert_renewal_failed")).getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe(
+      "/env/e1/ingress/certificates?host=app.example.com",
+    );
+    expect(links[0]?.textContent).toBe("View certificate");
   });
 
   it("falls back to a generic phrase for a class it has no words for", async () => {
@@ -2368,7 +2375,7 @@ describe("HealthBell ingress certificate items", () => {
     expect(text).toContain("never served");
   });
 
-  it("says certificates are paused after a restore and that an instance admin can resume them", async () => {
+  it("says certificates are paused after a restore and links to Settings > HTTPS to resume them", async () => {
     items = [ingressWarning("ingress_certs_paused", { reason: "restore" })];
     renderWarnings();
     await openBell("Warnings, 1 item");
@@ -2376,7 +2383,49 @@ describe("HealthBell ingress certificate items", () => {
     expect(itemOf("ingress_certs_paused").textContent).toContain(
       "restored from a backup, so it won't order or renew certificates until an instance admin resumes them.",
     );
-    expect(within(itemOf("ingress_certs_paused")).queryAllByRole("link")).toHaveLength(0);
+    const links = within(itemOf("ingress_certs_paused")).getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("/settings/https");
+    expect(links[0]?.textContent).toBe("Open HTTPS settings");
+  });
+
+  it("draws no link for a certificate item that arrives without an environment", async () => {
+    items = [
+      ingressWarning("ingress_cert_expiring", {
+        hostname: "a.example.com",
+        notAfter: "2026-12-01T09:00:00Z",
+        days: 14,
+      }),
+      ingressWarning("ingress_cert_renewal_failed", {
+        hostname: "a.example.com",
+        class: "internal",
+        issuer: "production",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 2 items");
+    expect(await screen.findByText("Certificate expires soon")).toBeTruthy();
+    expect(within(itemOf("ingress_cert_expiring")).queryAllByRole("link")).toHaveLength(0);
+    expect(within(itemOf("ingress_cert_renewal_failed")).queryAllByRole("link")).toHaveLength(0);
+  });
+
+  it("follows the certificate link to the Certificates tab and closes the list", async () => {
+    items = [
+      ingressWarning("ingress_cert_expiring", {
+        envId: "e1",
+        hostname: "app.example.com",
+        notAfter: "2026-12-01T09:00:00Z",
+        days: 14,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    fireEvent.click(await screen.findByRole("link", { name: "View certificate" }));
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe("/env/e1/ingress/certificates"),
+    );
+    expect(router.state.location.search).toEqual({ host: "app.example.com" });
+    await waitFor(() => expect(screen.queryByText("Certificate expires soon")).toBeNull());
   });
 
   it("lists the items after the HTTPS ones, in the order paused, renewal failed, expiring", async () => {
@@ -2413,9 +2462,10 @@ const renderWarning = (ingressRender: Record<string, unknown>) => ({
 });
 
 describe("HealthBell ingress render failure item", () => {
-  it("names the route, the reason in words and that the proxy keeps its last working configuration, with no link", async () => {
+  it("names the route, the reason in words and that the proxy keeps its last working configuration, with a link to the routes", async () => {
     items = [
       renderWarning({
+        envId: "e1",
         hostname: "app.example.com",
         path: "/api",
         code: "ingress_render_unsafe_value",
@@ -2429,6 +2479,17 @@ describe("HealthBell ingress render failure item", () => {
     expect(text).toContain("a brace or backtick");
     expect(text).toContain("keeps serving its last working configuration");
     expect(text).not.toContain("ingress_render_unsafe_value");
+    const links = within(itemOf("ingress_render_failed")).getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("/env/e1/ingress");
+    expect(links[0]?.textContent).toBe("View routes");
+  });
+
+  it("draws no link for a render item that arrives without an environment", async () => {
+    items = [renderWarning({ hostname: "app.example.com", code: "ingress_render_failed" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Proxy configuration not updated")).toBeTruthy();
     expect(within(itemOf("ingress_render_failed")).queryAllByRole("link")).toHaveLength(0);
   });
 

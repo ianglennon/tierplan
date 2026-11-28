@@ -385,7 +385,7 @@ export function bellEntries(
       w,
     });
   }
-  // Ingress certificate items follow the HTTPS ones: text only, one per kind (D-41).
+  // Ingress certificate items follow the HTTPS ones: one per kind, each with its one link (D-41).
   const ingressRank = (w: Warning) => INGRESS_ORDER.findIndex((id) => id === w.id);
   for (const w of [...(instance.ingress ?? [])].sort((a, b) => ingressRank(a) - ingressRank(b))) {
     entries.push({ kind: "ingress", key: w.id, severity: "warning", w });
@@ -747,23 +747,49 @@ function ingressItemCopy(w: Warning, t: Translate): { title: string; body: strin
 
 // The one link of an ingress item, or null when it has nothing to follow. The link is chosen here, not in
 // ingressItemCopy, so no id can leave it off (like HttpsEntry's). A certificate item opens its environment's
-// Certificates tab filtered to the named hostname.
+// Certificates tab filtered to the named hostname; a render failure opens its environment's Routes tab; the
+// install-wide pause has no environment, so it opens Settings > HTTPS, where the Ingress certificates card
+// resumes issuing. A certificate or render item the server sent without an environment gets no link, rather
+// than an href with an empty ID. An id this build has no copy for draws nothing at all (IngressEntry).
 function IngressLink({ w, close }: { w: Warning; close: () => void }) {
   const t = useT();
-  const envId = w.ingress?.envId;
-  if (w.id !== "ingress_cert_expiring" || !envId) return null;
-  const host = w.ingress?.hostname;
-  return (
-    <Link
-      to="/env/$envId/ingress/certificates"
-      params={{ envId }}
-      search={host ? { host } : {}}
-      className={`${linkClass} text-sm ${touchLink}`}
-      onClick={close}
-    >
-      {t("bell.ingress.link.certificate")}
-    </Link>
-  );
+  const className = `${linkClass} text-sm ${touchLink}`;
+  switch (w.id) {
+    case "ingress_cert_expiring":
+    case "ingress_cert_renewal_failed": {
+      const envId = w.ingress?.envId;
+      if (!envId) return null;
+      const host = w.ingress?.hostname;
+      return (
+        <Link
+          to="/env/$envId/ingress/certificates"
+          params={{ envId }}
+          search={host ? { host } : {}}
+          className={className}
+          onClick={close}
+        >
+          {t("bell.ingress.link.certificate")}
+        </Link>
+      );
+    }
+    case "ingress_render_failed": {
+      const envId = w.ingressRender?.envId;
+      if (!envId) return null;
+      return (
+        <Link to="/env/$envId/ingress" params={{ envId }} className={className} onClick={close}>
+          {t("bell.ingress.link.routes")}
+        </Link>
+      );
+    }
+    case "ingress_certs_paused":
+      return (
+        <Link to="/settings/https" className={className} onClick={close}>
+          {t("bell.https.link")}
+        </Link>
+      );
+    default:
+      return null;
+  }
 }
 
 // One ingress item: the title and body the kind words, then its one link, and nothing to dismiss. It derives from
@@ -794,7 +820,8 @@ const tidy = (text: string) =>
 // The title and body of one virtual IP item (Phase 26, UI-SPEC S4), or null for an id that is not one. The
 // server sends facts, never sentences; a fact it does not have (no sender, no offset, no node on a move) picks
 // the wording that does not need it, so nothing reads blank. Every value is plain text, and the item carries
-// no link (there is no ingress page until Phase 27) and nothing to dismiss: it ends when its cause does.
+// no link: VipEntry draws the one link, to the environment's ingress Nodes tab. There is nothing to dismiss: it
+// ends when its cause does.
 function vipItemCopy(
   w: EnvWarning,
   t: Translate,
@@ -875,8 +902,11 @@ function vipItemCopy(
   }
 }
 
-// One virtual IP item: words only, no link, nothing to dismiss.
-function VipEntry({ w }: { w: EnvWarning }) {
+// One virtual IP item: the title and body the kind words, then one link to the environment's ingress Nodes tab,
+// where the virtual IP status card and the moves are. The link lives here, not in the copy, so no id can leave it
+// off. The server sends these items only to holders of ingress.manage, so the target never shows them the
+// no-permission page. Nothing to dismiss.
+function VipEntry({ w, close }: { w: EnvWarning; close: () => void }) {
   const t = useT();
   const now = useNow();
   const copy = vipItemCopy(w, t, now);
@@ -884,6 +914,16 @@ function VipEntry({ w }: { w: EnvWarning }) {
   return (
     <BellItem id={w.id} title={copy.title}>
       <ItemDescription className="line-clamp-none wrap-anywhere">{copy.body}</ItemDescription>
+      {w.envId ? (
+        <Link
+          to="/env/$envId/ingress/nodes"
+          params={{ envId: w.envId }}
+          className={`${linkClass} text-sm ${touchLink}`}
+          onClick={close}
+        >
+          {t("bell.vip.link")}
+        </Link>
+      ) : null}
     </BellItem>
   );
 }
@@ -1365,7 +1405,7 @@ function EnvEntry({ w, close, finishSetup, canFinishSetup }: { w: EnvWarning } &
     case "vip_foreign_router":
     case "vip_clock_skew":
     case "vip_privileged_lost":
-      return <VipEntry w={w} />;
+      return <VipEntry w={w} close={close} />;
     default:
       // A problem this build has no wording for says nothing rather than something wrong.
       return null;
