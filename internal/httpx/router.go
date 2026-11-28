@@ -68,6 +68,11 @@ type Options struct {
 	MutationGuard MutationGuard
 	// TrustedProxies are the peers whose X-Forwarded-For is believed (D-39).
 	TrustedProxies []netip.Prefix
+	// LiveTrustedProxies is read on every request and its prefixes are trusted in addition to
+	// TrustedProxies (D-06): the self network's subnet minus its gateway, which the ingress ensure
+	// loop refreshes while the server runs. A peer inside it is also on the self network, which
+	// PeerOnSelfNetwork reports (A-05). Nil is none, so a router built without it behaves as before.
+	LiveTrustedProxies func() []netip.Prefix
 	// Proxy notices a misconfigured reverse proxy from the requests it carries
 	// (D-53). Nil observes nothing.
 	Proxy *ProxyObserver
@@ -75,6 +80,13 @@ type Options struct {
 	// request so it can change at runtime. Empty means "the request's own
 	// origin", which is the state before setup stores a public URL (D-04).
 	PublicOrigin func() string
+	// ExtraOrigins returns the origins a mutation may also come from, read on every request
+	// (D-07): the route host's origin while TierPlan's own route is on, plus the agent URL's
+	// whenever one is set, which the server derives from the stored claim and the stored URLs. It is never derived from a request, so no header can widen the set.
+	// Each entry is compared in canonical form (lower case, default port dropped); an entry that
+	// is not an absolute http(s) URL is ignored. Nil or empty is none, so the public origin alone
+	// is accepted, as before.
+	ExtraOrigins func() []string
 	// Logger receives policy warnings and errors. Nil means slog.Default().
 	Logger *slog.Logger
 	// HSTS decides per request what Strict-Transport-Security carries: the whole header value, such
@@ -110,7 +122,7 @@ func New(opts Options) *Router {
 	r := &Router{mux: chi.NewRouter(), fallback: opts.Fallback, opts: opts}
 
 	r.mux.Use(middleware.RequestID)
-	r.mux.Use(clientIP(opts.TrustedProxies))
+	r.mux.Use(clientIP(opts.TrustedProxies, opts.LiveTrustedProxies))
 	if opts.Proxy != nil {
 		r.mux.Use(opts.Proxy.Observe)
 	}

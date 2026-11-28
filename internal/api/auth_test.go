@@ -204,6 +204,9 @@ type authFixture struct {
 	ingressNotifier *ingress.Notifier
 	// stackIngressRoutes is what the stack routes' state is read from besides the store and the engine (plan 24-25).
 	stackIngressRoutes api.RouteSources
+	// stackSelfRoute, when set, is what the routes list and the ingress status read TierPlan's own route's facts from in
+	// place of the deployer (plan 28-34).
+	stackSelfRoute api.SelfRouteReader
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
 	stackReadEnv func(context.Context, string) error
 	// stackClock is the clock the waits of a stack deploy run on; nil is the wall clock (plan 12-23).
@@ -261,6 +264,8 @@ type authFixture struct {
 	shellsReg      *shells.Registry
 	shellsPending  time.Duration
 	shellsControls shells.Controls
+	// shellsExtraOrigins is the shell routes' ExtraOrigins (D-07); nil is none.
+	shellsExtraOrigins func() []string
 	// brk, when set with envSvc, is the health broker behind GET
 	// /api/environments/stream (plan 02-12); envStreamHeartbeat, envStreamMaxStreams
 	// and envStreamMaxLifetime tune that stream for a test.
@@ -297,6 +302,9 @@ type authFixture struct {
 	// settingsAgents, when set, is what the settings routes count agents with and
 	// push new addresses through (plan 02-26).
 	settingsAgents api.SettingsAgents
+	// settingsIngressHosts, when set, is the install's ingress hostnames the settings
+	// routes check the agent URL and the public URL against (plan 28-23).
+	settingsIngressHosts func(context.Context) (map[string]ingress.ClaimInfo, error)
 	// envWarningsNow is the clock of GET /api/environments/warnings; nil means the wall clock.
 	envWarningsNow func() time.Time
 	// envWarningsVIP reads the virtual IP facts of the same route; nil lists none.
@@ -441,7 +449,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Access: f.access, Store: f.st, Checker: checker, Instance: f.inst, Sessions: f.sess,
 		Limiter: inviteLimiter, AnonAudit: f.inviteAudit, Now: f.clk.now, Log: log,
 	})
-	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, Log: log})
+	api.RegisterSettings(r, api.SettingsDeps{Instance: f.inst, Store: f.st, Audit: f.aud, Agents: f.settingsAgents, IngressHosts: f.settingsIngressHosts, Log: log})
 	api.RegisterHTTPS(r, f.https)
 	api.RegisterLocalHost(r, f.localHost)
 	api.RegisterEnvironments(r, api.EnvironmentsDeps{
@@ -644,6 +652,13 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		if f.stackBeforeLock != nil {
 			stackDeps.Locks = beforeLock{Locks: f.stackLocks, before: f.stackBeforeLock}
 		}
+		// TierPlan's own route's facts come from the deployer, as on a server, unless the test gives its own reader.
+		switch {
+		case f.stackSelfRoute != nil:
+			stackDeps.SelfRoute = f.stackSelfRoute
+		case f.ingressDeploy != nil:
+			stackDeps.SelfRoute = f.ingressDeploy
+		}
 		stackDeps = stackDeps.WithDeployCancels() // as the server does, before the deps are copied
 		f.stackDeps = stackDeps
 		// The image update routes deploy a stack through the stack's own engine, so they hold the same deps and the same lock.
@@ -681,7 +696,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		}
 		api.RegisterShells(r, api.ShellsDeps{
 			Aggregator: f.agg, Registry: f.shellsReg, Audit: f.aud, Checker: checker, Instance: f.inst, SelfContainerID: f.envSvc.SelfContainerID(),
-			PendingTTL: f.shellsPending, Controls: f.shellsControls, Store: f.st, Now: f.clk.now, Log: log,
+			PendingTTL: f.shellsPending, Controls: f.shellsControls, ExtraOrigins: f.shellsExtraOrigins, Store: f.st, Now: f.clk.now, Log: log,
 		})
 	}
 	if f.envSvc != nil && f.agg != nil && f.hub != nil {
@@ -738,8 +753,10 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		nodesDeps.Issuer = f.ingressIssuer
 	}
 	api.RegisterIngressNodes(r, nodesDeps)
-	api.RegisterIngressDeploy(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
+	// The status derives TierPlan's own route through the stack routes' deps, as on a server.
+	api.RegisterIngressDeploy(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log, Routes: f.stackDeps})
 	api.RegisterIngressVIP(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
+	api.RegisterIngressSelfRoute(r, api.IngressDeployDeps{Service: f.ingressDeploy, Jobs: f.ingressDeployJobs, Checker: checker, Log: log})
 	api.RegisterGit(r, gitDeps)
 	api.RegisterGitHooks(r, api.GitHookDeps{
 		Repo: stackops.Repo{Store: f.st, Vault: f.v, Now: f.clk.now}, Sync: gitDeps.Sync, Access: f.access, Audit: f.aud, Log: log, Now: f.clk.now,

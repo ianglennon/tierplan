@@ -75,7 +75,7 @@ func TestHubEnrolTracer(t *testing.T) {
 
 	// After hello the node receives its environment's bundle: one binary envelope DecodeBundle accepts with
 	// the pinned instance ID.
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	got := c.NextBundle(t)
 	if got.ID != want.ID {
 		t.Errorf("bundle ID = %q, want %q", got.ID, want.ID)

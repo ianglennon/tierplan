@@ -20,6 +20,13 @@
 #    where it turns off verification of the dev proxy's upstream. `secure: false`
 #    elsewhere (a cookie assertion in an e2e spec) is not a TLS setting and is not
 #    matched, nor is docker's --insecure-registry.
+# 3. The ingress renderer's goldens: the servers transport of TierPlan's own route
+#    (t-self, Phase 28 D-14) never carries the skip-verification key. Each
+#    tierplan.yml under internal/ingressrender/testdata/golden is read block by
+#    block: the lines of a `t-self:` mapping, up to the next line at the same or a
+#    lower indent, must not name the key in any letter case (Traefik reads keys
+#    without regard to case). The user transport t-user-https skips verification on
+#    purpose (Phase 24 D-13) and is not matched by this rule.
 #
 # Usage: scripts/insecure-tls-check.sh [directory]
 # The directory defaults to the repository root. Dependency and VCS directories
@@ -99,5 +106,38 @@ if [ "${#VITE_FILES[@]}" -gt 0 ]; then
   while IFS= read -r file; do
     report "${file}" "secure: false"
   done < <(grep -lIE -e '(^|[^[:alnum:]_])secure[[:space:]]*:[[:space:]]*false' "${VITE_FILES[@]}" 2>/dev/null | sort || true)
+fi
+
+# --- The renderer's goldens: t-self, TierPlan's own route, always verifies (D-14) ---
+GOLDEN_DIR="internal/ingressrender/testdata/golden"
+# Traefik's spelling of the key, in two halves like SETTING.
+TRAEFIK_KEY="insecure""SkipVerify"
+if [ -d "${GOLDEN_DIR}" ]; then
+  while IFS= read -r file; do
+    # Prints 1 when a t-self block (block or flow style, the name quoted or not) names the key.
+    found="$(awk -v key="${TRAEFIK_KEY}" '
+      function indent(line) { match(line, /^[ ]*/); return RLENGTH }
+      {
+        if (inblk) {
+          if ($0 ~ /^[[:space:]]*(#.*)?$/) next
+          if (indent($0) > ind) {
+            if (index(tolower($0), tolower(key))) hit = 1
+            next
+          }
+          inblk = 0
+        }
+        if ($0 ~ /^[ ]*["'"'"']?t-self["'"'"']?[[:space:]]*:/) {
+          inblk = 1
+          ind = indent($0)
+          if (index(tolower($0), tolower(key))) hit = 1
+        }
+      }
+      END { print hit ? 1 : 0 }
+    ' "${file}")"
+    if [ "${found}" = "1" ]; then
+      echo "INSECURE TLS: ${file#./} t-self carries ${TRAEFIK_KEY}" >&2
+      hits=$((hits + 1))
+    fi
+  done < <(find "${GOLDEN_DIR}" -name tierplan.yml -type f 2>/dev/null | sort)
 fi
 [ "${hits}" -eq 0 ] || exit 1

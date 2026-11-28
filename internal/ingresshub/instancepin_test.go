@@ -79,7 +79,7 @@ func TestInstancePinInWelcomeAndEveryBundle(t *testing.T) {
 	if id.InstanceID != stored {
 		t.Errorf("the node pinned %q, want %q", id.InstanceID, stored)
 	}
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 
 	first := ipEnvelope(t, c)
 	if first.InstanceID != stored || first.Bundle.ID != x.ID {
@@ -107,7 +107,7 @@ func TestInstancePinMismatchIsRefusedByTheNode(t *testing.T) {
 
 	id := ingresstest.NewIdentity()
 	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "node-n1", SwarmNodeID: "n1"})
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	if got := c.NextBundle(t); got.ID != x.ID {
 		t.Fatalf("the first bundle is %s, want %s", got.ID, x.ID)
 	}
@@ -157,7 +157,7 @@ func TestInstancePinLowerVersionIsApplied(t *testing.T) {
 
 	id := ingresstest.NewIdentity()
 	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "node-n1", SwarmNodeID: "n1"})
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	got := c.NextBundle(t)
 	if got.ID != v5.ID || got.Version.Config != 5 {
 		t.Fatalf("the first bundle is %s at version %d, want %s at 5", got.ID, got.Version.Config, v5.ID)
@@ -212,7 +212,7 @@ func TestInstancePinLargeBundleIsReceived(t *testing.T) {
 	// DialNode calls PrepareNodeConn after the welcome, as the supervisor does.
 	id := ingresstest.NewIdentity()
 	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "node-n1", SwarmNodeID: "n1"})
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	typ, data := c.NextRaw(t)
 	if typ != websocket.MessageBinary || len(data) <= 32768 {
 		t.Fatalf("the message is %v of %d bytes, want a binary frame over 32768", typ, len(data))
@@ -229,7 +229,7 @@ func TestInstancePinLargeBundleIsReceived(t *testing.T) {
 	id2 := ingresstest.NewIdentity()
 	c2 := srv.Enrol(t, id2, ingresstest.Dial{Token: env.Token, Name: "node-n2", SwarmNodeID: "n2"})
 	c2.WS.SetReadLimit(32768)
-	c2.Hello(t, []int{1}, "")
+	c2.Hello(t, ingresstest.CurrentSchemas(), "")
 	// The read must fail on the limit itself, not on the test's own deadline: a hub that never sent the frame
 	// would otherwise pass after a stall (WR-C-2).
 	ctx := testsupport.Context(t)

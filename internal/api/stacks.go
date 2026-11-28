@@ -186,6 +186,9 @@ type StacksDeps struct {
 	// SelfContainerID is the ID of the container TierPlan runs in and SelfNamespace the swarm namespace of
 	// that container; either is empty when TierPlan cannot tell. The lists flag the stack that holds them (D-49).
 	SelfContainerID, SelfNamespace string
+	// SelfRoute reads the facts of TierPlan's own route (the ingress deployer), which the environment's route list derives the
+	// system row's network and backend conditions from. Nil leaves them unknown.
+	SelfRoute SelfRouteReader
 	// RevisionsKept is how many revisions of each stack are kept (D-01); the server passes the instance
 	// setting. Nil means the default of 20.
 	RevisionsKept func() int

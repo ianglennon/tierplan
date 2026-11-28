@@ -324,6 +324,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterIngressNodes(r, d.IngressNodes)
 	api.RegisterIngressDeploy(r, d.IngressDeploy)
 	api.RegisterIngressVIP(r, d.IngressDeploy)
+	api.RegisterIngressSelfRoute(r, d.IngressDeploy)
 	api.RegisterGit(r, d.Git)
 	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterGitHooks(r, d.GitHooks)
@@ -935,13 +936,39 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	hsts.publicURL = inst.PublicURL
 	hsts.SetAudit(aud.Record)
 	rt.SetOnInstall(hsts.Wake)
+	// One ingress store and one notifier for the whole server: the stack routes judge and (from the deploy gates on) write
+	// the stacks' hostnames through the store, and the notifier wakes the reconciler of the environment that changed.
+	ingressNotifier := ingress.NewNotifier()
+	// The hostname policy refuses the host agents and proxies dial, the agent URL's else the public URL's. It is read from the
+	// instance on every World read, so a settings change applies at once (D-10, SELF-05).
+	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier, AgentHosts: func() []string {
+		if h := hostOf(inst.AgentBase()); h != "" {
+			return []string{h}
+		}
+		return nil
+	}})
+	// TierPlan's own route: the live trusted-proxy set and the route's origin, from the stored system claim and the ingress
+	// ensure loop's observations of TierPlan's own network, never from a request (D-06, D-07). The claim is read once now
+	// (Pitfall 6); the observations arrive once the ingress deployer below is built.
+	selfNow := time.Now
+	if bo.janitorClock != nil {
+		selfNow = bo.janitorClock.Now
+	}
+	selfRt := newSelfRoute(ingressStore.SystemClaim, selfNow, log)
+	ingressStore.OnSystemClaimChanged(selfRt.claimChanged)
+	if err := selfRt.Reload(ctx); err != nil {
+		log.Warn("the system claim could not be read at start; TierPlan's own route is not trusted until the next ensure pass", "error", err)
+	}
 	// The health broker is told what the tunnel hub sees, and recomputes every
 	// environment's health on a tick, so one stream per tab can say what changed.
 	broker := envs.NewBroker(envSvc, nil)
 	// The proxy observer notices a reverse proxy that is misconfigured from the
 	// requests it carries and from agent endpoint requests that are not upgrades,
 	// remembers it for an hour and tells the open bells when a kind appears (D-53).
-	proxyObs := httpx.NewProxyObserver(inst.PublicURL, nil).OnNew(broker.PublishProxyWarning)
+	// It looks at no request until the live trusted set is known, so a proxy on TierPlan's own network is not reported
+	// as untrusted in the first minutes after a restart (A-08).
+	// Requests for TierPlan's own route host, while the route is on, are no URL mismatch (28-UAT 9f).
+	proxyObs := httpx.NewProxyObserver(inst.PublicURL, nil).OnNew(broker.PublishProxyWarning).HoldUntil(selfRt.Ready).AlsoMatch(selfRt.RouteOrigins)
 	tunnelHub := tunnel.NewHub(agentSvc, envSvc, log, nil).
 		WithNotifier(broker).
 		OnUpgradeFailure(proxyObs.RecordUpgradeFailure).
@@ -1086,6 +1113,15 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, err
 	}
+	// TierPlan's own route (D-12, D-14): the trust set a proxy verifies TierPlan against is the self-signed anchor and the
+	// chain served now, and the holder builds the reconciler's self input from it, the instance's URLs, TIERPLAN_LISTEN's port
+	// and whether TierPlan's own certificate renews over HTTP-01. The same URL reader feeds the deployer.
+	selfURLs := instanceSelfURLs(inst, cfg.Listen)
+	ownTr := newOwnTrust(rt.servedChain, tlsSrc.Leaf, tlsClock.Now).useClock(tlsClock)
+	selfRt.wire(selfInputs{trust: ownTr, urls: selfURLs, http01: ownHTTP01InUse(acmeWire.mgr), notify: ingressNotifier.Notify})
+	// A certificate install (Let's Encrypt, or the fallback to self-signed) moves the trust set and wakes TierPlan's own
+	// environment's reconciler in the same step (D-14).
+	registerSelfInstallHook(rt, selfRt)
 	// One sampler hub serves every viewer of any container's stats (D-29 to D-31).
 	statsHub := api.NewStatsHub(aggregator, api.StatsHubOptions{Log: log})
 	registryStore := registry.NewStore(st, vlt, nil)
@@ -1119,10 +1155,6 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gitx.InstallTransport(registryEgress)
 	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
 	gitConns := gitconn.NewStore(st, vlt, nil)
-	// One ingress store and one notifier for the whole server: the stack routes judge and (from the deploy gates on) write
-	// the stacks' hostnames through the store, and the notifier wakes the reconciler of the environment that changed.
-	ingressNotifier := ingress.NewNotifier()
-	ingressStore := ingressstore.New(ingressstore.Deps{St: st, Vault: vlt, Notifier: ingressNotifier})
 	// The per-hostname certificate manager shares the DNS provider map and the clock of the Let's Encrypt manager, so
 	// WithACMEDNS and WithACMEClock move both. It is started before the server listens and run in the background below.
 	certMgr, certStore, err := wireIngressCerts(cfg, log, st, vlt, jobHub, ingressStore, ingressNotifier, bo.acmeClock, acmeDNS)
@@ -1134,7 +1166,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	// The ingress reconciler renders every environment's bundle over the same stores, notifier and clock. It is run in
 	// the background below; it starts nothing else and adds no route, table or file (D-11, D-20).
-	ingressRecon := wireIngressRecon(log, ingressStore, certStore, ingressNotifier, bo.acmeClock)
+	ingressRecon := wireIngressRecon(log, ingressStore, certStore, ingressNotifier, bo.acmeClock, selfRt)
 	// The ingress channel: the instance ID is minted before the hub serves, and the hub delivers the reconciler's bundles to
 	// the nodes that dial in. A removed environment closes its nodes' sessions through the one kicker the registry holds
 	// (D-23, D-29).
@@ -1148,6 +1180,42 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		_ = st.Close()
 		return nil, err
 	}
+	// TierPlan's own certificate changes are staged (A-03): before an install, a fallback, a re-sign or a replaced
+	// supplied pair is served, the incoming certificate joins the trust set and the change waits, bounded by
+	// ownTrustStageWait, until the proxies of TierPlan's own environment applied it: the reconciler rendered that own
+	// version and every connected proxy node reports the current bundle. With no route and no carve-out nothing waits.
+	ownTrustEnv := func() string {
+		in := selfRt.in.Load()
+		if in == nil {
+			return ""
+		}
+		return selfRt.wakeEnv(in)
+	}
+	ownStage := &ownStaging{
+		trust: ownTr, env: ownTrustEnv, wake: ingressNotifier.Notify, log: log.With("component", "tls"),
+		applied: func(version int64) bool {
+			env := ownTrustEnv()
+			if env == "" {
+				return true
+			}
+			if ingressRecon.RenderedOwn(env) != version {
+				return false
+			}
+			b, ok := ingressRecon.Current(env)
+			if !ok {
+				return false
+			}
+			rctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			nodes, err := ingressSvc.ListNodes(rctx, env)
+			if err != nil {
+				return false
+			}
+			return proxiesApplied(nodes, b.ID, ingressHub.Live)
+		},
+	}
+	acmeWire.installer.ownStaging = *ownStage
+	tlsSrc.beforeSet = func(ctx context.Context, cert tls.Certificate) { ownStage.stage(ctx, certChain(cert), true) }
 	ingressHubRef.Store(ingressHub)
 	envSvc.WithIngressSessions(ingressHub)
 	// Image update checks: the registries are asked through the same clients and egress policy as every other
@@ -1283,15 +1351,25 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	ingressDeploy := newIngressDeploy(ingressDeployDeps{
 		Log: log, Store: st, Audit: aud, Aggregator: aggregator, Clusters: clusters, Envs: envSvc, Ingress: ingressStore, Notifier: ingressNotifier, Tokens: ingressSvc, Hub: ingressHub, Broker: broker,
 		Jobs: jobHub, Locks: stackLocks, Resolver: resolver, AddressSpaces: addressSpaces, Instance: inst, Pins: rt.WelcomePins,
-		OwnChallenge: ownChallenge(acmeWire.mgr), Clock: bo.janitorClock,
+		OwnHTTP01InUse: ownHTTP01InUse(acmeWire.mgr), Clock: bo.janitorClock,
+		Self:     selfReader(socketPath, selfID),
+		SelfURLs: selfURLs,
+		// TierPlan connects its own container on a standalone host, and reads its route's certificate (D-04, D-09).
+		SocketPath: socketPath, SelfID: selfID, IngressCerts: certStore,
 		Stacks: api.NewIngressStacks(stackops.Repo{Store: st, Vault: vlt}, ingressStore, clusters.ClusterRead, ingressHostRead(aggregator)),
 		CurrentBundle: func(envID string) (string, bool) {
 			b, ok := ingressRecon.Current(envID)
 			return b.ID, ok
 		},
 	})
+	// Every observation of a self network reaches the holder, which keeps only TierPlan's own environment's.
+	ingressDeploy.OnSelfObserved(selfRt.Observe)
+	// The environment's route list derives TierPlan's own route's row from the deployer's facts (A-07).
+	stacksDeps.SelfRoute = ingressDeploy
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	updateRecovery.Stack = api.RecoverStackUpdate(stacksDeps)
+	// The ingress deploy routes, and the HTTPS status's line about TierPlan's own route, which is derived through them.
+	ingressDeployAPI := api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log, Routes: stacksDeps}
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -1301,9 +1379,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Auditor:        refusals,
 			MutationGuard:  auth.NewCSRFGuard(sessions),
 			TrustedProxies: cfg.TrustedProxies,
-			Proxy:          proxyObs,
-			PublicOrigin:   inst.PublicOrigin,
-			Logger:         log,
+			// The self network's subnet and the route host's origin, read on every request (D-06, D-07).
+			LiveTrustedProxies: selfRt.TrustedPrefixes,
+			ExtraOrigins:       selfRt.ExtraOrigins,
+			Proxy:              proxyObs,
+			PublicOrigin:       inst.PublicOrigin,
+			Logger:             log,
 			// Strict-Transport-Security is the policy's decision (D-10): only on a
 			// response to a request that came over TLS, an X-Forwarded-Proto header
 			// decides nothing here, and never over TierPlan's own self-signed
@@ -1385,14 +1466,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Logs:          api.LogsDeps{Aggregator: aggregator, Audit: aud, Checker: checker, Log: log},
 		ServiceLogs:   api.ServiceLogsDeps{Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Stats:         api.StatsDeps{Aggregator: aggregator, Clusters: clusters, Hub: statsHub, Log: log},
-		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, SelfContainerID: selfID, Store: st, Log: log},
+		Shells:        api.ShellsDeps{Aggregator: aggregator, Registry: shellRegistry, Audit: aud, Checker: checker, Instance: inst, ExtraOrigins: selfRt.ExtraOrigins, SelfContainerID: selfID, Store: st, Log: log},
 		EnvStream:     api.EnvStreamDeps{Broker: broker, Checker: checker, Log: log},
 		Recent:        api.RecentDeps{Store: st, Envs: envSvc, Checker: checker, Refusals: refusals, Log: log},
 		Audit:         api.AuditDeps{Store: st, RetentionDays: cfg.AuditRetentionDays, Checker: checker, Refusals: refusals, Log: log},
-		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, Log: log},
+		Settings:      api.SettingsDeps{Instance: inst, Store: st, Audit: aud, Agents: settingsAgents{svc: agentSvc, hub: tunnelHub}, IngressHosts: ingressStore.InstallClaimHosts, Log: log},
 		HTTPS: api.HTTPSDeps{
 			Served:    func() api.ServedCertificate { return rt.servedWith(trust) },
-			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen), Audit: aud},
+			CertFiles: cfg.TLSCertFile != "", CertFile: cfg.TLSCertFile, KeyFile: cfg.TLSKeyFile, AgentTrust: agentTrust, Log: log, ACME: acmeWire.mgr, HSTS: hstsAPI{p: hsts}, Jobs: jobHub, ListenPort: listenPort(cfg.Listen), Audit: aud,
+			// TierPlan's own ingress route, read and derived by the same helper as its card on the ingress page (D-16, A-06).
+			SelfRoute: ingressDeployAPI.SelfRouteLine},
 		Backup: api.BackupDeps{Store: st, Vault: vlt, Audit: aud, Instance: inst, DataDir: info.Path, Dir: backupDir, Scheduler: backups, AppVersion: buildinfo.Get().Version, MaxUploadBytes: cfg.BackupMaxUpload, Log: log},
 		Restore: api.RestoreDeps{
 			Uploads: backup.NewUploads(info.Path, cfg.BackupMaxUpload), Vault: vlt, Audit: aud, Instance: inst,
@@ -1405,7 +1488,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		// The ingress nodes dial in here, and the typed API lists and revokes them (Phase 22). The bundle a node should
 		// hold is the reconciler's current one.
 		IngressConnect: ingressHub.Handler(),
-		IngressDeploy:  api.IngressDeployDeps{Service: ingressDeploy, Jobs: jobHub, Checker: checker, Log: log},
+		IngressDeploy:  ingressDeployAPI,
 		IngressNodes: api.IngressNodesDeps{
 			Service: ingressSvc, Live: ingressHub.Live, Issuer: ingressDeploy,
 			CurrentBundle: func(envID string) (string, bool) {
@@ -1504,6 +1587,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// A renewed self-signed certificate and a replaced cert-file pair are picked up here, off
 	// the handshake path, so a handshake never waits on the disk.
 	srv.background.Go(func() { runCertRefresh(bg, tlsClock, tlsSrc) })
+	// From now on a Let's Encrypt install or a fallback waits for the proxies to trust it; the one at start did not,
+	// because nothing was rendered or pushed yet. The wait ends with the server.
+	acmeWire.installer.waitIn(bg)
 	// Renewals, the expiry fallback and the resume of an open order run on the ACME clock.
 	srv.background.Go(func() { acmeWire.mgr.Run(bg) })
 	// The per-hostname certificates are ordered and renewed by their own manager, on the same clock.

@@ -19,9 +19,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SettingsCard } from "@/features/environments/settings-card";
-import { routeHeadline } from "@/features/stacks/route-state";
+import { routeHeadline, waitingCertificateDetail } from "@/features/stacks/route-state";
 import { useNeeds } from "@/hooks/use-needs";
-import { keyExists, useT } from "@/i18n/use-t";
+import { useT } from "@/i18n/use-t";
 
 // At most this many rows show until the person asks for the rest (UI-SPEC S2, the CommitsCard pattern).
 const SHOWN = 10;
@@ -93,11 +93,8 @@ export function StackRoutes({ envId, stack }: StackRoutesProps) {
       case "not_attached":
       case "ingress_off":
         return t(`stackIngress.routes.state.${state}.detail`);
-      case "waiting_certificate": {
-        if (route.reason === "") return "";
-        const key = `stackIngress.routes.reason.${route.reason}`;
-        return keyExists(key) ? t(key) : route.reason;
-      }
+      case "waiting_certificate":
+        return waitingCertificateDetail(route.reason, route.conditions, t);
       case "backend_not_running":
         if (route.stopped)
           return stack.stopped ? "" : t("stackIngress.routes.state.backend_not_running.stopped");

@@ -23,6 +23,9 @@ export const INGRESS_JOB_REFETCH_MS = 2_000;
 //
 // The virtual IP's preview adds three things the others do not have: the fixed privileged-services warning (always
 // sent, drawn first), each manager's opt-in, and for a change what it does to the address. All three are drawn as sent.
+//
+// A preview of the self route's switches (D-17) carries `items` instead: an ordered story of what the switch will do, one
+// item per step, drawn in the order the server sends and never regrouped by severity.
 export interface ReviewPreview {
   findings: IngressFinding[];
   redeploy: IngressRedeploy[];
@@ -30,6 +33,18 @@ export interface ReviewPreview {
   warning?: string;
   managers?: IngressVIPPreviewManager[];
   notice?: string;
+  items?: ReviewItem[];
+}
+
+// ReviewItem is one step of an ordered preview: a stable code (the web supplies the heading for it), how it fared, the
+// server's sentence as sent, and optionally the lines to copy that make it right.
+export interface ReviewItem {
+  code: string;
+  state: "ok" | "warning" | "refused";
+  message: string;
+  // The stable code of a warning or a refusal, as sent (ingress_host_invalid, host_taken, ...); absent when it passed.
+  reason?: string;
+  snippet?: { kind: "stack_file" | "service_update"; text: string };
 }
 
 // VIPInput is what the virtual IP form asks for: the address with its prefix length, and a router ID or none to let
@@ -73,6 +88,8 @@ export function useIngressEnablePreview(envId: string) {
         findings: data.findings ?? [],
         redeploy: data.redeploy ?? [],
         unreachable: [],
+        // The HTTP-01 carve-out note (UI-SPEC S4): neutral, nothing is wrong.
+        notice: data.notice,
       };
     },
   });
@@ -107,6 +124,8 @@ export function useIngressDisablePreview(envId: string) {
         findings: data.findings ?? [],
         redeploy: [],
         unreachable: data.unreachable ?? [],
+        // TierPlan's own route is released first (UI-SPEC S4): neutral, the direct address keeps working.
+        notice: data.notice,
       };
     },
   });

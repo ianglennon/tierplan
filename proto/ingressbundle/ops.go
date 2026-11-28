@@ -55,7 +55,7 @@ const (
 
 // SupportedSchemas is the bundle schemas a node applies, as a new slice each call. The supervisor sends
 // it in hello (D-23).
-func SupportedSchemas() []int { return []int{Schema1} }
+func SupportedSchemas() []int { return []int{Schema2} }
 
 // The reasons a node refuses a bundle, added to the verifier's nine above (D-15, D-37). Like those they
 // are stable codes: they go on the wire in rejected{id, reason} and Phase 27 shows them, so one is

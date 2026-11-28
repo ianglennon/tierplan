@@ -74,8 +74,9 @@ func TestSnapshotCarriesStackNameTargetAndStrip(t *testing.T) {
 	}
 }
 
-// insertSystemClaim stores a claim held by the system, with one route, by raw SQL: no store method
-// writes one yet (D-28).
+// insertSystemClaim stores a claim held by the system, with one route, by raw SQL, so a test can pick the
+// claim's fields freely (SetSystemClaim is the store's own write). The install holds at most one, because of
+// the partial unique index of migration 00049.
 func insertSystemClaim(t *testing.T, st *store.Store, envID, domainID, hostname, routeID string) {
 	t.Helper()
 	if _, err := st.Write.Exec(
@@ -87,6 +88,22 @@ func insertSystemClaim(t *testing.T, st *store.Store, envID, domainID, hostname,
 		`INSERT INTO ingress_routes (id, env_id, hostname, name, path_prefix, service, port, scheme, strip, created_at, updated_at) VALUES (?, ?, ?, '', '/', 'tierplan', 7480, 'http', 0, 1, 1)`,
 		routeID, envID, hostname); err != nil {
 		t.Fatalf("insert the system route %s: %v", hostname, err)
+	}
+}
+
+// insertStackClaim stores a claim held by a stack, with one route, by raw SQL, for a test that needs several
+// claims in one environment (the install holds at most one system claim).
+func insertStackClaim(t *testing.T, st *store.Store, envID, domainID, stackID, hostname, routeID string) {
+	t.Helper()
+	if _, err := st.Write.Exec(
+		`INSERT INTO ingress_hostnames (hostname, env_id, domain_id, owner_kind, stack_id, claimed_by, claimed_at) VALUES (?, ?, ?, 'stack', ?, 'alice', 1)`,
+		hostname, envID, domainID, stackID); err != nil {
+		t.Fatalf("insert the stack claim %s: %v", hostname, err)
+	}
+	if _, err := st.Write.Exec(
+		`INSERT INTO ingress_routes (id, env_id, hostname, name, path_prefix, service, port, scheme, strip, created_at, updated_at) VALUES (?, ?, ?, '', '/', 'web', 8080, 'http', 0, 1, 1)`,
+		routeID, envID, hostname); err != nil {
+		t.Fatalf("insert the stack route %s: %v", hostname, err)
 	}
 }
 
@@ -183,7 +200,7 @@ func TestSnapshotEdges(t *testing.T) {
 		seedStack(t, st, "stack-a", "env-a", "web-a")
 		dom := registerDomain(t, s, "env-a", "example.com")
 		// Inserted out of order, by raw SQL: two hostnames and three routes.
-		insertSystemClaim(t, st, "env-a", dom.ID, "zeta.example.com", "r-zeta")
+		insertStackClaim(t, st, "env-a", dom.ID, "stack-a", "zeta.example.com", "r-zeta")
 		insertSystemClaim(t, st, "env-a", dom.ID, "alpha.example.com", "r-alpha-root")
 		insertRawRoute(t, st, "env-a", "r-alpha-z", "alpha.example.com", "/z")
 		insertRawRoute(t, st, "env-a", "r-alpha-a", "alpha.example.com", "/a")

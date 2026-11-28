@@ -34,7 +34,11 @@ const JobKindDisable = "ingress_disable"
 
 // The items of the disable job, in the order they run. token, network and service are the enable job's words too.
 const (
-	// ItemVirtualIP is the first item of a swarm's switch-off: the virtual IP goes before the proxies it points at (D-17).
+	// ItemSelfRoute is the first item of every switch-off: TierPlan's own route is released before anything of the ingress
+	// goes, so its hostname is never left claimed behind a proxy that no longer serves it (D-11).
+	ItemSelfRoute = "self_route"
+	// ItemVirtualIP is the first item of a swarm's switch-off after the self route: the virtual IP goes before the proxies it
+	// points at (D-17).
 	ItemVirtualIP = "virtual_ip"
 	ItemSwitchOff = "switch_off"
 	ItemVolumes   = "volumes"
@@ -52,39 +56,50 @@ const (
 	CodeDisableSecretFailed  = "disable_secret_failed"
 	CodeDisableTokenFailed   = "disable_token_failed"
 	CodeDisableNodesFailed   = "disable_nodes_failed"
+	// CodeDisableSelfNetworkFailed ends the self network item when tierplan-self could not be read or removed for a reason
+	// other than something still being on it, which is never a failure (A-06).
+	CodeDisableSelfNetworkFailed = "disable_self_network_failed"
 )
+
+// ReasonTierPlanAttached is the reason of a self network item that kept tierplan-self: TierPlan's own task or container is
+// still on it, or the engine answered that something is (A-06, Pitfall 5).
+const ReasonTierPlanAttached = "tierplan_attached"
 
 // CodeRoutesLive is the refusal of a switch-off while a claim with routes exists in the environment, a stopped stack's
 // included (D-25).
 const CodeRoutesLive = "ingress_routes_live"
 
 // disableItems are the items of the job in order.
-var disableItems = []string{ItemVirtualIP, ItemSwitchOff, ItemService, ItemVolumes, ItemNetwork, ItemSecret, ItemToken, ItemNodes}
+var disableItems = []string{ItemSelfRoute, ItemVirtualIP, ItemSwitchOff, ItemService, ItemVolumes, ItemNetwork, ItemSelfNetwork, ItemSecret, ItemToken, ItemNodes}
 
 // disableLabels are the lines of the job's steps.
 var disableLabels = map[string]string{
-	ItemVirtualIP: "Turn the virtual IP off",
-	ItemSwitchOff: "Stop serving routes",
-	ItemService:   "Remove the proxy service",
-	ItemVolumes:   "Wipe the certificate cache on each node",
-	ItemNetwork:   "Remove the ingress network",
-	ItemSecret:    "Remove the join token secrets",
-	ItemToken:     "Disable the join token",
-	ItemNodes:     "Remove the proxy nodes",
+	ItemSelfRoute:   "Release TierPlan's own route",
+	ItemVirtualIP:   "Turn the virtual IP off",
+	ItemSwitchOff:   "Stop serving routes",
+	ItemService:     "Remove the proxy service",
+	ItemVolumes:     "Wipe the certificate cache on each node",
+	ItemNetwork:     "Remove the ingress network",
+	ItemSelfNetwork: "Remove the " + ingress.SelfNetworkName + " network",
+	ItemSecret:      "Remove the join token secrets",
+	ItemToken:       "Disable the join token",
+	ItemNodes:       "Remove the proxy nodes",
 }
 
 // disableMessages are the sentences of the failure codes, built here and never from an engine's answer.
 var disableMessages = map[string]string{
-	CodeVIPRemoveFailed:      "The virtual IP could not be removed, so ingress was left on.",
-	CodeDisableSwitchFailed:  "Ingress could not be switched off.",
-	CodeDisableServiceFailed: "The proxy service could not be removed.",
-	CodeDisableVolumesFailed: "The certificate cache could not be wiped.",
-	CodeDisableNetworkFailed: "The ingress network could not be removed.",
-	CodeDisableSecretFailed:  "The join token secrets could not be removed.",
-	CodeDisableTokenFailed:   "The join token could not be disabled.",
-	CodeDisableNodesFailed:   "The proxy nodes could not be removed.",
-	CodeDisableProxyFailed:   "The proxy container could not be removed.",
-	CodeNotRun:               "Not run because an earlier step failed.",
+	CodeSelfRouteReleaseFailed:   "TierPlan's own route could not be released, so ingress was left on.",
+	CodeVIPRemoveFailed:          "The virtual IP could not be removed, so ingress was left on.",
+	CodeDisableSwitchFailed:      "Ingress could not be switched off.",
+	CodeDisableServiceFailed:     "The proxy service could not be removed.",
+	CodeDisableVolumesFailed:     "The certificate cache could not be wiped.",
+	CodeDisableNetworkFailed:     "The ingress network could not be removed.",
+	CodeDisableSecretFailed:      "The join token secrets could not be removed.",
+	CodeDisableTokenFailed:       "The join token could not be disabled.",
+	CodeDisableNodesFailed:       "The proxy nodes could not be removed.",
+	CodeDisableSelfNetworkFailed: "The " + ingress.SelfNetworkName + " network could not be removed.",
+	CodeDisableProxyFailed:       "The proxy container could not be removed.",
+	CodeNotRun:                   "Not run because an earlier step failed.",
 }
 
 // NodeName is a node of the environment by the ID its agent connects as and the name it goes by.
@@ -125,6 +140,32 @@ type DisablePreview struct {
 	// Unreachable are the nodes whose agent is not connected now: their cache volume is queued and wiped when the agent
 	// connects (D-27).
 	Unreachable []string
+	// Notice is the neutral note of the preview: when TierPlan's own route is on in the environment, that it is released
+	// first and where TierPlan stays reachable (UI-SPEC S4); "" otherwise.
+	Notice string
+	// SelfRouteHost is the hostname of TierPlan's own route when it is on in the environment, "" otherwise, so the web can warn
+	// a person who reaches TierPlan through it.
+	SelfRouteHost string
+}
+
+// selfReleaseNotice is the disable preview's notice and the hostname of TierPlan's own route when it is on in envID (D-11,
+// UI-SPEC S4), with the direct address that keeps reaching TierPlan (directAddress). A claim that cannot be read gives no
+// notice and never fails the preview: the switch-off releases the route whatever the preview said.
+func (s *Service) selfReleaseNotice(ctx context.Context, envID string) (notice, host string) {
+	claim, held, err := s.d.Store.SystemClaim(ctx)
+	if err != nil {
+		s.log().Warn("could not read TierPlan's own route for a switch-off preview", "environment", envID, "error", err)
+		return "", ""
+	}
+	if !held || claim.EnvID != envID {
+		return "", ""
+	}
+	direct := directAddress(s.selfURLs(), claim.Hostname)
+	where := "on " + direct
+	if direct == "" {
+		where = "on TierPlan's own address"
+	}
+	return "TierPlan's own route on " + claim.Hostname + " is released first. Direct access " + where + " keeps working.", claim.Hostname
 }
 
 // DisableRefusedError is a switch-off that was refused: at least one finding, each an error. Nothing was written.
@@ -166,12 +207,14 @@ func (s *Service) disablePaused(ctx context.Context, info EnvInfo) ([]Finding, e
 
 // disableRoutesLive is the refusal of a switch-off while a claim with routes exists (D-25). The holder of each route is
 // worded by ingress.DescribeHolder with the caller's canView, the same redaction the policy's clash messages use
-// (Phase 18 D-20, PROH-24-13); a nil canView sees nothing.
+// (Phase 18 D-20, PROH-24-13); a nil canView sees nothing. TierPlan's own route (the system claim, the one route with no
+// stack) never refuses: the switch-off releases it first (D-11).
 func (s *Service) disableRoutesLive(ctx context.Context, info EnvInfo, canView func(envID string) bool) ([]Finding, error) {
 	routes, err := s.d.Store.LiveRoutes(ctx, info.ID)
 	if err != nil {
 		return nil, err
 	}
+	routes = slices.DeleteFunc(routes, func(r ingressstore.LiveRoute) bool { return r.StackID == "" })
 	if len(routes) == 0 {
 		return nil, nil
 	}
@@ -179,9 +222,6 @@ func (s *Service) disableRoutesLive(ctx context.Context, info EnvInfo, canView f
 	for _, r := range routes {
 		where := r.Hostname + r.PathPrefix
 		kind := ingress.OwnerStack
-		if r.StackID == "" {
-			kind = ingress.OwnerSystem
-		}
 		holder := ingress.DescribeHolder(ingress.ClaimInfo{
 			Claim:   ingress.Claim{EnvID: info.ID, Hostname: r.Hostname, OwnerKind: kind, StackID: r.StackID},
 			EnvName: info.Name, StackName: r.StackName,
@@ -261,6 +301,7 @@ func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func
 		return DisablePreview{}, err
 	}
 	res := DisablePreview{Findings: findings, Removes: DisableRemoves{Secrets: []string{}, Volumes: []NodeName{}}, Unreachable: []string{}}
+	res.Notice, res.SelfRouteHost = s.selfReleaseNotice(ctx, envID)
 	for _, n := range info.Nodes {
 		res.Removes.Volumes = append(res.Removes.Volumes, NodeName{ID: n.AgentID, Name: n.Name})
 		if !n.Connected {
@@ -311,8 +352,8 @@ func (s *Service) PreviewDisable(ctx context.Context, envID string, canView func
 }
 
 // Disable switches ingress off for a swarm environment. It takes the environment's operation lock, refuses while the
-// environment is paused or any claim with routes exists, and starts a job that first removes the virtual IP when the
-// environment has one (D-17), then stops delivery, removes the proxy service,
+// environment is paused or any claim of a stack with routes exists, and starts a job that first releases TierPlan's own route
+// when it is on here (D-11), then removes the virtual IP when the environment has one (D-17), then stops delivery, removes the proxy service,
 // wipes the certificate cache volume on every node it can reach, removes the network and the join token secrets, disables
 // the join token and removes the node rows. A node it could not reach is queued, named in the job's result and wiped when its
 // agent connects (D-27). It returns the job's ID. A standalone environment runs the job of disableStandalone instead. A held
@@ -394,10 +435,10 @@ type disableRun struct {
 // nothing is retried and nothing is rolled back.
 func (s *Service) runDisable(ctx context.Context, r *jobs.Reporter, release func(), actor audit.Actor, info EnvInfo) {
 	run := &disableRun{s: s, actor: actor, envID: info.ID, r: r, release: release, items: disableItems}
-	steps := []func(context.Context) error{run.virtualIP, run.switchOff, run.service, run.volumes, run.network, run.secret, run.token, run.nodes}
+	steps := []func(context.Context) error{run.selfRoute, run.virtualIP, run.switchOff, run.service, run.volumes, run.network, run.selfNetwork, run.secret, run.token, run.nodes}
 	if !info.Swarm {
 		run.items = standaloneDisableItems
-		steps = []func(context.Context) error{run.switchOff, run.proxy, run.networkStandalone, run.volumeStandalone, run.token, run.nodes}
+		steps = []func(context.Context) error{run.selfRoute, run.switchOff, run.proxy, run.networkStandalone, run.selfNetworkStandalone, run.volumeStandalone, run.token, run.nodes}
 	}
 	for i, do := range steps {
 		item := run.items[i]
@@ -453,6 +494,28 @@ func (e *disableRun) skipFrom(i int, state, code string) {
 // done ends an item that went well.
 func (e *disableRun) done(item string, result map[string]string) {
 	e.r.Finish(item, jobs.ItemDone, "", "", result)
+}
+
+// selfRoute releases TierPlan's own route before anything of the ingress is touched (D-11): the claim and its route go with
+// ingress.self_route_disabled in one transaction, through removeSelfRoute, the one release the self route's own switch-off
+// shares, and the ensure loop is woken. It reports into no item but its own. An environment the route is not on in is done
+// with nothing removed. A release that failed ends the item with self_route_release_failed and, because every item after it
+// is not run, ingress stays on; only this job writes that failure's audit row, with the step self_route (the removeVIP
+// pattern).
+func (e *disableRun) selfRoute(ctx context.Context) error {
+	err := e.s.removeSelfRoute(ctx, e.actor, Requester{}, e.envID, nil, nil)
+	switch {
+	case errors.Is(err, ErrSelfRouteNotEnabled):
+		e.done(ItemSelfRoute, map[string]string{"removed": "false"})
+		return nil
+	case err != nil:
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fail(CodeSelfRouteReleaseFailed, err)
+	}
+	e.done(ItemSelfRoute, map[string]string{"removed": "true"})
+	return nil
 }
 
 // virtualIP removes the environment's virtual IP before anything of the proxies is touched: a keepalived that outlives the
@@ -688,6 +751,73 @@ func (e *disableRun) network(ctx context.Context) error {
 		return fail(CodeDisableNetworkFailed, err, dockerx.DaemonText(err))
 	}
 	e.done(ItemNetwork, nil)
+	return nil
+}
+
+// selfPlace is where TierPlan runs in the environment, for the self network item; a place that cannot be told is unknown, so
+// TierPlan is not taken to be on the network and the engine's in-use answer is what keeps it.
+func (e *disableRun) selfPlace(ctx context.Context, info EnvInfo) SelfPlace {
+	place, _, err := e.s.SelfLocation(ctx, info)
+	if err != nil {
+		return e.s.selfUnknown()
+	}
+	return place
+}
+
+// selfNetworkDone ends the self network item from what the removal left: removed, kept because TierPlan (or something) is on
+// it, or not there. A kept network is said in the output, as the self route's own switch-off says it.
+func (e *disableRun) selfNetworkDone(sp *selfPass, had bool) {
+	switch {
+	case sp.net.keptInUse:
+		e.r.Output(selfNetInUseText)
+		e.done(ItemSelfNetwork, map[string]string{"removed": "false", "reason": ReasonTierPlanAttached})
+	case had && sp.net.id == "":
+		e.done(ItemSelfNetwork, map[string]string{"removed": "true"})
+	default:
+		e.done(ItemSelfNetwork, map[string]string{"removed": "false"})
+	}
+}
+
+// selfNetwork removes tierplan-self after the ingress network (A-06): with ingress off and TierPlan's own route released,
+// nothing of TierPlan's wants it. While TierPlan's own task is on it, or the engine answers that something still is, it stays
+// and the item is done with the reason tierplan_attached, never a failure: TierPlan's stack file is the person's to change
+// (D-03). One that is not TierPlan's is left alone. What was found is published as the self network's observation, so the
+// trusted-proxy set drops a network that is gone.
+func (e *disableRun) selfNetwork(ctx context.Context) error {
+	s := e.s
+	info, err := s.d.Envs.Info(ctx, e.envID)
+	if err != nil {
+		return fail(CodeDisableSelfNetworkFailed, err)
+	}
+	sp := &selfPass{info: info, place: e.selfPlace(ctx, info), known: true}
+	had := false
+	err = s.d.Engine.WriteOnManager(ctx, e.envID, func(c *dockerx.Client) error {
+		rows, err := c.Networks(ctx)
+		if err != nil {
+			return err
+		}
+		row, ok := selfNetworkRowOf(rows)
+		switch {
+		case !ok:
+			return nil
+		case !ownsSelfNetworkRow(row, true):
+			sp.net.foreign = true
+			return nil
+		}
+		sp.net.id, had = row.ID, true
+		return s.removeSelfNetwork(ctx, c, sp, live{networks: rows})
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fail(CodeDisableSelfNetworkFailed, err, dockerx.DaemonText(err))
+	}
+	if sp.net.foreign {
+		e.r.Output("Left the network " + ingress.SelfNetworkName + " in place: it is not TierPlan's.")
+	}
+	s.observeSelf(ctx, sp)
+	e.selfNetworkDone(sp, had)
 	return nil
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/acme/acmetest"
 	"github.com/ianglennon/tierplan/internal/ingressrender"
+	"github.com/ianglennon/tierplan/proto/ingressbundle"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
@@ -71,8 +72,8 @@ func TestServerStartsTheIngressReconciler(t *testing.T) {
 	}
 
 	b, _ := srv.ingressRecon.Current("env-r")
-	if b.Schema != 1 {
-		t.Errorf("bundle schema = %d, want 1", b.Schema)
+	if b.Schema != ingressbundle.Schema2 {
+		t.Errorf("bundle schema = %d, want %d", b.Schema, ingressbundle.Schema2)
 	}
 	if len(b.Files) != 1 || b.Files[0].Path != "dynamic/tierplan.yml" {
 		t.Errorf("bundle files = %v, want the one dynamic/tierplan.yml", b.Files)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/internal/instance"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -36,6 +38,23 @@ const problemAgentURLLocked = "agent_url_locked"
 // codeInvalidAgentURL is the field error code of a malformed agent URL. The SPA
 // maps it to the same "Enter a full address" copy as invalid_public_url.
 const codeInvalidAgentURL = "invalid_agent_url"
+
+// codeAgentURLIsIngressHost is the field error code of an agent URL whose host is
+// a hostname the ingress serves: the self route's or a stack's (D-10). Agents and
+// proxies dial the agent URL, so it must never become a route through the ingress.
+const codeAgentURLIsIngressHost = "agent_url_is_ingress_host"
+
+// codePublicURLIsIngressHost is the field error code of a public URL whose host
+// is a hostname the ingress serves while no free agent URL is set: agents and
+// proxies would dial the route (D-07, D-10). The pair is checked, not the field,
+// so the public URL may be the self route's host when a direct agent URL stays.
+const codePublicURLIsIngressHost = "public_url_is_ingress_host"
+
+// codePublicURLPathWithSelfRoute is the field error code of a public URL with a base
+// path while TierPlan's own route is on (WR-07): the route serves TierPlan at the root of
+// its hostname and leaves out the connect paths there, so a base path would break the route
+// and move the connect paths out of its exclusions. Switch the route off first.
+const codePublicURLPathWithSelfRoute = "public_url_path_with_self_route"
 
 // targetSettings is the audit target of a settings change.
 const targetSettings = "settings"
@@ -64,8 +83,38 @@ type SettingsDeps struct {
 	// Agents counts enrolled agents and tells connected ones a new address. Nil
 	// means none: the counts are 0 and nothing is pushed.
 	Agents SettingsAgents
+	// IngressHosts is every hostname the ingress holds in the install, the self
+	// route's and every stack's, by lower-cased hostname. A save may not point the
+	// agent URL at one (D-10). Nil skips the check.
+	IngressHosts func(ctx context.Context) (map[string]ingress.ClaimInfo, error)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+}
+
+// urlHostname is the lower-cased hostname of a normalised URL, without the port
+// or a trailing dot; "" when there is none.
+// urlHasPath is whether a URL names a path below the root, a base path.
+func urlHasPath(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && strings.Trim(u.Path, "/") != ""
+}
+
+// selfRouteOn is whether the ingress hosts hold TierPlan's own route (a system claim).
+func selfRouteOn(hosts map[string]ingress.ClaimInfo) bool {
+	for _, c := range hosts {
+		if c.OwnerKind == ingress.OwnerSystem {
+			return true
+		}
+	}
+	return false
+}
+
+func urlHostname(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 }
 
 // SettingsBody is the instance's editable settings.
@@ -166,6 +215,11 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		Summary:     "Change the instance name, the public URL or the agent URL",
 		Description: "Only the fields sent are changed. Invalid fields answer 422 with a stable code per field " +
 			"(instance_name_required, instance_name_too_long, invalid_public_url, " + codeInvalidAgentURL + "). " +
+			"An agent URL whose host the ingress serves (the self route's or a stack's) answers 422 " + codeAgentURLIsIngressHost +
+			", and a public URL whose host the ingress serves answers 422 " + codePublicURLIsIngressHost +
+			" unless the same save or the stored settings keep an agent URL the ingress does not serve; both change nothing. " +
+			"A public URL with a base path while TierPlan's own route is on answers 422 " + codePublicURLPathWithSelfRoute +
+			": the route serves TierPlan at the root of its hostname, so switch it off first. " +
 			"An http public URL answers 422 " + codeInvalidPublicURL + " and an http agent URL answers 422 " + codeInvalidAgentURL +
 			", each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. " +
 			"An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while " +
@@ -255,14 +309,51 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			}
 		}
 
-		if len(problems) > 0 {
-			return nil, &huma.ErrorModel{
+		// After the field checks and before the transaction, so a refusal changes
+		// nothing, and only when this save changes an URL. The pair is what is
+		// checked: agents dial the agent URL, or the public URL when none is set, so
+		// the effective agent URL (this save's, else the stored one) must be free
+		// whenever the public URL names a claimed host. An env-locked public URL is
+		// never re-checked: the API cannot change it, and the self-route preview
+		// refuses a locked contradiction (28-21). It runs again once the save holds the
+		// write transaction (WR-08).
+		checkIngressHosts := func() error {
+			if d.IngressHosts == nil || len(problems) != 0 || (agentURL == before.AgentURL && url == before.PublicURL) {
+				return nil
+			}
+			hosts, err := d.IngressHosts(ctx)
+			if err != nil {
+				return err
+			}
+			claimed := func(u string) bool {
+				_, ok := hosts[urlHostname(u)]
+				return u != "" && ok
+			}
+			if agentURL != before.AgentURL && claimed(agentURL) {
+				add("body.agentUrl", codeAgentURLIsIngressHost)
+			}
+			if !before.PublicURLLocked && claimed(url) && (agentURL == "" || claimed(agentURL)) {
+				add("body.publicUrl", codePublicURLIsIngressHost)
+			} else if !before.PublicURLLocked && url != before.PublicURL && urlHasPath(url) && selfRouteOn(hosts) {
+				add("body.publicUrl", codePublicURLPathWithSelfRoute)
+			}
+			return nil
+		}
+		refused := func() *huma.ErrorModel {
+			return &huma.ErrorModel{
 				Type:   problemValidationFailed,
 				Title:  http.StatusText(http.StatusUnprocessableEntity),
 				Status: http.StatusUnprocessableEntity,
 				Detail: detail,
 				Errors: problems,
 			}
+		}
+		if err := checkIngressHosts(); err != nil {
+			return nil, internal("read the ingress hostnames", err)
+		}
+
+		if len(problems) > 0 {
+			return nil, refused()
 		}
 		if len(details) == 0 {
 			return &SettingsOutput{CacheControl: "no-store", Body: withAgents(ctx, before)}, nil
@@ -273,6 +364,17 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 			return nil, internal("begin", err)
 		}
 		defer func() { _ = tx.Rollback() }() // a no-op once committed
+
+		// Again, now that the save holds the write transaction (WR-08): the store has one
+		// writer, so no claim can commit until this save ends, and a claim that committed
+		// since the check above is read here. The claim's own transaction reads the stored
+		// URLs the same way, so one of the two always sees the other.
+		if err := checkIngressHosts(); err != nil {
+			return nil, internal("read the ingress hostnames", err)
+		}
+		if len(problems) > 0 {
+			return nil, refused()
+		}
 
 		if err := d.Instance.SetTx(ctx, tx, d.Store.Q, name, url); err != nil {
 			if errors.Is(err, instance.ErrPublicURLLocked) {

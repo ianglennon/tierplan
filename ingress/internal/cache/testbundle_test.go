@@ -113,7 +113,7 @@ func testBundle(t *testing.T, hosts ...string) ingressbundle.Bundle {
 			ingressbundle.File{Path: l.keyPath, Data: l.key})
 	}
 	files = append(files, ingressbundle.File{Path: ingressbundle.DynamicFile, Data: dynamicFor(hosts, leaves)})
-	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 1}, files, nil)
+	b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: 1}, files, nil)
 	if err != nil {
 		t.Fatalf("build the test bundle: %v", err)
 	}

@@ -414,5 +414,28 @@ func TestStackRoutesCarryConditions(t *testing.T) {
 		if c.Code != "certificate_ready" || c.State != "not_ready" || c.Reason != "certificate_not_ready" || c.Message != ingresscert.FailureHint(acme.ClassCAAForbids) {
 			t.Errorf("certificate_ready = %+v, want not_ready with the CAA hint %q", c, ingresscert.FailureHint(acme.ClassCAAForbids))
 		}
+		if !c.Failed {
+			t.Errorf("certificate_ready = %+v, want failed: the certificate's last order failed", c)
+		}
+	})
+
+	t.Run("a certificate that is not ready with no failure recorded is not failed and says it is not ready", func(t *testing.T) {
+		t.Parallel()
+		f, e, viewer, src, seed := swarmRoutesRig(t, host, shopService(1, ingress.NetworkName))
+		if _, _, err := f.ingressCertStore.CreatePending(testsupport.Context(t), ingresscert.PendingInput{
+			Hostname: host, EnvID: e.ID, DomainID: seed.domainID, Issuer: string(ingress.IssuerStaging), CreatedBy: "admin", NotRequested: true,
+		}, nil); err != nil {
+			t.Fatalf("queue a certificate: %v", err)
+		}
+		b := servedBundle(host, ingresshub.Node{Status: "active", AppliedBundleID: "b1"})
+		b.bundle.Manifest.Routes = nil
+		b.skipped = []ingressrender.Skipped{{Hostname: host, PathPrefix: "/", Reason: ingressrender.SkipCertificateNotReady}}
+		*src = *b
+		stackSide, _ := bothAnswers(t, viewer)
+		const notReady = "The certificate is not ready to be served yet."
+		c := stackSide.Routes[0].Conditions[3]
+		if c.Code != "certificate_ready" || c.Reason != "certificate_not_ready" || c.Failed || c.Message != notReady {
+			t.Errorf("certificate_ready = %+v, want certificate_not_ready, not failed, with %q", c, notReady)
+		}
 	})
 }

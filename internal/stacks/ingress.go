@@ -25,6 +25,10 @@ type IngressPolicy struct {
 	StackID string
 	// World is what the stack's hostnames are judged against.
 	World ingress.World
+	// SelfNamespace is the swarm stack namespace of TierPlan's own service when the policy's environment is the one TierPlan
+	// runs in, "" otherwise or when it cannot be told. A swarm stack of exactly that name is TierPlan's own, the one stack
+	// that may point at tierplan-self as an external network (D-03); every other stack is refused (CR-02).
+	SelfNamespace string
 }
 
 // serviceLabels reads the two label sets of each service of project, for the ingress parser.
@@ -340,30 +344,68 @@ func networkNameTaken(project *types.Project, network string) bool {
 	return false
 }
 
-// CodeIngressNetworkReserved is a compose file that declares the shared ingress network's name as a
-// network of its own: the name belongs to TierPlan (WR-09), so a stack may only point at that network
-// as an external one.
+// CodeIngressNetworkReserved is a compose file that declares the shared ingress network's name as a network of its own:
+// the name belongs to TierPlan (WR-09), so a stack may only point at that network as an external one.
 const CodeIngressNetworkReserved = "ingress_network_reserved"
 
-// networkReservedProblems reports each top-level network whose key or resolved name is the shared
-// ingress network's, unless it is the external declaration of that network. The error is at the
-// network's key, for every target.
-func networkReservedProblems(project *types.Project, idx *PositionIndex) Problems {
+// CodeSelfNetworkReserved is a compose file that reaches tierplan-self in any way: a network of its own by that name, an
+// external one, or a network mode. Every member of the self network is a trusted proxy whose forwarded addresses TierPlan
+// believes, and can answer the name the proxy reaches TierPlan by, so only TierPlan and the proxy are on it (D-02, D-06,
+// CR-02). The one exception is the swarm stack TierPlan's own service runs in, which may point at it as an external network
+// (the D-03 lines).
+const CodeSelfNetworkReserved = "self_network_reserved"
+
+const (
+	ingressReservedMessage = "The network name " + ingress.NetworkName + " is TierPlan's own for the network ingress routes use. To reach it, declare it with external: true; for a network of your own, use another name."
+	selfReservedMessage    = "The network " + ingress.SelfNetworkName + " is TierPlan's own route's: only TierPlan and the ingress proxy may be on it, because TierPlan believes the client addresses its members send. A stack cannot declare it or join it. For a network of your own, use another name."
+)
+
+// selfStack is whether the check is of the swarm stack TierPlan's own service runs in.
+func selfStack(in CheckInput) bool {
+	return in.Target == TargetSwarm && in.IngressPolicy != nil && in.IngressPolicy.SelfNamespace != "" && in.Name == in.IngressPolicy.SelfNamespace
+}
+
+// networkReservedProblems reports each top-level network whose key or resolved name is the shared ingress network's,
+// unless it is the external declaration of that network, and each that is the self network's, whatever its form, unless
+// it is the external declaration of it in TierPlan's own swarm stack. A service whose network mode names the self network is
+// reported at its network_mode. The error is at the network's key, for every target.
+func networkReservedProblems(project *types.Project, idx *PositionIndex, in CheckInput) Problems {
 	var out Problems
 	for _, key := range sortedKeys(project.Networks) {
 		n := project.Networks[key]
-		if key != ingress.NetworkName && n.Name != ingress.NetworkName {
-			continue
-		}
-		if bool(n.External) && n.Name == ingress.NetworkName {
+		var code, message string
+		switch {
+		case key == ingress.NetworkName || n.Name == ingress.NetworkName:
+			if bool(n.External) && n.Name == ingress.NetworkName {
+				continue
+			}
+			code, message = CodeIngressNetworkReserved, ingressReservedMessage
+		case key == ingress.SelfNetworkName || n.Name == ingress.SelfNetworkName:
+			if bool(n.External) && n.Name == ingress.SelfNetworkName && selfStack(in) {
+				continue
+			}
+			code, message = CodeSelfNetworkReserved, selfReservedMessage
+		default:
 			continue
 		}
 		node, file := idx.locateAny("networks."+key+".name", "networks."+key)
 		line, col, endLine, endCol := at(node)
 		out = append(out, Problem{
-			Severity: SeverityError, Code: CodeIngressNetworkReserved, File: file, Key: "networks." + key,
+			Severity: SeverityError, Code: code, File: file, Key: "networks." + key,
 			Line: line, Col: col, EndLine: endLine, EndCol: endCol,
-			Message: "The network name " + ingress.NetworkName + " is TierPlan's own for the network ingress routes use. To reach it, declare it with external: true; for a network of your own, use another name.",
+			Message: message,
+		})
+	}
+	for _, name := range sortedKeys(project.Services) {
+		if project.Services[name].NetworkMode != ingress.SelfNetworkName {
+			continue
+		}
+		path := "services." + name + ".network_mode"
+		node, file := idx.locateAny(path, "services."+name)
+		line, col, endLine, endCol := at(node)
+		out = append(out, Problem{
+			Severity: SeverityError, Code: CodeSelfNetworkReserved, File: file, Key: path,
+			Line: line, Col: col, EndLine: endLine, EndCol: endCol, Message: selfReservedMessage,
 		})
 	}
 	return out

@@ -116,7 +116,7 @@ func TestHubConnectWithTheStoredKey(t *testing.T) {
 		t.Fatalf("connect welcome = %+v, want node %s instance %s env %s", second.Welcome, nodeID, instanceID, env.ID)
 	}
 	before := len(srv.Pushes().Events())
-	second.Hello(t, []int{1}, want.ID)
+	second.Hello(t, ingresstest.CurrentSchemas(), want.ID)
 	evs := srv.Pushes().Await(t, func(evs []ingresshub.PushEvent) bool {
 		return dvCount(evs[before:], nodeID, ingresshub.PushSame, want.ID)+dvCount(evs[before:], nodeID, ingresshub.PushSent, "") > 0
 	})
@@ -131,7 +131,7 @@ func TestHubConnectWithTheStoredKey(t *testing.T) {
 
 	// One that runs something else is.
 	third := srv.Connect(t, id, ingresstest.Dial{})
-	third.Hello(t, []int{1}, "another-bundle")
+	third.Hello(t, ingresstest.CurrentSchemas(), "another-bundle")
 	if got := third.NextBundle(t); got.ID != want.ID {
 		t.Errorf("bundle ID = %q, want %q", got.ID, want.ID)
 	}

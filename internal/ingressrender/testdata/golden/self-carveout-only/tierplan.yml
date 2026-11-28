@@ -1,0 +1,18 @@
+tls:
+  options:
+    default:
+      sniStrict: true
+      minVersion: VersionTLS12
+http:
+  routers:
+    tierplan-acme:
+      rule: Host(`tierplan.example.org`) && PathPrefix(`/.well-known/acme-challenge/`)
+      entryPoints:
+        - web
+      service: svc-tierplan-plain
+      priority: 10000
+  services:
+    svc-tierplan-plain:
+      loadBalancer:
+        servers:
+          - url: http://tierplan_tierplan:7480

@@ -4,6 +4,7 @@
 package ingress
 
 import (
+	"slices"
 	"sort"
 )
 
@@ -21,6 +22,10 @@ type World struct {
 	// may be named: a message about another environment's claim then names neither stack nor
 	// environment.
 	CanView func(envID string) bool
+	// AgentHosts are the hosts agents and proxies dial: the host of the agent URL, or of the public URL when no agent
+	// URL is set, lower-cased and without a port (D-10). No claim, of a stack or of the system, may name one: those
+	// connections go straight to TierPlan and never through ingress (SELF-05). Empty when the instance has neither URL.
+	AgentHosts []string
 }
 
 // PlannedClaim is a hostname a stack will hold once its plan is stored, with its routes.
@@ -123,6 +128,11 @@ func judgeHost(stackID string, d Declaration, w World) (dom Domain, p Problem, b
 		p.Message = "“" + d.Host + "” is not under a domain registered for this environment. Ask an Admin to register the domain, or choose a name under one that is."
 		return dom, p, true
 	}
+	if isAgentHost(d.Host, w) {
+		p.Code = CodeHostIsAgentURL
+		p.Message = agentHostMessage(d.Host)
+		return dom, p, true
+	}
 	if w.Reserved[d.Host] {
 		p.Code = CodeHostReserved
 		p.Message = "“" + d.Host + "” is reserved by an Admin and cannot be used by a stack. Choose another name."
@@ -139,6 +149,27 @@ func judgeHost(stackID string, d Declaration, w World) (dom Domain, p Problem, b
 		return dom, p, true
 	}
 	return dom, Problem{}, false
+}
+
+// isAgentHost reports whether host is exactly a host agents and proxies dial. The comparison is on the lower-cased host,
+// so a name that only shares its domain with the agent host, or sits below it, is a different host and is not refused.
+func isAgentHost(host string, w World) bool {
+	if len(w.AgentHosts) == 0 {
+		return false
+	}
+	return slices.Contains(w.AgentHosts, NormalizeHost(host))
+}
+
+// AgentHostProblem is the refusal of a claim on host, the host agents and proxies dial (D-10): CodeHostIsAgentURL with its
+// sentence. The store refuses with it inside a claim's write transaction (WR-08).
+func AgentHostProblem(host string) Problem {
+	return Problem{Severity: SeverityError, Code: CodeHostIsAgentURL, Message: agentHostMessage(host)}
+}
+
+// agentHostMessage is the sentence a claim on the agent host is refused with.
+func agentHostMessage(host string) string {
+	return "“" + host + "” is the host of your agent URL (or of your public URL, because no agent URL is set). " +
+		"Agents and proxies connect straight to TierPlan and never through ingress, so ingress can't serve it."
 }
 
 // DescribeHolder says in one sentence who holds a claimed hostname. It is the one place that
@@ -185,6 +216,11 @@ func CheckRequest(host string, w World) (dom Domain, p Problem, bad bool) {
 		p.Message = "“" + host + "” is not under a domain registered for this environment. Ask an Admin to register the domain, or choose a name under one that is."
 		return Domain{}, p, true
 	}
+	if isAgentHost(host, w) {
+		p.Code = CodeHostIsAgentURL
+		p.Message = agentHostMessage(host)
+		return Domain{}, p, true
+	}
 	if w.Reserved[host] {
 		p.Code = CodeHostReserved
 		p.Message = "“" + host + "” is reserved by an Admin and cannot be used. Choose another name."
@@ -192,6 +228,36 @@ func CheckRequest(host string, w World) (dom Domain, p Problem, bad bool) {
 	}
 	if c, held := w.Claims[host]; held && (c.OwnerKind != OwnerStack || c.EnvID != dom.EnvID) {
 		p.Code = CodeHostTaken
+		c.Hostname = host
+		p.Message = DescribeHolder(c, w.CanView)
+		if c.OwnerKind == OwnerStack {
+			p.Message += " A name has one owner across TierPlan."
+		}
+		p.Message += " Choose another name."
+		return Domain{}, p, true
+	}
+	return dom, Problem{}, false
+}
+
+// CheckSystemClaim judges a hostname TierPlan would serve itself on, the self route (D-09). It applies the rules a stack's
+// claim is judged by, so the stack and system paths cannot disagree, and one more: a name held by anyone is refused,
+// including a stack of the environment the domain belongs to, which CheckRequest would let go ahead for a certificate. The
+// refusals are the ones of CheckRequest (an invalid name, a name under no domain registered for the environment, a
+// domain's own suffix, a reserved name, a name held by a stack of another environment or by the system) and
+// CodeHostIsAgentURL for a host agents and proxies dial (D-10). host is normalized here, so a name in any case is judged
+// as its lower-case form. It returns the domain the host is under; bad is false when the claim may go ahead.
+//
+// It is pure and reads no ingress switch. The switch preview calls it to show the answer, and the store judges the holder
+// and the agent host again inside its own write transaction, so a claim, or an agent URL, that landed since the preview is
+// still caught there.
+func CheckSystemClaim(host string, w World) (dom Domain, p Problem, bad bool) {
+	host = NormalizeHost(host)
+	dom, p, bad = CheckRequest(host, w)
+	if bad {
+		return Domain{}, p, true
+	}
+	if c, held := w.Claims[host]; held {
+		p = Problem{Severity: SeverityError, Code: CodeHostTaken}
 		c.Hostname = host
 		p.Message = DescribeHolder(c, w.CanView)
 		if c.OwnerKind == OwnerStack {

@@ -148,6 +148,10 @@ const (
 	RefuseRateLimited = "rate_limited"
 	// RefuseInsecureTransport means the session is not TLS-verified.
 	RefuseInsecureTransport = "insecure_transport"
+	// RefuseSelfNetworkPeer means the connection reached TierPlan through its own ingress route: the TCP
+	// peer is on TierPlan's self network. The proxy connects to TierPlan directly, never through a route it
+	// serves itself (SELF-05, D-10). A node that does not know the code logs it as it is.
+	RefuseSelfNetworkPeer = "self_network_peer"
 	// RefuseInternal means the server failed while handling an otherwise valid
 	// handshake. The node retries with backoff.
 	RefuseInternal = "internal_error"

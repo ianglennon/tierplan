@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import type { IngressStarted, ReviewItem, ReviewPreview } from "@/api/ingress-switches";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ReviewDialog, type ReviewKind } from "@/features/ingress/review-dialog";
 import { SettingsTab } from "@/features/ingress/settings-tab";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -356,6 +358,65 @@ describe("turning ingress on", () => {
     expect(writes).toHaveLength(0);
   });
 
+  it("links the HTTP-01 refusals to HTTPS settings", async () => {
+    previewAnswer = () =>
+      Response.json(
+        enablePreview({
+          findings: [
+            {
+              code: "ingress_http01_conflict",
+              severity: "error",
+              message: "TierPlan runs on this swarm and its own certificate uses HTTP-01.",
+              items: [],
+            },
+            {
+              code: "ingress_http01_unknown",
+              severity: "warning",
+              message: "TierPlan couldn't tell whether this conflict applies.",
+              items: [],
+            },
+            {
+              code: "ingress_no_manager",
+              severity: "error",
+              message: "No manager node is connected.",
+              items: [],
+            },
+          ],
+        }),
+      );
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    await waitUnderFakeClock(() => expect(screen.getByText("This can't go ahead")).toBeTruthy());
+    const links = within(dialog).getAllByRole("link", { name: "Open HTTPS settings" });
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(link.getAttribute("href")).toBe("/settings/https");
+    const conflict = within(dialog)
+      .getByText("TierPlan runs on this swarm and its own certificate uses HTTP-01.")
+      .closest("li") as HTMLElement;
+    expect(within(conflict).getByRole("link", { name: "Open HTTPS settings" })).toBeTruthy();
+    const unknown = within(dialog)
+      .getByText("TierPlan couldn't tell whether this conflict applies.")
+      .closest("li") as HTMLElement;
+    expect(within(unknown).getByRole("link", { name: "Open HTTPS settings" })).toBeTruthy();
+    const other = within(dialog)
+      .getByText("No manager node is connected.")
+      .closest("li") as HTMLElement;
+    expect(within(other).queryByRole("link")).toBeNull();
+  });
+
+  it("shows the carve-out note on enable", async () => {
+    const note =
+      "TierPlan's own certificate uses the HTTP-01 challenge. The ingress sends only /.well-known/acme-challenge/ requests for tp.example.com to TierPlan, over the tierplan-self network, so the certificate keeps renewing.";
+    previewAnswer = () => Response.json(enablePreview({ notice: note }));
+    const dialog = await open("Turn on ingress", "Turn on ingress?");
+    const text = await waitUnderFakeClock(() => within(dialog).getByText(note));
+    const alert = text.closest("[data-slot=alert]") as HTMLElement;
+    expect(alert).toBeTruthy();
+    // Neutral: not a warning and not a refusal.
+    expect(alert.className).not.toContain("border-status-warning");
+    expect(alert.className).not.toContain("text-destructive");
+    expect(confirmOf(dialog, "Turn on ingress").disabled).toBe(false);
+  });
+
   it("shows the sentence of a refused preview in the dialog, naming who holds the environment, and no toast", async () => {
     const sentence = "ana is deploying a stack to this environment.";
     previewAnswer = () => problem(409, "operation_locked", sentence);
@@ -491,6 +552,55 @@ describe("turning ingress off", () => {
   });
 });
 
+describe("turning ingress off while TierPlan's own route is on", () => {
+  const release =
+    "TierPlan's own route on tp.example.com is released first. Direct access on https://tierplan.internal:7480 keeps working.";
+
+  function selfRoute(host: string): Json {
+    return {
+      here: "yes",
+      on: true,
+      host,
+      state: "serving",
+      reason: "",
+      directAddress: "https://tierplan.internal:7480",
+      kind: "standalone",
+      attached: true,
+      network: "tierplan-self",
+      carveOut: false,
+    };
+  }
+
+  beforeEach(() => {
+    previewAnswer = () =>
+      Response.json({ findings: [], removes: {}, unreachable: [], notice: release });
+    job = jobBody({ kind: "ingress_disable" });
+  });
+
+  it("shows the release-first note and the route warning on disable", async () => {
+    status = statusBody({ enabled: true, selfRoute: selfRoute(window.location.host) });
+    const dialog = await open("Turn off ingress", "Turn off ingress?");
+    const note = await waitUnderFakeClock(() => within(dialog).getByText(release));
+    const neutral = note.closest("[data-slot=alert]") as HTMLElement;
+    expect(neutral.className).not.toContain("border-status-warning");
+    const warning = within(dialog).getByText(
+      "You're using TierPlan through this route. This page may stop answering as the route goes. The change still goes through. Open https://tierplan.internal:7480 to see the result.",
+    );
+    expect((warning.closest("[data-slot=alert]") as HTMLElement).className).toContain(
+      "border-status-warning",
+    );
+    // The warning never holds the switch back (D-11).
+    expect(confirmOf(dialog, "Turn off ingress").disabled).toBe(false);
+  });
+
+  it("draws the note but no warning when the page came another way", async () => {
+    status = statusBody({ enabled: true, selfRoute: selfRoute("tp.example.com") });
+    const dialog = await open("Turn off ingress", "Turn off ingress?");
+    await waitUnderFakeClock(() => expect(within(dialog).getByText(release)).toBeTruthy());
+    expect(within(dialog).queryByText(/You're using TierPlan through this route/)).toBeNull();
+  });
+});
+
 describe("a reader", () => {
   it("sees the status and a button disabled with its reason, and never requests a job", async () => {
     me = makeMe({ envs: { [ENV]: "viewer" } });
@@ -507,5 +617,224 @@ describe("a reader", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getAllByText("Needs Admin").length).toBeGreaterThan(0);
     expect(requests.filter((r) => r.includes("/jobs/") || r.startsWith("POST"))).toEqual([]);
+  });
+});
+
+// The self route's previews (D-17, UI-SPEC S1b, S1c, A-05) are an ordered list of items, not findings. The dialog is
+// driven directly here with fixed answers: what the server says is a given, what the dialog draws is under test.
+
+const ITEMS_ALL: ReviewItem[] = [
+  { code: "self_hostname", state: "ok", message: "tp.example.com is free and under example.com." },
+  {
+    code: "self_certificate",
+    state: "warning",
+    message: "No certificate yet. TierPlan orders one when you turn the route on.",
+  },
+  {
+    code: "self_network",
+    state: "warning",
+    message: "TierPlan is not on tierplan-self yet.",
+    snippet: { kind: "stack_file", text: "services:\n  tierplan:" },
+  },
+  {
+    code: "self_origin",
+    state: "ok",
+    message: "TierPlan will also accept https://tp.example.com.",
+  },
+  {
+    code: "self_carve_out",
+    state: "ok",
+    message: "The ingress sends only acme-challenge requests for tp.example.com to TierPlan.",
+  },
+];
+
+function SelfHarness({
+  kind,
+  items,
+  withForm = false,
+  onChecked,
+}: {
+  kind: ReviewKind;
+  items: ReviewItem[];
+  withForm?: boolean;
+  onChecked?: () => void;
+}) {
+  const preview = useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<ReviewPreview> => {
+      onChecked?.();
+      return { findings: [], redeploy: [], unreachable: [], items };
+    },
+  });
+  const start = useMutation({
+    gcTime: 0,
+    mutationFn: async (): Promise<IngressStarted> => ({ jobId: "j1" }),
+  });
+  return (
+    <ReviewDialog
+      envId={ENV}
+      kind={kind}
+      open
+      onOpenChange={() => {}}
+      preview={preview}
+      start={start}
+      bodyValues={{ direct: "tp.lan:7480", host: "tp.example.com" }}
+      form={
+        withForm
+          ? {
+              fields: <input aria-label="Hostname" defaultValue="tp.example.com" />,
+              canCheck: true,
+              check: () => preview.mutate(),
+            }
+          : undefined
+      }
+    />
+  );
+}
+
+const TITLES: Partial<Record<ReviewKind, string>> = {
+  selfEnable: "Turn on TierPlan's own route?",
+  selfDisable: "Turn off TierPlan's own route?",
+  disable: "Turn off ingress?",
+  vipEnable: "Turn on virtual IP?",
+};
+
+async function openSelf(kind: ReviewKind, items: ReviewItem[], withForm = false) {
+  render(
+    <QueryClientProvider client={client}>
+      <SelfHarness kind={kind} items={items} withForm={withForm} />
+    </QueryClientProvider>,
+  );
+  return waitUnderFakeClock(() => screen.getByRole("dialog", { name: TITLES[kind] }));
+}
+
+// openVip opens a kind that has no check label of its own, with a form, to see the fallback.
+function openVip() {
+  return openSelf("vipEnable", [], true);
+}
+
+function headingsOf(dialog: HTMLElement): string[] {
+  const list = within(dialog).getByRole("list");
+  return within(list)
+    .getAllByRole("listitem")
+    .map((li) => li.querySelector(".text-sm.font-medium")?.textContent ?? "");
+}
+
+describe("an ordered self route preview", () => {
+  it("draws the items in the order the server sends them, each with its word", async () => {
+    const dialog = await openSelf("selfEnable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(headingsOf(dialog)).toEqual([
+      "Hostname",
+      "Domain and certificate",
+      "Self network",
+      "Origin",
+      "Port 80 for TierPlan's certificate",
+    ]);
+    const list = within(dialog).getByRole("list");
+    expect(list.tagName).toBe("OL");
+    const words = within(list)
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector(".sr-only")?.textContent);
+    expect(words).toEqual(["OK", "Warning", "Warning", "OK", "OK"]);
+    expect(within(dialog).getByText("tp.example.com is free and under example.com.")).toBeTruthy();
+  });
+
+  it("does not regroup the items by severity", async () => {
+    const reversed = [ITEMS_ALL[3], ITEMS_ALL[1], ITEMS_ALL[0]] as ReviewItem[];
+    const dialog = await openSelf("selfEnable", reversed);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(headingsOf(dialog)).toEqual(["Origin", "Domain and certificate", "Hostname"]);
+  });
+
+  it("skips an item the server does not send", async () => {
+    const without = ITEMS_ALL.filter((item) => item.code !== "self_carve_out");
+    const dialog = await openSelf("selfEnable", without);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    const list = within(dialog).getByRole("list");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(4);
+    expect(within(dialog).queryByText("Port 80 for TierPlan's certificate")).toBeNull();
+  });
+});
+
+describe("an ordered preview that refuses, and the self route's words", () => {
+  const REFUSED: ReviewItem[] = [
+    {
+      code: "self_hostname",
+      state: "ok",
+      message: "tp.example.com is free and under example.com.",
+    },
+    {
+      code: "self_network",
+      state: "refused",
+      message: "TierPlan runs as a plain container. Deploy it as a swarm service, then try again.",
+    },
+  ];
+
+  it("blocks once: one destructive alert, the refused sentence drawn once, the confirm off", async () => {
+    const dialog = await openSelf("selfDisable", REFUSED);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    const alerts = within(dialog).getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(within(alerts[0] as HTMLElement).getByText("This can't go ahead")).toBeTruthy();
+    expect(
+      within(alerts[0] as HTMLElement).getByText(
+        "Fix the item marked Refused. Nothing has been changed.",
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getAllByText(/Deploy it as a swarm service/)).toHaveLength(1);
+    expect(confirmOf(dialog, "Turn off own route").disabled).toBe(true);
+  });
+
+  it("lets a warning through: the confirm is on when nothing is refused", async () => {
+    const dialog = await openSelf("selfDisable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(within(dialog).queryByText("This can't go ahead")).toBeNull();
+    expect(confirmOf(dialog, "Turn off own route").disabled).toBe(false);
+  });
+
+  it("returns to the form with the blocked list above it when a checked hostname is refused", async () => {
+    const dialog = await openSelf("selfEnable", REFUSED, true);
+    expect(within(dialog).queryByRole("list")).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Check hostname" }));
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(within(dialog).getByLabelText("Hostname")).toBeTruthy();
+    expect(within(dialog).getByText("This can't go ahead")).toBeTruthy();
+    expect(within(dialog).getAllByText(/Deploy it as a swarm service/)).toHaveLength(1);
+  });
+
+  it("names the form's check button for the kind, and falls back to the shared one", async () => {
+    const self = await openSelf("selfEnable", [], true);
+    expect(within(self).getByRole("button", { name: "Check hostname" })).toBeTruthy();
+    cleanup();
+    const vip = await openVip();
+    expect(within(vip).getByRole("button", { name: "Check address" })).toBeTruthy();
+    expect(within(vip).queryByRole("button", { name: "Check hostname" })).toBeNull();
+  });
+
+  it("draws a snippet under its item in a copyable block, with the title", async () => {
+    const dialog = await openSelf("selfEnable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(dialog).getByRole("list"));
+    expect(within(dialog).getByText("Add TierPlan to the self network")).toBeTruthy();
+    const block = within(dialog).getByRole("region", { name: "the stack file lines" });
+    expect(block.querySelector("code")?.textContent).toBe("services:\n  tierplan:");
+    expect(within(dialog).getByRole("button", { name: /Copy the stack file lines/i })).toBeTruthy();
+    expect(within(dialog).getByText(/If the service has no/)).toBeTruthy();
+  });
+
+  it("confirms the self kinds with the primary button and a disable with the destructive one", async () => {
+    const off = await openSelf("selfDisable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(off).getByRole("list"));
+    expect(confirmOf(off, "Turn off own route").className).not.toContain("bg-destructive");
+    cleanup();
+    const on = await openSelf("selfEnable", ITEMS_ALL);
+    await waitUnderFakeClock(() => within(on).getByRole("list"));
+    expect(confirmOf(on, "Turn on own route").className).not.toContain("bg-destructive");
+    cleanup();
+    const plain = await openSelf("disable", []);
+    await waitUnderFakeClock(() =>
+      expect(confirmOf(plain, "Turn off ingress").disabled).toBe(false),
+    );
+    expect(confirmOf(plain, "Turn off ingress").className).toContain("bg-destructive");
   });
 });

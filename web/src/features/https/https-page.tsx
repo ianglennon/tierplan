@@ -11,11 +11,12 @@ import { CertificateCard } from "@/features/https/certificate-card";
 import { EnvLockNotice } from "@/features/https/env-lock-notice";
 import { HstsCard } from "@/features/https/hsts-card";
 import { IngressAccountCard } from "@/features/https/ingress-account-card";
+import { SelfRouteLine } from "@/features/https/self-route-line";
 import { TestDirectoryAlert } from "@/features/https/state-alerts";
 import { useT } from "@/i18n/use-t";
 
-// HttpsPage is Settings > HTTPS: the heading, a line saying what the page is for, then the
-// certificate the listener serves now. It sits in the narrow (896px) Settings column, 32px
+// HttpsPage is Settings > HTTPS: the heading, a line saying what the page is for, the line about
+// TierPlan's own route while it is on, then the certificate the listener serves now. It sits in the narrow (896px) Settings column, 32px
 // between blocks.
 export function HttpsPage() {
   const t = useT();
@@ -27,6 +28,7 @@ export function HttpsPage() {
         <h2 className="text-lg font-semibold">{t("https.title")}</h2>
         <p className="text-sm text-muted-foreground">{t("https.description")}</p>
       </div>
+      <SelfRouteLine selfRoute={status?.selfRoute} />
       {status && hasEnvLocks(status) ? <EnvLockNotice /> : null}
       {acme?.directoryOverridden ? <TestDirectoryAlert url={acme.directoryUrl} /> : null}
       <CertificateCard />

@@ -1,0 +1,30 @@
+{
+  "id": "c0aa187bd7fba97b4ad9bb6ff81bc00ec769663b76ae6b227c11a67e2564df2e",
+  "schema": 2,
+  "version": {
+    "config": 12,
+    "certs": 3,
+    "own": 1
+  },
+  "manifest": {
+    "schema": 2,
+    "files": [
+      {
+        "path": "dynamic/tierplan.yml",
+        "sha256": "2c07caea3371c14b3c71dcf078bf16837807ff66be33fd81219856d619a1db7f",
+        "mode": 420,
+        "step": 2
+      }
+    ],
+    "routes": []
+  },
+  "skipped": [
+    {
+      "hostname": "tp.apps.example.org",
+      "pathPrefix": "/",
+      "stack": "",
+      "service": "tierplan",
+      "reason": "self_not_attached"
+    }
+  ]
+}

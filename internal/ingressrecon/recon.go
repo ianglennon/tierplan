@@ -59,6 +59,17 @@ type Deps struct {
 	// OnRender, when set, is told the environment, the bundle ID and whether the ID is new after every render
 	// attempt that produced a bundle. It is a test seam; production leaves it nil.
 	OnRender func(envID, id string, changed bool)
+	// Self is TierPlan's own route and trust for the environment that carries TierPlan (D-14): the self
+	// input, the own version it was built at (it moves whenever TierPlan's own certificate does) and ok.
+	// It is called for every environment rendered and, through the version poll, every PollInterval, so it
+	// must be cheap. Nil, or ok false, renders no self input and own version 0.
+	Self func(ctx context.Context, envID string) (ingressrender.SelfInput, int64, bool)
+	// HoldFirstRender, when set, says whether the environment's first render since start must wait (28-UAT 9a): TierPlan
+	// has not yet observed itself on its own network, so a render now would leave its own route out and the proxies,
+	// reconnecting after TierPlan's restart, would drop it. While it holds, the reconciler holds no bundle for the
+	// environment, so the proxies keep serving their cached one; the poll tries again every PollInterval. It is asked only
+	// while the environment has no bundle: once one is rendered it is kept current as always. It must be cheap.
+	HoldFirstRender func(envID string) bool
 }
 
 // envState is what the reconciler holds of one environment.
@@ -71,8 +82,12 @@ type envState struct {
 	bundle  ingressbundle.Bundle
 	have    bool
 	skipped []ingressrender.Skipped
-	// config and certs are the version pair the current bundle's last render read.
-	config, certs int64
+	// config and certs are the version pair the current bundle's last render read, and own the own version
+	// it was rendered at (0 when the environment does not carry TierPlan).
+	config, certs, own int64
+	// selfRefused is the last render's refusal of the self input as text, "" for none, so a refusal that
+	// repeats on every poll is logged once.
+	selfRefused string
 }
 
 // Reconciler keeps the current bundle of every environment, in memory only (D-20).
@@ -146,6 +161,21 @@ func (r *Reconciler) Skipped(envID string) []ingressrender.Skipped {
 	return slices.Clone(s.skipped)
 }
 
+// RenderedOwn is the own version of the last bundle rendered for the environment: 0 before any render, for an
+// environment that does not carry TierPlan and for one the reconciler does not know. The staged install (28-32)
+// reads it to tell when the proxies have the trust bundle of TierPlan's new certificate.
+func (r *Reconciler) RenderedOwn(envID string) int64 {
+	r.mu.Lock()
+	s, ok := r.envs[envID]
+	r.mu.Unlock()
+	if !ok {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.own
+}
+
 // Reconcile renders one environment and publishes the bundle when its ID is new. An error leaves the stored
 // bundle, its version pair and its skipped list untouched (D-20, PROH-21-06): the environment's nodes keep the last
 // good configuration, and the error is recorded as the environment's Failure and logged once. A render that
@@ -168,6 +198,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, envID string) error {
 // reconcile is one render of the environment, with the environment's run lock held. It writes the stored bundle
 // only after the render succeeded.
 func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) error {
+	if r.firstRenderHeld(envID, s) {
+		return nil
+	}
 	snap, err := r.d.Model.Snapshot(ctx, envID)
 	if err != nil {
 		return &readError{err}
@@ -192,7 +225,11 @@ func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) e
 			Hostname: c.Hostname, ChainPEM: c.ChainPEM, KeyPEM: c.KeyPEM, Reason: ingressrender.SkipReason(c.Reason),
 		})
 	}
-	res, err := r.render(ingressrender.Input{Snapshot: snap, Certs: certs, CertsVersion: certsVersion, OwnVersion: 0})
+	in := ingressrender.Input{Snapshot: snap, Certs: certs, CertsVersion: certsVersion}
+	if self, own, ok := r.self(ctx, envID); ok {
+		in.Self, in.OwnVersion = &self, own
+	}
+	res, err := r.render(in)
 	if err != nil {
 		return err
 	}
@@ -206,8 +243,19 @@ func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) e
 		s.bundle.Version = res.Bundle.Version
 	}
 	s.skipped = res.Skipped
-	s.config, s.certs = snap.Settings.ConfigVersion, certsVersion
+	s.config, s.certs, s.own = snap.Settings.ConfigVersion, certsVersion, in.OwnVersion
+	selfRefused := ""
+	if res.SelfRefused != nil {
+		selfRefused = res.SelfRefused.Error()
+	}
+	logSelf := selfRefused != "" && selfRefused != s.selfRefused
+	s.selfRefused = selfRefused
 	s.mu.Unlock()
+	if logSelf {
+		// The stack routes are rendered all the same (WR-09); only TierPlan's own route and carve-out wait.
+		r.log.Warn("TierPlan's own route and HTTP-01 carve-out are left out of the environment's bundle: TierPlan's own input cannot be rendered",
+			"environment", envID, "code", res.SelfRefused.Code, "field", res.SelfRefused.Field)
+	}
 
 	if changed {
 		r.changes.Notify(envID)
@@ -218,11 +266,35 @@ func (r *Reconciler) reconcile(ctx context.Context, envID string, s *envState) e
 	return nil
 }
 
+// firstRenderHeld is whether the environment has no bundle yet and Deps.HoldFirstRender holds its first render.
+func (r *Reconciler) firstRenderHeld(envID string, s *envState) bool {
+	if r.d.HoldFirstRender == nil {
+		return false
+	}
+	s.mu.Lock()
+	have := s.have
+	s.mu.Unlock()
+	if have || !r.d.HoldFirstRender(envID) {
+		return false
+	}
+	r.log.Debug("the first render of the environment waits until TierPlan has observed its own network; its proxies keep their cached bundle",
+		"environment", envID)
+	return true
+}
+
+// self is Deps.Self for the environment, or nothing when it is unset.
+func (r *Reconciler) self(ctx context.Context, envID string) (ingressrender.SelfInput, int64, bool) {
+	if r.d.Self == nil {
+		return ingressrender.SelfInput{}, 0, false
+	}
+	return r.d.Self(ctx, envID)
+}
+
 // drop forgets the environment's bundle and tells Changes, but only if there was one.
 func (r *Reconciler) drop(envID string, s *envState) {
 	s.mu.Lock()
 	existed := s.have
-	s.bundle, s.have, s.skipped, s.config, s.certs = ingressbundle.Bundle{}, false, nil, 0, 0
+	s.bundle, s.have, s.skipped, s.config, s.certs, s.own = ingressbundle.Bundle{}, false, nil, 0, 0, 0
 	s.mu.Unlock()
 	if existed {
 		r.changes.Notify(envID)
@@ -286,8 +358,8 @@ func (r *Reconciler) renderAll(ctx context.Context) {
 	r.reconcileEach(ctx, r.union(versions))
 }
 
-// pollVersions reconciles the environments whose version pair differs from the pair their bundle was last
-// rendered at, those with no bundle yet, and those holding a bundle or a failure that Versions no longer lists. A read error
+// pollVersions reconciles the environments whose version pair, or own version (read through Deps.Self, A-02), differs
+// from what their bundle was last rendered at, those with no bundle yet, and those holding a bundle or a failure that Versions no longer lists. A read error
 // is logged and the caller re-arms the timer, so a failing read is never a tight loop (T-21-38).
 func (r *Reconciler) pollVersions(ctx context.Context) {
 	versions, err := r.d.Model.Versions(ctx)
@@ -299,7 +371,11 @@ func (r *Reconciler) pollVersions(ctx context.Context) {
 	var due []string
 	for _, v := range versions {
 		listed[v.EnvID] = struct{}{}
-		if r.moved(v) {
+		_, own, ok := r.self(ctx, v.EnvID)
+		if !ok {
+			own = 0
+		}
+		if r.moved(v, own) {
 			due = append(due, v.EnvID)
 		}
 	}
@@ -311,8 +387,9 @@ func (r *Reconciler) pollVersions(ctx context.Context) {
 	r.reconcileEach(ctx, due)
 }
 
-// moved reports whether the environment has no bundle or its bundle was rendered at another version pair.
-func (r *Reconciler) moved(v ingress.EnvVersion) bool {
+// moved reports whether the environment has no bundle or its bundle was rendered at another version pair or another
+// own version. A change of TierPlan's own certificate moves own alone, with the config and certs versions unchanged.
+func (r *Reconciler) moved(v ingress.EnvVersion, own int64) bool {
 	r.mu.Lock()
 	s, ok := r.envs[v.EnvID]
 	r.mu.Unlock()
@@ -321,7 +398,7 @@ func (r *Reconciler) moved(v ingress.EnvVersion) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.have || s.config != v.ConfigVersion || s.certs != v.CertsVersion
+	return !s.have || s.config != v.ConfigVersion || s.certs != v.CertsVersion || s.own != own
 }
 
 // tracked lists the environments the reconciler holds a bundle or a failure for. An environment whose renders have

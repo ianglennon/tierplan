@@ -75,7 +75,7 @@ func TestParseNodeMessageErrorsAreDistinct(t *testing.T) {
 
 func TestBundleEnvelopeNeverPrintsFileData(t *testing.T) {
 	const marker = "SECRET-KEY-MARKER-do-not-log"
-	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 1},
+	b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: 1},
 		[]ingressbundle.File{
 			{Path: ingressbundle.DynamicFile, Data: []byte("http: {}\n")},
 			{Path: ingressbundle.CertsDir + "/a.key", Data: []byte(marker)},

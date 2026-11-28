@@ -582,3 +582,128 @@ func TestCheckRequestTakenIsRedactedAndWordedThroughDescribeHolder(t *testing.T)
 		t.Fatalf("a system claim gave %+v, %v", p, bad)
 	}
 }
+
+// systemWorld is a world with apps.example.org registered for env-a.
+func systemWorld() World {
+	return policyWorld(policyDomain("d1", "apps.example.org"))
+}
+
+func TestCheckSystemClaim(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		world    func() World
+		wantCode string
+	}{
+		{"free host under a registered domain", "tp.apps.example.org", systemWorld, ""},
+		{"the domain's own suffix", "apps.example.org", systemWorld, CodeDomainNotAllowed},
+		{"under no registered domain", "tp.other.example.net", systemWorld, CodeDomainNotAllowed},
+		{"reserved", "tp.apps.example.org", func() World {
+			w := systemWorld()
+			w.Reserved["tp.apps.example.org"] = true
+			return w
+		}, CodeHostReserved},
+		{"held by a stack of another environment", "tp.apps.example.org", func() World {
+			w := systemWorld()
+			policyHold(w, "tp.apps.example.org", "s9", "blog", "env-b", "staging")
+			return w
+		}, CodeHostTaken},
+		{"held by a stack of the domain's own environment", "tp.apps.example.org", func() World {
+			w := systemWorld()
+			policyHold(w, "tp.apps.example.org", "s9", "blog", "env-a", "prod")
+			return w
+		}, CodeHostTaken},
+		{"already held by the system", "tp.apps.example.org", func() World {
+			w := systemWorld()
+			w.Claims["tp.apps.example.org"] = ClaimInfo{Claim: Claim{EnvID: "env-a", Hostname: "tp.apps.example.org", OwnerKind: OwnerSystem}, EnvName: "prod"}
+			return w
+		}, CodeHostTaken},
+		{"the agent URL host", "tp.apps.example.org", func() World {
+			w := systemWorld()
+			w.AgentHosts = []string{"tp.apps.example.org"}
+			return w
+		}, CodeHostIsAgentURL},
+		{"not a valid hostname", "tp_apps.example.org", systemWorld, CodeHostInvalid},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dom, p, bad := CheckSystemClaim(tt.host, tt.world())
+			if tt.wantCode == "" {
+				if bad || p.Code != "" {
+					t.Fatalf("refused: bad=%v problem=%+v, want accepted", bad, p)
+				}
+				if dom.ID != "d1" {
+					t.Errorf("domain = %q, want d1", dom.ID)
+				}
+				return
+			}
+			if !bad || p.Code != tt.wantCode {
+				t.Fatalf("bad=%v code=%q, want a refusal with %q", bad, p.Code, tt.wantCode)
+			}
+			if p.Severity != SeverityError || p.Message == "" {
+				t.Errorf("problem = %+v, want an error with a message", p)
+			}
+			if dom.ID != "" {
+				t.Errorf("a refusal returned the domain %q", dom.ID)
+			}
+		})
+	}
+}
+
+// TestCheckSystemClaimHolderIsDescribed checks the clash message goes through DescribeHolder, so it names nothing the
+// caller cannot see.
+func TestCheckSystemClaimHolderIsDescribed(t *testing.T) {
+	w := systemWorld()
+	policyHold(w, "tp.apps.example.org", "s9", "blog", "env-b", "staging")
+	_, p, bad := CheckSystemClaim("tp.apps.example.org", w)
+	if !bad || strings.Contains(p.Message, "blog") || strings.Contains(p.Message, "staging") {
+		t.Fatalf("message %q names a stack or environment the caller cannot see", p.Message)
+	}
+	w.CanView = func(string) bool { return true }
+	_, p, _ = CheckSystemClaim("tp.apps.example.org", w)
+	if !strings.Contains(p.Message, "blog") || !strings.Contains(p.Message, "staging") {
+		t.Fatalf("message %q should name the stack and environment the caller can see", p.Message)
+	}
+}
+
+// TestCheckSystemClaimAdjacency is SELF-01's edge: only the exact agent-URL host is refused. A sibling name under the same
+// domain and a child of the agent host are different hosts, and the comparison ignores case.
+func TestCheckSystemClaimAdjacency(t *testing.T) {
+	w := systemWorld()
+	w.AgentHosts = []string{"tierplan.apps.example.org"}
+	for host, wantBad := range map[string]bool{
+		"tierplan.apps.example.org":   true,
+		"TierPlan.Apps.Example.org":   true,
+		"tierplan.apps.example.org.":  true,
+		"tp.apps.example.org":         false,
+		"x.tierplan.apps.example.org": false,
+	} {
+		_, p, bad := CheckSystemClaim(host, w)
+		if bad != wantBad {
+			t.Errorf("%q: bad=%v (%s), want %v", host, bad, p.Code, wantBad)
+		}
+		if bad && p.Code != CodeHostIsAgentURL {
+			t.Errorf("%q: code %q, want %s", host, p.Code, CodeHostIsAgentURL)
+		}
+	}
+}
+
+// TestCheckRefusesTheAgentHostBeforeTheHolder checks the order: the agent-host refusal comes after the domain check and
+// before the holder check, in Check and CheckRequest alike.
+func TestCheckRefusesTheAgentHostBeforeTheHolder(t *testing.T) {
+	w := systemWorld()
+	w.AgentHosts = []string{"tp.apps.example.org"}
+	policyHold(w, "tp.apps.example.org", "s9", "blog", "env-b", "staging")
+	_, problems := Check("s1", []Declaration{policyDecl("web", "", "tp.apps.example.org", "")}, w)
+	if got := policyCodes(problems); !reflect.DeepEqual(got, []string{CodeHostIsAgentURL}) {
+		t.Errorf("Check codes = %v, want [%s]", got, CodeHostIsAgentURL)
+	}
+	if _, p, bad := CheckRequest("tp.apps.example.org", w); !bad || p.Code != CodeHostIsAgentURL {
+		t.Errorf("CheckRequest = %v %q, want %s", bad, p.Code, CodeHostIsAgentURL)
+	}
+	// Outside every registered domain the domain refusal still comes first.
+	w.AgentHosts = []string{"tierplan.other.net"}
+	if _, p, bad := CheckRequest("tierplan.other.net", w); !bad || p.Code != CodeDomainNotAllowed {
+		t.Errorf("an agent host under no domain: %v %q, want %s", bad, p.Code, CodeDomainNotAllowed)
+	}
+}

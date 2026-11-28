@@ -10,11 +10,11 @@ import (
 )
 
 // Latest is the newest bundle schema this renderer produces.
-const Latest = ingressbundle.Schema1
+const Latest = ingressbundle.Schema2
 
 // Schemas lists the bundle schemas this renderer can produce, oldest first. The slice is a copy.
 func Schemas() []int {
-	return []int{ingressbundle.Schema1}
+	return []int{ingressbundle.Schema2}
 }
 
 // RenderSchema renders the input as a bundle of the given schema. A schema this renderer does not
@@ -22,12 +22,13 @@ func Schemas() []int {
 //
 // The supervisor on each node reports the schemas it can apply when it connects (Phase 22). TierPlan
 // renders the highest schema both sides support (PickSchema) and asks for exactly that one here. A node
-// whose supervisor shares no schema with TierPlan keeps the last good bundle it has: it is frozen, not
-// broken, and the environment says so rather than pushing a bundle the node cannot read.
+// whose supervisor shares no schema with TierPlan (a proxy image that still knows only schema 1, while
+// this renderer makes schema 2) keeps the last good bundle it has: it is frozen, not broken, and the
+// environment says so rather than pushing a bundle the node cannot read.
 func RenderSchema(schema int, in Input) (Result, error) {
 	switch schema {
-	case ingressbundle.Schema1:
-		return renderSchema1(in)
+	case ingressbundle.Schema2:
+		return renderSchema2(in)
 	default:
 		return Result{}, &UnsupportedSchemaError{Offered: []int{schema}, Supported: Schemas()}
 	}

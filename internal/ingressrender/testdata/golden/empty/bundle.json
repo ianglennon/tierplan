@@ -1,13 +1,13 @@
 {
-  "id": "3345652c9a77ba8829c3d28a8e4a0795e259b34bc435e476136d49b4191ac7aa",
-  "schema": 1,
+  "id": "c0aa187bd7fba97b4ad9bb6ff81bc00ec769663b76ae6b227c11a67e2564df2e",
+  "schema": 2,
   "version": {
     "config": 1,
     "certs": 0,
     "own": 0
   },
   "manifest": {
-    "schema": 1,
+    "schema": 2,
     "files": [
       {
         "path": "dynamic/tierplan.yml",

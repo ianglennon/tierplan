@@ -91,6 +91,8 @@ func validPath(p string) bool {
 // files matching one to one; each file's checksum; and last the ID. The first
 // failure is returned as a *VerifyError.
 func (b Bundle) Verify() error {
+	// Schema1 is the lowest schema number there is, so this rejects zero and negatives. Whether a node
+	// applies the schema is the supervisor's own check against SupportedSchemas.
 	if b.Schema < Schema1 || b.Manifest.Schema != b.Schema {
 		return &VerifyError{Reason: ReasonSchema}
 	}

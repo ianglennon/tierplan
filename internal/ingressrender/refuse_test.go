@@ -355,15 +355,22 @@ func TestNamesDoNotCollide(t *testing.T) {
 					t.Errorf("router %s is listed twice", e.Router)
 				}
 				routers[e.Router] = true
-				if e.Router != "r-"+e.Hash[:nameHashLen] {
+				// TierPlan's own route has a fixed name (D-09); every stack route's name is its hash.
+				if e.Router != "r-"+e.Hash[:nameHashLen] && (e.Router != selfRouterName || e.Stack != "") {
 					t.Errorf("router %s is not derived from its hash %s", e.Router, e.Hash)
 				}
 			}
 			if _, has := doc["http"]; !has {
 				return
 			}
-			if got := len(digMap(t, doc, "http", "routers")); got != len(routers) {
-				t.Errorf("%d routers in the file but %d manifest routes", got, len(routers))
+			// TierPlan's HTTP-01 carve-out (D-12) is a router but not a route: it is never in the manifest.
+			fileRouters := digMap(t, doc, "http", "routers")
+			got := len(fileRouters)
+			if _, carve := fileRouters[acmeRouterName]; carve {
+				got--
+			}
+			if got != len(routers) {
+				t.Errorf("%d route routers in the file but %d manifest routes", got, len(routers))
 			}
 		})
 	}

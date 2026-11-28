@@ -346,7 +346,7 @@ func (f *disableFix) otherEnv() string {
 // wantDisableDone fails the test unless every item of the disable job ended done, in the order the job lists them.
 func wantDisableDone(t *testing.T, job jobs.Job) {
 	t.Helper()
-	want := []string{"virtual_ip", "switch_off", "service", "volumes", "network", "secret", "token", "nodes"}
+	want := []string{"self_route", "virtual_ip", "switch_off", "service", "volumes", "network", "self_network", "secret", "token", "nodes"}
 	var got []string
 	for _, it := range job.Items {
 		got = append(got, it.ID)
@@ -640,7 +640,7 @@ func TestDisableTasksThatNeverGoFailTheServiceStepAndARerunFinishes(t *testing.T
 	if it := itemOf(job, ingressdeploy.ItemService); it.State != jobs.ItemFailed || it.Code != ingressdeploy.CodeDisableServiceFailed {
 		t.Errorf("service = %q %q, want failed with disable_service_failed", it.State, it.Code)
 	}
-	for _, id := range []string{"volumes", "network", "secret", "token", "nodes"} {
+	for _, id := range []string{"volumes", "network", "self_network", "secret", "token", "nodes"} {
 		if it := itemOf(job, id); it.State != jobs.ItemSkipped || it.Code != ingressdeploy.CodeNotRun {
 			t.Errorf("%s = %q %q, want skipped and not_run", id, it.State, it.Code)
 		}

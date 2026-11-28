@@ -25,6 +25,7 @@ type routeConditionAnswer struct {
 	State   string `json:"state"`
 	Reason  string `json:"reason"`
 	Message string `json:"message"`
+	Failed  bool   `json:"failed"`
 	Applied *struct {
 		Nodes int `json:"nodes"`
 		Total int `json:"total"`

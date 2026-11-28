@@ -92,6 +92,29 @@ func (r *httpsRuntime) SetOnInstall(f func()) {
 	r.onInstall.Store(&f)
 }
 
+// AddOnInstall adds f to what is called after every Install, after whatever SetOnInstall or an
+// earlier AddOnInstall registered. The hook stays a single stored func, so Install reads one pointer.
+// f must not block. A nil f is ignored.
+func (r *httpsRuntime) AddOnInstall(f func()) {
+	if f == nil {
+		return
+	}
+	for {
+		prev := r.onInstall.Load()
+		next := f
+		if prev != nil {
+			earlier := *prev
+			next = func() {
+				earlier()
+				f()
+			}
+		}
+		if r.onInstall.CompareAndSwap(prev, &next) {
+			return
+		}
+	}
+}
+
 // Kind is the kind of the installed source, 0 when nothing is installed. That
 // is only the window between newHTTPSRuntime and assemble's Install, or a test
 // rig that never installs.

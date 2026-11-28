@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 )
 
 // These tests tie docs/install-in-swarm.md to what it promises: the stack file parses and holds the
@@ -127,6 +130,84 @@ func TestInstallInSwarmDocsStackFile(t *testing.T) {
 		if !hostMode {
 			t.Errorf("%s: no published port with mode: host (D-20): %v", name, svc.Ports)
 		}
+	}
+}
+
+// selfRoutePart is the guide's "### TierPlan's own ingress route (optional)" part: from its heading to the next heading of
+// level 2 or 3 outside a code fence. It is empty when there is no such part.
+func selfRoutePart(doc string) string {
+	const heading = "### TierPlan's own ingress route (optional)"
+	var out []string
+	in, fenced := false, false
+	for _, line := range strings.Split(doc, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			fenced = !fenced
+		}
+		if !fenced && (strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "### ")) {
+			if in {
+				break
+			}
+			in = strings.TrimSpace(line) == heading
+		}
+		if in {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestInstallInSwarmDocsSelfNetworkLinesMatchTheUI ties the optional self network lines of the stack file section to the
+// text the UI shows (D-03): the fenced block is the deployer's snippet for the guide's service name, it parses as YAML and
+// names tierplan-self as external, and the page gives the service update command, the order rule and the pre-create command.
+func TestInstallInSwarmDocsSelfNetworkLinesMatchTheUI(t *testing.T) {
+	doc := swarmGuideText(t)
+	stackSection := guideSection(doc, "The stack file")
+	part := selfRoutePart(stackSection)
+	if part == "" {
+		t.Fatal(`the "## The stack file" section has no "### TierPlan's own ingress route (optional)" part`)
+	}
+	lines := firstYAMLBlock(t, part) + "\n"
+	if want := ingressdeploy.StackFileSnippet("tierplan"); lines != want {
+		t.Errorf("the guide's stack file lines are\n%s\nthe UI shows\n%s", lines, want)
+	}
+	var file struct {
+		Services map[string]struct {
+			Networks []string `yaml:"networks"`
+		} `yaml:"services"`
+		Networks map[string]struct {
+			External bool `yaml:"external"`
+		} `yaml:"networks"`
+	}
+	if err := yaml.Unmarshal([]byte(lines), &file); err != nil {
+		t.Fatalf("the stack file lines do not parse: %v", err)
+	}
+	svc, ok := file.Services["tierplan"]
+	if !ok || len(svc.Networks) != 1 || svc.Networks[0] != ingress.SelfNetworkName {
+		t.Errorf("the lines do not put the service tierplan on %s: %+v", ingress.SelfNetworkName, file.Services)
+	}
+	if net, ok := file.Networks[ingress.SelfNetworkName]; !ok || !net.External {
+		t.Errorf("the lines do not declare %s as an external network: %+v", ingress.SelfNetworkName, file.Networks)
+	}
+	// The main stack file stays the section's first yaml block, so a reader who copies it gets no self network.
+	if first := firstYAMLBlock(t, stackSection); strings.Contains(first, ingress.SelfNetworkName) {
+		t.Error("the main stack file names the self network; the lines must stay optional")
+	}
+	for _, phrase := range []string{
+		ingressdeploy.ServiceUpdateCommand("tierplan"),
+		"docker network create --driver overlay --label " + ingress.LabelComponent + "=" + ingress.ComponentIngress +
+			" --label " + ingress.LabelIngressRole + "=" + ingress.RoleSelfNetwork + " " + ingress.SelfNetworkName,
+		"leaves the stack's default network",
+		"Turn the route on in TierPlan first",
+		"turn the route off first",
+		"DNS-01",
+		"(#tierplans-own-ingress-route-optional)",
+	} {
+		if !strings.Contains(doc, phrase) {
+			t.Errorf("docs/install-in-swarm.md does not say %q", phrase)
+		}
+	}
+	if n := strings.Count(doc, "docker network create --driver overlay"); n != 1 {
+		t.Errorf("the pre-create command appears %d times, want 1", n)
 	}
 }
 

@@ -20,7 +20,7 @@ func TestPeekBundleID(t *testing.T) {
 		t.Fatalf("read the frozen envelope golden: %v", err)
 	}
 
-	other, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 9},
+	other, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: 9},
 		[]ingressbundle.File{{Path: ingressbundle.DynamicFile, Data: []byte("tls:\n  options: {}\n")}}, nil)
 	if err != nil {
 		t.Fatalf("build another bundle: %v", err)

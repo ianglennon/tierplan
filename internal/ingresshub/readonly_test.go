@@ -37,13 +37,13 @@ func roAwaitEvents(t *testing.T, srv *ingresstest.Server, n int) []ingresshub.Pu
 	return srv.Pushes().Await(t, func(evs []ingresshub.PushEvent) bool { return len(evs) >= n })
 }
 
-// roHello enrols a node of a swarm env that lists swarmID, says hello for schema 1 and waits for the hub's
+// roHello enrols a node of a swarm env that lists swarmID, says hello for the current schema and waits for the hub's
 // first look at its environment.
 func roHello(t *testing.T, srv *ingresstest.Server, env ingresstest.Environment, swarmID string, events int) (*ingresstest.Identity, *ingresstest.Conn) {
 	t.Helper()
 	id := ingresstest.NewIdentity()
 	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "node-" + swarmID, SwarmNodeID: swarmID})
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	roAwaitEvents(t, srv, events)
 	return id, c
 }
@@ -108,7 +108,7 @@ func TestReadOnlyChannelSecondHelloCloses(t *testing.T) {
 	env := srv.NewEnvironment(t, "swarm")
 	srv.Nodes.Set(env.ID, "n1")
 	_, c := roHello(t, srv, env, "n1", 1)
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	requireClosed(t, c, websocket.StatusPolicyViolation, ingresswire.CloseProtocolError)
 }
 
@@ -203,7 +203,7 @@ func TestReadOnlyChannelReportsReachTheRow(t *testing.T) {
 		t.Fatalf("first bundle = %s, want %s", got.ID, x.ID)
 	}
 	row := roRow(t, srv, id.NodeID)
-	if row.Version != "0.1.0" || row.Schemas != "[1]" {
+	if row.Version != "0.1.0" || row.Schemas != "[2]" {
 		t.Errorf("hello: version %q schemas %q", row.Version, row.Schemas)
 	}
 
@@ -274,7 +274,7 @@ func TestReadOnlyChannelMessageFloodCloses(t *testing.T) {
 	id := ingresstest.NewIdentity()
 	c := srv.Enrol(t, id, ingresstest.Dial{Token: env.Token, Name: "node-n1", SwarmNodeID: "n1"})
 
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	for range ingresshub.ReportBurst {
 		c.Health(t, true)
 	}

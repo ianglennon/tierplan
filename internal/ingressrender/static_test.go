@@ -105,12 +105,16 @@ func assertBaseSections(t *testing.T, doc map[string]any) {
 		expect(t, "entryPoints."+name+".transport.lifeCycle.graceTimeOut", lifeCycle["graceTimeOut"], ingressbundle.TraefikGraceTimeout.String())
 	}
 	redirect := section(t, section(t, section(t, section(t, eps, "web"), "http"), "redirections"), "entryPoint")
-	if got := sortedKeys(redirect); !slices.Equal(got, []string{"permanent", "scheme", "to"}) {
+	if got := sortedKeys(redirect); !slices.Equal(got, []string{"permanent", "priority", "scheme", "to"}) {
 		t.Errorf("redirect keys = %v", got)
 	}
 	expect(t, "redirect.to", redirect["to"], ":443")
 	expect(t, "redirect.scheme", redirect["scheme"], "https")
 	expect(t, "redirect.permanent", redirect["permanent"], true)
+	// The redirect is an ordinary router at the lowest priority, so the dynamic carve-out for TierPlan's
+	// own challenge path outranks it (Phase 28 S12, A-01). The ACME bypass key the Traefik docs list is
+	// not set: 3.7.19 refuses to start with it (F1c).
+	expect(t, "redirect.priority", redirect["priority"], 1)
 	if got := sortedKeys(section(t, section(t, eps, "web"), "http")); !slices.Equal(got, []string{"aliasHeadersStrategy", "redirections"}) {
 		t.Errorf("web http keys = %v", got)
 	}

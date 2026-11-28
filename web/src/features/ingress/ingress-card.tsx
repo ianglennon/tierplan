@@ -19,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { REDEPLOY_SHOWN, ReviewDialog, type ReviewKind } from "@/features/ingress/review-dialog";
+import { usingRoute } from "@/features/ingress/self-route-card";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -84,6 +85,14 @@ export function IngressCard({ envId }: { envId: string }) {
   const stuck = enableFailed || incomplete;
   const redeploy = on ? (status.data.redeploy ?? []) : [];
   const wipes = status.data.pendingWipes;
+  // TierPlan's own route, when it is on here: switching ingress off releases it first (UI-SPEC S4), and a person using
+  // TierPlan through its host is warned as the route card warns (S1c). The server's empty direct address is this origin.
+  const self = status.data.selfRoute?.on ? status.data.selfRoute : undefined;
+  const direct = self?.directAddress ? self.directAddress : window.location.origin;
+  const caution =
+    shown === "disable" && self && usingRoute(self.host)
+      ? t("ingressPage.settings.selfRoute.offUsingRoute", { direct })
+      : undefined;
   const statusKey = on
     ? "ingressPage.settings.ingress.on"
     : enableFailed
@@ -206,6 +215,7 @@ export function IngressCard({ envId }: { envId: string }) {
         }}
         preview={shown === "enable" ? enablePreview : disablePreview}
         start={shown === "enable" ? enable : disable}
+        caution={caution}
       />
     </SettingsCard>
   );

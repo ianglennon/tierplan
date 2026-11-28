@@ -178,6 +178,8 @@ func TestIngressWireImportsNoWire(t *testing.T) {
 	}
 }
 
+// fixedHello is a frozen vector: its schemas [1] are historic wire data (what a Phase 22 node sent), and the
+// pinned bytes do not change when the supported schema does.
 func fixedHello() Hello {
 	return Hello{T: TypeHello, Version: "0.2.0", Schemas: []int{1}, AppliedID: fixedBundleID}
 }
@@ -194,6 +196,8 @@ func fixedHealth() Health {
 
 func fixedEnvelope(t *testing.T) BundleEnvelope {
 	t.Helper()
+	// The envelope's golden file is frozen for all of 0.x and carries a schema 1 bundle as data, so the
+	// vector names the old schema explicitly; the envelope's shape does not depend on the schema number.
 	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: 3, Certs: 2, Own: 1},
 		[]ingressbundle.File{{Path: ingressbundle.DynamicFile, Data: []byte("http:\n  routers: {}\n")}}, nil)
 	if err != nil {
@@ -237,6 +241,7 @@ func TestFrozenIngressNamesDoNotChange(t *testing.T) {
 		{"RefuseNodeAlreadyEnrolled", RefuseNodeAlreadyEnrolled, "node_already_enrolled"},
 		{"RefuseRateLimited", RefuseRateLimited, "rate_limited"},
 		{"RefuseInsecureTransport", RefuseInsecureTransport, "insecure_transport"},
+		{"RefuseSelfNetworkPeer", RefuseSelfNetworkPeer, "self_network_peer"},
 		{"RefuseInternal", RefuseInternal, "internal_error"},
 		{"CloseProtocolError", CloseProtocolError, "protocol_error"},
 		{"CloseRevoked", CloseRevoked, "revoked"},

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -89,6 +90,12 @@ type ShellsDeps struct {
 	// Instance says which origin the WebSocket may be opened from, and the idle limit
 	// and the per-person cap.
 	Instance ShellInstance
+	// ExtraOrigins returns the further origins a shell WebSocket may be opened from, read on
+	// every upgrade (D-07): the route host's origin while TierPlan's own route is on, plus the
+	// agent URL's whenever one is set, the same set the mutation guard reads
+	// (httpx.Options.ExtraOrigins). The server derives it from the stored claim and the stored
+	// URLs, never from a request. Nil or empty is none.
+	ExtraOrigins func() []string
 	// Store keeps each user's last shell choice per image (D-26). Without one nothing is
 	// remembered and the preference route answers 503.
 	Store *store.Store
@@ -396,19 +403,35 @@ func escapePattern(s string) string {
 }
 
 // originPatterns are the origins a shell WebSocket may be opened from besides the
-// request's own host: the instance's public origin, scheme included, read on this
-// request so a change of the public URL applies at once (T-04-76). With no public URL
-// the request's own host is the only one allowed. The option that switches the origin
-// check off is never used.
-func originPatterns(in PublicOriginSource) []string {
-	if in == nil {
+// request's own host: the instance's public origin, scheme included, then each of extra in
+// canonical form (D-07), all read on this request so a change of the public URL or of the
+// route applies at once (T-04-76). Each is an escaped literal; repeats and entries that are
+// not absolute http(s) URLs are dropped. With no public URL and no extra origin the request's
+// own host is the only one allowed. The option that switches the origin check off is never
+// used.
+func originPatterns(in PublicOriginSource, extra func() []string) []string {
+	var set []string
+	add := func(raw string) {
+		if o := httpx.OriginOf(raw); o != "" && !slices.Contains(set, o) {
+			set = append(set, o)
+		}
+	}
+	if in != nil {
+		add(in.PublicOrigin())
+	}
+	if extra != nil {
+		for _, raw := range extra() {
+			add(raw)
+		}
+	}
+	if len(set) == 0 {
 		return nil
 	}
-	o := httpx.OriginOf(in.PublicOrigin())
-	if o == "" {
-		return nil
+	patterns := make([]string, 0, len(set))
+	for _, o := range set {
+		patterns = append(patterns, escapePattern(o))
 	}
-	return []string{escapePattern(o)}
+	return patterns
 }
 
 // serveShell attaches a browser to a pending session and carries bytes until one side
@@ -443,7 +466,7 @@ func serveShell(w http.ResponseWriter, req *http.Request, d ShellsDeps) {
 	_ = rc.SetWriteDeadline(time.Time{})
 
 	conn, err := websocket.Accept(w, req, &websocket.AcceptOptions{
-		OriginPatterns:  originPatterns(d.Instance),
+		OriginPatterns:  originPatterns(d.Instance, d.ExtraOrigins),
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {

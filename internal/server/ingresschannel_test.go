@@ -103,7 +103,7 @@ func (s *icServer) dial(t *testing.T, id *ingresstest.Identity, d ingresstest.Di
 	return ingresstest.DialNode(t, "wss://"+aud+"/ingress/connect", s.srv.Client(), aud, id, d)
 }
 
-// enrol enrols a new node with the environment's join token and says hello for schema 1.
+// enrol enrols a new node with the environment's join token and says hello for the current schema.
 func (s *icServer) enrol(t *testing.T, token, name string) icNode {
 	t.Helper()
 	id := ingresstest.NewIdentity()
@@ -111,7 +111,7 @@ func (s *icServer) enrol(t *testing.T, token, name string) icNode {
 	if c.Welcome == nil || c.Err != nil {
 		t.Fatalf("enrol was not welcomed: refuse %+v, err %v", c.Refuse, c.Err)
 	}
-	c.Hello(t, []int{1}, "")
+	c.Hello(t, ingresstest.CurrentSchemas(), "")
 	return icNode{id: id, conn: c}
 }
 
@@ -160,11 +160,11 @@ func TestServerServesTheIngressChannel(t *testing.T) {
 		t.Errorf("welcome envId = %q, want %q", n.conn.Welcome.EnvID, s.envID)
 	}
 
-	// The bundle is the one the server's own reconciler rendered for the environment: schema 1 and the one dynamic file.
+	// The bundle is the one the server's own reconciler rendered for the environment: schema 2 and the one dynamic file.
 	// It arrives when the reconciler has rendered it, which the test waits for on the channel itself.
 	b := n.conn.NextBundle(t)
-	if b.Schema != ingressbundle.Schema1 || len(b.Files) != 1 || b.Files[0].Path != "dynamic/tierplan.yml" {
-		t.Errorf("bundle schema %d files %v, want schema 1 and the one dynamic/tierplan.yml", b.Schema, b.Files)
+	if b.Schema != ingressbundle.Schema2 || len(b.Files) != 1 || b.Files[0].Path != "dynamic/tierplan.yml" {
+		t.Errorf("bundle schema %d files %v, want schema 2 and the one dynamic/tierplan.yml", b.Schema, b.Files)
 	}
 
 	var found bool

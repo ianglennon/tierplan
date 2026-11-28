@@ -20,6 +20,10 @@ const (
 	CodeTemplateDelimiter = "ingress_render_template_delimiter"
 	// CodeNameCollision: two routers, services or middlewares would share a Traefik name (D-18).
 	CodeNameCollision = "ingress_render_name_collision"
+	// CodeSelfInput: the self input cannot be rendered: a base path is set (the self route is
+	// host-rooted, Pitfall 9), or an attached input has no backend host, port in range, a blank ACME
+	// host (D-12), or names a host and has no server name or trust certificate (D-14).
+	CodeSelfInput = "ingress_render_self_input"
 )
 
 // CodeSchemaUnsupported is the code of an UnsupportedSchemaError (D-05).

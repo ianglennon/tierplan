@@ -91,6 +91,19 @@ INSERT INTO ingress_routes (id, env_id, hostname, name, path_prefix, service, po
                             created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
+-- name: GetSystemClaim :one
+-- TierPlan's own claim, the install's one 'system' hostname, with its route: the host, where it lives, who
+-- made it and the service and port it answers on (Phase 28, D-09). The partial unique index
+-- ingress_hostnames_one_system means this is at most one row.
+SELECT h.hostname, h.env_id, h.domain_id, h.claimed_by, h.claimed_at, r.service, r.port
+FROM ingress_hostnames h
+JOIN ingress_routes r ON r.hostname = h.hostname
+WHERE h.owner_kind = 'system';
+
+-- name: DeleteSystemClaim :execrows
+-- Releases the environment's system claim; its route goes with it (CASCADE).
+DELETE FROM ingress_hostnames WHERE owner_kind = 'system' AND env_id = ?;
+
 -- name: ListIngressRoutesByStack :many
 -- The routes of the hostnames a stack claims, in a fixed order so two reads compare equal.
 SELECT r.* FROM ingress_routes r

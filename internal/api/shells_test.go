@@ -424,6 +424,39 @@ func TestShellWebSocketAcceptsTheInstancesPublicOriginAndNoOther(t *testing.T) {
 	readUntilBinary(t, c, "from-public")
 }
 
+// The route host's origin opens a shell only while the server's source names it (D-07); a
+// host the route does not claim is refused either way.
+func TestShellWebSocketAcceptsTheRouteOriginOnlyWhileTheSourceNamesIt(t *testing.T) {
+	t.Parallel()
+	const route = "https://tp.apps.example.org"
+	var mu sync.Mutex
+	var extra []string
+	f := newShellFix(t, func(f *envFix) {
+		f.shellsExtraOrigins = func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(extra)
+		}
+	})
+	f.inst.Apply("", "https://tierplan.example.org:7480")
+
+	s := f.session(t)
+	_, status, ptype, err := f.dial(t, f.cookie, s.WSPath, route)
+	dialRefused(t, "the route origin with no route", status, ptype, err, http.StatusForbidden)
+
+	mu.Lock()
+	extra = []string{route}
+	mu.Unlock()
+	_, status, ptype, err = f.dial(t, f.cookie, s.WSPath, "https://other.apps.example.org")
+	dialRefused(t, "an unclaimed host", status, ptype, err, http.StatusForbidden)
+	c, status, _, err := f.dial(t, f.cookie, s.WSPath, route)
+	if err != nil {
+		t.Fatalf("the route origin while the source names it: %v (status %d)", err, status)
+	}
+	sendBinary(t, c, "echo through-route\n")
+	readUntilBinary(t, c, "through-route")
+}
+
 func TestShellClosingTheSocketEndsTheSessionAndCannotBeReattached(t *testing.T) {
 	t.Parallel()
 	f := newShellFix(t, nil)

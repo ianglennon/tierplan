@@ -182,7 +182,9 @@ func (v *vanishingEngine) Describe() string { return "tcp://" + v.srv.Listener.A
 // proxy, not a host that could not be read (IN-A3).
 func TestStandaloneStatusProxyRemovedSinceTheList(t *testing.T) {
 	ctx := testsupport.Context(t)
-	r := enabledStandaloneRig(t, standaloneRigOptions{})
+	var o standaloneRigOptions
+	healthyNode(&o)
+	r := enabledStandaloneRig(t, o)
 	cli, err := dockerx.New(newVanishingEngine(t, r.fake, "proxy-1"))
 	if err != nil {
 		t.Fatalf("dockerx.New: %v", err)
@@ -196,5 +198,9 @@ func TestStandaloneStatusProxyRemovedSinceTheList(t *testing.T) {
 	}
 	if !got.ObjectsKnown || got.Objects.Container {
 		t.Errorf("status = %+v, want the host read and no proxy container", got)
+	}
+	// 28-UAT 9f: the node's last health was ok, but with no proxy container it is not ready.
+	if want := (ingressdeploy.StatusNodes{Expected: 1, Enrolled: 1}); got.Nodes != want {
+		t.Errorf("nodes = %+v, want %+v: no proxy is ready while its container is gone", got.Nodes, want)
 	}
 }

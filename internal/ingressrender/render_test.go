@@ -5,6 +5,7 @@ package ingressrender
 
 import (
 	"bytes"
+	"reflect"
 	"os"
 	"path/filepath"
 	"slices"
@@ -102,8 +103,8 @@ func TestRenderOneRouteTracer(t *testing.T) {
 	if len(res.Skipped) != 0 {
 		t.Errorf("Skipped = %v, want none", res.Skipped)
 	}
-	if b.Schema != ingressbundle.Schema1 {
-		t.Errorf("schema = %d, want %d", b.Schema, ingressbundle.Schema1)
+	if b.Schema != ingressbundle.Schema2 {
+		t.Errorf("schema = %d, want %d", b.Schema, ingressbundle.Schema2)
 	}
 	if want := (ingressbundle.Version{Config: 3, Certs: 7, Own: 0}); b.Version != want {
 		t.Errorf("version = %+v, want %+v", b.Version, want)
@@ -257,7 +258,11 @@ func TestRuleAndPriority(t *testing.T) {
 	}
 }
 
-// TestEveryRouterIsOnWebsecureOnly pins PROH-21-03: no rendered router is ever on the web entry point.
+// TestEveryRouterIsOnWebsecureOnly pins PROH-21-03 as Phase 28 left it (D-12, Pitfall 8): the one
+// router on the web entry point is TierPlan's own HTTP-01 carve-out, tierplan-acme. It is on web only,
+// has no tls, sits at CarveOutPriority, and its rule is the scenario's ACME hosts, exactly, on the
+// challenge path. Every other router is on websecure only and served over TLS. No router names any
+// other entry point (the ping entry point included).
 func TestEveryRouterIsOnWebsecureOnly(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(goldenDir, "*", "tierplan.yml"))
 	if err != nil {
@@ -266,7 +271,8 @@ func TestEveryRouterIsOnWebsecureOnly(t *testing.T) {
 	if len(files) == 0 {
 		t.Fatal("no golden dynamic file was found")
 	}
-	routers := 0
+	scenarios := goldenScenarios()
+	routers, carveOuts := 0, 0
 	for _, f := range files {
 		raw, err := os.ReadFile(f) //nolint:gosec // G304: a golden file under testdata
 		if err != nil {
@@ -288,14 +294,163 @@ func TestEveryRouterIsOnWebsecureOnly(t *testing.T) {
 		for name, r := range rs {
 			routers++
 			eps := toStrings(t, dig(t, r, "entryPoints"))
-			if !slices.Equal(eps, []string{"websecure"}) {
-				t.Errorf("%s: router %s entryPoints = %v, want [websecure] only", f, name, eps)
+			fields, _ := r.(map[string]any)
+			_, hasTLS := fields["tls"]
+			if name != acmeRouterName {
+				if !slices.Equal(eps, []string{"websecure"}) {
+					t.Errorf("%s: router %s entryPoints = %v, want [websecure] only", f, name, eps)
+				}
+				if !hasTLS {
+					t.Errorf("%s: router %s on websecure has no tls", f, name)
+				}
+				continue
+			}
+			carveOuts++
+			if !slices.Equal(eps, []string{"web"}) {
+				t.Errorf("%s: router %s entryPoints = %v, want [web] only", f, name, eps)
+			}
+			if hasTLS {
+				t.Errorf("%s: router %s has a tls key; the carve-out is plain HTTP", f, name)
+			}
+			if p, _ := fields["priority"].(int); p != CarveOutPriority {
+				t.Errorf("%s: router %s priority = %v, want %d", f, name, fields["priority"], CarveOutPriority)
+			}
+			scenario, ok := scenarios[filepath.Base(filepath.Dir(f))]
+			if !ok || scenario.Self == nil {
+				t.Errorf("%s: router %s in a scenario with no self input", f, name)
+				continue
+			}
+			rule, _ := fields["rule"].(string)
+			if hosts, ok := carveOutRuleHosts(rule); !ok {
+				t.Errorf("%s: router %s rule %q is not hosts on the challenge path", f, name, rule)
+			} else {
+				for _, h := range hosts {
+					if !slices.Contains(scenario.Self.ACMEHosts, h) {
+						t.Errorf("%s: router %s routes %q, which is not an ACME host of the scenario", f, name, h)
+					}
+				}
 			}
 		}
 	}
 	if routers == 0 {
 		t.Fatal("no router was checked")
 	}
+	if carveOuts == 0 {
+		t.Fatal("no golden holds the carve-out, so its rule was never checked")
+	}
+}
+
+// carveOutRuleHosts parses a carve-out rule: one Host matcher, or two or more joined by || in
+// parentheses, then exactly the challenge PathPrefix. Anything else (another matcher, a negation,
+// a second path) is not a carve-out rule.
+func carveOutRuleHosts(rule string) ([]string, bool) {
+	const tail = " && PathPrefix(`/.well-known/acme-challenge/`)"
+	head, ok := strings.CutSuffix(rule, tail)
+	if !ok {
+		return nil, false
+	}
+	parts := []string{head}
+	if inner, ok := strings.CutPrefix(head, "("); ok {
+		inner, ok = strings.CutSuffix(inner, ")")
+		if !ok {
+			return nil, false
+		}
+		parts = strings.Split(inner, " || ")
+		if len(parts) < 2 {
+			return nil, false
+		}
+	}
+	hosts := make([]string, 0, len(parts))
+	for _, p := range parts {
+		h, ok := strings.CutPrefix(p, "Host(`")
+		if !ok {
+			return nil, false
+		}
+		h, ok = strings.CutSuffix(h, "`)")
+		if !ok || h == "" || strings.ContainsAny(h, "`()|&! ") {
+			return nil, false
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, true
+}
+
+// TestCarveOutRefusals pins T-28-46 and D-12: an ACME host that could reach the rule with a backtick or
+// a brace fails the render whether or not TierPlan is attached; a blank ACME host fails an attached
+// render; and the carve-out is rendered only while TierPlan is attached and has an ACME host. Hosts are
+// lower-cased and deduplicated, so each is matched once.
+func TestCarveOutRefusals(t *testing.T) {
+	carveOutOnly := func(attached bool, hosts ...string) Input {
+		return Input{
+			Snapshot: ingress.Snapshot{Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 1}},
+			Self:     &SelfInput{BackendHost: "tierplan_tierplan", BackendPort: 7480, ACMEHosts: hosts, Attached: attached},
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		in    Input
+		code  string
+		field string
+	}{
+		{"a backtick", carveOutOnly(true, "tierplan.example.org", "a`b"), CodeUnsafeValue, "self acmeHost"},
+		{"a brace", carveOutOnly(true, "tier{plan.example.org"), CodeUnsafeValue, "self acmeHost"},
+		{"a backtick while not attached", carveOutOnly(false, "a`b"), CodeUnsafeValue, "self acmeHost"},
+		{"a blank host", carveOutOnly(true, "tierplan.example.org", ""), CodeSelfInput, "self acmeHost"},
+		{"a backtick beside the self route", func() Input {
+			in := selfACMEInput()
+			in.Self.ACMEHosts = append(in.Self.ACMEHosts, "x`) || Host(`evil.example")
+			return in
+		}(), CodeUnsafeValue, "self acmeHost"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := mustRender(t, tc.in)
+			refused := res.SelfRefused
+			if refused == nil {
+				t.Fatalf("Render = %+v; want the self input refused", res.Skipped)
+			}
+			if refused.Code != tc.code || refused.Field != tc.field {
+				t.Errorf("refused %s on %q, want %s on %q", refused.Code, refused.Field, tc.code, tc.field)
+			}
+			raw, _ := dynamicOf(t, res.Bundle)
+			if strings.Contains(string(raw), acmeRouterName) || strings.Contains(string(raw), "acme-challenge") {
+				t.Errorf("a refused self input still rendered the carve-out:\n%s", raw)
+			}
+		})
+	}
+
+	noCarveOut := func(t *testing.T, in Input) {
+		t.Helper()
+		raw, _ := dynamicOf(t, mustRender(t, in).Bundle)
+		for _, s := range []string{acmeRouterName, plainServiceName, "acme-challenge", "web\n"} {
+			if strings.Contains(string(raw), s) {
+				t.Errorf("the dynamic file names %s:\n%s", s, raw)
+			}
+		}
+	}
+	t.Run("not attached: no carve-out", func(t *testing.T) {
+		noCarveOut(t, carveOutOnly(false, "tierplan.example.org"))
+		in := selfACMEInput()
+		in.Self.Attached = false
+		noCarveOut(t, in)
+	})
+	t.Run("no ACME host: no carve-out", func(t *testing.T) {
+		noCarveOut(t, carveOutOnly(true))
+		noCarveOut(t, selfRouteInput(true))
+	})
+	t.Run("no self input: no carve-out", func(t *testing.T) {
+		in := selfACMEInput()
+		in.Self = nil
+		noCarveOut(t, in)
+	})
+	t.Run("hosts are lower-cased and deduplicated", func(t *testing.T) {
+		in := carveOutOnly(true, "Tierplan.Example.org", "tierplan.example.org", "agent.example.org")
+		_, doc := dynamicOf(t, mustRender(t, in).Bundle)
+		rule, _ := dig(t, doc, "http", "routers", acmeRouterName, "rule").(string)
+		want := "(Host(`agent.example.org`) || Host(`tierplan.example.org`)) && PathPrefix(`/.well-known/acme-challenge/`)"
+		if rule != want {
+			t.Errorf("rule = %q, want %q", rule, want)
+		}
+	})
 }
 
 // oneHostInput is the one-host golden's input with the versions the caller picks.
@@ -437,4 +592,157 @@ func TestSharedCertificatePairIsWrittenOnce(t *testing.T) {
 	if services, ok := dig(t, doc, "http", "services").(map[string]any); !ok || len(services) != 1 {
 		t.Errorf("services = %v, want one shared service", services)
 	}
+}
+
+// TestSelfInputRefusals pins T-28-36, Pitfall 9 and WR-09: every self value that can reach the dynamic
+// file is held to the route rule, and an attached input that cannot be rendered is refused: nothing of
+// TierPlan's own route or carve-out is rendered, the system route is skipped as self_input_invalid, and
+// Result.SelfRefused names the field. The render itself goes on, so the environment's stack routes do.
+func TestSelfInputRefusals(t *testing.T) {
+	keyOnly := []byte("-----BEGIN PRIVATE KEY-----\nS0VZQQ==\n-----END PRIVATE KEY-----\n")
+	cases := []struct {
+		name  string
+		edit  func(s *SelfInput)
+		code  string
+		field string
+	}{
+		{"host with a brace", func(s *SelfInput) { s.Host = "tp{.apps.example.org" }, CodeUnsafeValue, "self host"},
+		{"backend host with a backtick", func(s *SelfInput) { s.BackendHost = "tierplan`x" }, CodeUnsafeValue, "self backendHost"},
+		{"backend host with a slash", func(s *SelfInput) { s.BackendHost = "evil.example/x" }, CodeUnsafeValue, "self backendHost"},
+		{"server name with a brace", func(s *SelfInput) { s.ServerName = "tierplan}.example.org" }, CodeUnsafeValue, "self serverName"},
+		{"acme host with a backtick", func(s *SelfInput) { s.ACMEHosts = []string{"a`b"} }, CodeUnsafeValue, "self acmeHost"},
+		{"port 0", func(s *SelfInput) { s.BackendPort = 0 }, CodeSelfInput, "self backendPort"},
+		{"port above 65535", func(s *SelfInput) { s.BackendPort = 65536 }, CodeSelfInput, "self backendPort"},
+		{"empty trust", func(s *SelfInput) { s.TrustPEM = nil }, CodeSelfInput, "self trustPEM"},
+		{"trust with only a private key", func(s *SelfInput) { s.TrustPEM = keyOnly }, CodeSelfInput, "self trustPEM"},
+		{"no server name", func(s *SelfInput) { s.ServerName = "" }, CodeSelfInput, "self serverName"},
+		{"no backend host", func(s *SelfInput) { s.BackendHost = "" }, CodeSelfInput, "self backendHost"},
+		{"a base path", func(s *SelfInput) { s.BasePath = "/tp" }, CodeSelfInput, "self basePath"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := selfRouteInput(true)
+			tc.edit(in.Self)
+			res := mustRender(t, in)
+			refused := res.SelfRefused
+			if refused == nil {
+				t.Fatalf("Render = %+v; want the self input refused", res.Skipped)
+			}
+			if refused.Code != tc.code || refused.Field != tc.field {
+				t.Errorf("refused %s on %q, want %s on %q", refused.Code, refused.Field, tc.code, tc.field)
+			}
+			want := []Skipped{{Hostname: "tp.apps.example.org", PathPrefix: "/", Service: "tierplan", Reason: SkipSelfInputInvalid}}
+			if !reflect.DeepEqual(res.Skipped, want) {
+				t.Errorf("skipped = %+v, want %+v", res.Skipped, want)
+			}
+			raw, _ := dynamicOf(t, res.Bundle)
+			if strings.Contains(string(raw), selfRouterName) || strings.Contains(string(raw), SelfTransport) {
+				t.Errorf("a refused self input still rendered TierPlan's route:\n%s", raw)
+			}
+		})
+	}
+
+	// Strings and the base path are refused even while TierPlan is not attached; an incomplete
+	// not-attached input (no port, no trust yet) renders, because nothing of it is written.
+	t.Run("not attached: a brace still fails", func(t *testing.T) {
+		in := selfRouteInput(false)
+		in.Self.Host = "tp{.apps.example.org"
+		if res := mustRender(t, in); res.SelfRefused == nil {
+			t.Error("a not-attached self input with a brace was not refused")
+		}
+	})
+	t.Run("not attached: a base path still fails", func(t *testing.T) {
+		in := selfRouteInput(false)
+		in.Self.BasePath = "/tp"
+		if res := mustRender(t, in); res.SelfRefused == nil {
+			t.Error("a not-attached self input with a base path was not refused")
+		}
+	})
+	t.Run("not attached: incomplete input renders", func(t *testing.T) {
+		in := selfRouteInput(false)
+		in.Self.BackendPort = 0
+		in.Self.TrustPEM = nil
+		if _, err := Render(in); err != nil {
+			t.Errorf("Render: %v", err)
+		}
+	})
+	t.Run("a trust bundle with a key before the certificate renders", func(t *testing.T) {
+		in := selfRouteInput(true)
+		in.Self.TrustPEM = append(slices.Clone(keyOnly), trustSelf...)
+		if _, err := Render(in); err != nil {
+			t.Errorf("Render: %v", err)
+		}
+	})
+}
+
+// TestSystemClaimWithoutSelfInputSkips is D-03: a system claim's route in a render with no self input,
+// a self input that is not attached, or a self input for another host is skipped as self_not_attached,
+// never no_backend, and nothing of TierPlan's route reaches the file.
+func TestSystemClaimWithoutSelfInputSkips(t *testing.T) {
+	other := selfInput(true)
+	other.Host = "elsewhere.apps.example.org"
+	for name, self := range map[string]*SelfInput{
+		"nil":          nil,
+		"not attached": selfInput(false),
+		"another host": other,
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := selfRouteInput(true)
+			in.Self = self
+			res := mustRender(t, in)
+			want := []Skipped{{Hostname: "tp.apps.example.org", PathPrefix: "/", Service: "tierplan", Reason: SkipSelfNotAttached}}
+			if !slices.Equal(res.Skipped, want) {
+				t.Errorf("Skipped = %+v, want %+v", res.Skipped, want)
+			}
+			raw, _ := dynamicOf(t, res.Bundle)
+			for _, s := range []string{selfRouterName, selfServiceName, SelfTransport, "rootCAs"} {
+				if strings.Contains(string(raw), s) {
+					t.Errorf("the dynamic file names %s:\n%s", s, raw)
+				}
+			}
+			if len(res.Bundle.Manifest.Routes) != 0 {
+				t.Errorf("manifest routes = %+v, want none", res.Bundle.Manifest.Routes)
+			}
+		})
+	}
+}
+
+// TestRefusedSelfInputLeavesStackRoutesAlone (WR-09): a self input that cannot be rendered skips TierPlan's own route only. A
+// stack route of the same environment is rendered as it would be with no self input at all, so its hostname keeps getting
+// served and new certificates while TierPlan's own route waits.
+func TestRefusedSelfInputLeavesStackRoutesAlone(t *testing.T) {
+	in := selfACMEInput()
+	in.Snapshot.Claims = append(in.Snapshot.Claims, claimFor("app.example.com"))
+	in.Snapshot.Routes = append(in.Snapshot.Routes, swarmRoute("app.example.com", "/", "shop", "web", 8080))
+	in.Certs = append(in.Certs, HostCert{Hostname: "app.example.com", ChainPEM: chainA, KeyPEM: keyA})
+	in.Self.BackendHost = "" // TierPlan as a plain container on a swarm node: no name on the self network
+
+	res, err := Render(in)
+	if err != nil {
+		t.Fatalf("Render = %v; want the stack route rendered and only TierPlan's own skipped", err)
+	}
+	if res.SelfRefused == nil || res.SelfRefused.Code != CodeSelfInput || res.SelfRefused.Field != "self backendHost" {
+		t.Fatalf("SelfRefused = %+v, want %s on self backendHost", res.SelfRefused, CodeSelfInput)
+	}
+	if got := res.Bundle.Manifest.Routes; len(got) != 1 || got[0].Hostname != "app.example.com" {
+		t.Fatalf("routes in the bundle = %+v, want the stack route only", got)
+	}
+	want := []Skipped{{Hostname: "tp.apps.example.org", PathPrefix: "/", Service: "tierplan", Reason: SkipSelfInputInvalid}}
+	if !reflect.DeepEqual(res.Skipped, want) {
+		t.Errorf("skipped = %+v, want %+v", res.Skipped, want)
+	}
+	plain := in
+	plain.Self = nil
+	plain.Snapshot.Claims, plain.Snapshot.Routes = plain.Snapshot.Claims[1:], plain.Snapshot.Routes[1:]
+	plain.Certs = plain.Certs[1:]
+	if got, wantRaw := dynamicFileOf(t, res.Bundle), dynamicFileOf(t, mustRender(t, plain).Bundle); got != wantRaw {
+		t.Errorf("the dynamic file with a refused self input differs from one with none:\n%s\nwant\n%s", got, wantRaw)
+	}
+}
+
+// dynamicFileOf is the bundle's dynamic file as text.
+func dynamicFileOf(t *testing.T, b ingressbundle.Bundle) string {
+	t.Helper()
+	raw, _ := dynamicOf(t, b)
+	return string(raw)
 }

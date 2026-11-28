@@ -30,6 +30,10 @@ const (
 	permSettingsRead   ingressPerm = "settings.read"       // global: instance admin only (D-16)
 	permSettingsWrite  ingressPerm = "settings.write"      // global: instance admin only (D-16)
 	ingressStreamRowOp             = "ingressJobStream"    // the raw route that is not in the document
+
+	// permIngressManageInstance is ingress.manage on the environment and then an instance admin (D-17): TierPlan's own route
+	// changes which origins and proxy addresses the whole install trusts, so the environment's Admin is refused too.
+	permIngressManageInstance ingressPerm = "ingress.manage+instance"
 )
 
 // ingressPermRow is one ingress operation.
@@ -69,6 +73,10 @@ var ingressPermRows = []ingressPermRow{
 	{op: "revokeIngressNode", method: http.MethodPost, path: "/api/env/{env}/ingress/nodes/node-x/revoke", perm: permEnvRevoke, body: `{}`},
 	{op: "resumeIngress", method: http.MethodPost, path: "/api/env/{env}/ingress/resume", perm: permIngressManage, body: `{}`},
 	{op: "listIngressRoutes", method: http.MethodGet, path: "/api/env/{env}/ingress/routes", perm: permIngressRead},
+	{op: "previewIngressSelfRoute", method: http.MethodPost, path: "/api/env/{env}/ingress/self/preview", perm: permIngressManageInstance, body: `{"hostname":"tp.apps.example.org"}`},
+	{op: "enableIngressSelfRoute", method: http.MethodPost, path: "/api/env/{env}/ingress/self", perm: permIngressManageInstance, body: `{"hostname":"tp.apps.example.org"}`},
+	{op: "previewIngressSelfRouteOff", method: http.MethodPost, path: "/api/env/{env}/ingress/self/off/preview", perm: permIngressManageInstance, body: `{}`},
+	{op: "disableIngressSelfRoute", method: http.MethodDelete, path: "/api/env/{env}/ingress/self", perm: permIngressManageInstance},
 	{op: "getIngressStatus", method: http.MethodGet, path: "/api/env/{env}/ingress/status", perm: permIngressRead},
 	{op: "disableIngressVIP", method: http.MethodDelete, path: "/api/env/{env}/ingress/vip", perm: permIngressManage},
 	{op: "getIngressVIP", method: http.MethodGet, path: "/api/env/{env}/ingress/vip", perm: permIngressRead},
@@ -113,7 +121,8 @@ func ingressOperationsOfSpec(t *testing.T) []string {
 }
 
 // ingressPermitted reports whether a role passes the gate of a permission. The environment's Admin holds the two environment
-// permissions but not a global one, which is the instance admin's alone.
+// permissions but not a global one, which is the instance admin's alone, nor permIngressManageInstance, which only the instance
+// admin passes.
 func ingressPermitted(perm ingressPerm, role string) bool {
 	switch role {
 	case "viewer", "operator":
@@ -154,8 +163,8 @@ func TestIngressOperationsByRole(t *testing.T) {
 				t.Errorf("the table has a row for %s, which openapi.json does not list as an ingress operation", op)
 			}
 		}
-		if len(ingressPermRows) < 39 {
-			t.Errorf("the table has %d rows, want at least 39", len(ingressPermRows))
+		if len(ingressPermRows) < 43 {
+			t.Errorf("the table has %d rows, want at least 43", len(ingressPermRows))
 		}
 	})
 
@@ -195,10 +204,10 @@ func TestIngressOperationsByRole(t *testing.T) {
 		}
 	}
 	for _, rt := range ingressPermRows {
-		if rt.perm != permSettingsRead && rt.perm != permSettingsWrite {
+		if rt.perm != permSettingsRead && rt.perm != permSettingsWrite && rt.perm != permIngressManageInstance {
 			continue
 		}
-		rec := f.credCall(t, f.admin, rt.method, rt.path, rt.body)
+		rec := f.credCall(t, f.admin, rt.method, strings.ReplaceAll(rt.path, "{env}", f.envA), rt.body)
 		if gate(rec.Code) {
 			t.Errorf("%s (%s): the instance admin got %d %s, want the gate passed", rt.op, rt.perm, rec.Code, rec.Body)
 		}

@@ -11,6 +11,10 @@ import "strings"
 const (
 	// NetworkName is the overlay network the proxy and the stacks' routed services share.
 	NetworkName = "tierplan-ingress"
+	// SelfNetworkName is the network that carries the proxy's traffic to TierPlan's own container (D-02). It is the only
+	// source of trusted forwarded addresses (SELF-03), and users write the name into their stack files as an external
+	// network (D-03), so it never changes once it is in the field.
+	SelfNetworkName = "tierplan-self"
 	// ServiceName is the swarm service that runs the proxy.
 	ServiceName = "tierplan-ingress"
 	// VolumeName is the named volume that caches certificates on each proxy node.
@@ -36,6 +40,15 @@ const (
 const (
 	labelKeep    = "tierplan.keep"
 	labelUpdates = "tierplan.updates"
+)
+
+// The label that tells TierPlan's own networks apart. The ingress network carries ObjectLabels alone; the self network
+// carries them with this role, so each pairs with its own name only.
+const (
+	// LabelIngressRole is the label that names the part an ingress network plays.
+	LabelIngressRole = "tierplan.ingress.role"
+	// RoleSelfNetwork is the role of the network between the proxy and TierPlan's own container.
+	RoleSelfNetwork = "self"
 )
 
 // ObjectLabels returns the labels every object of the ingress carries: the component marker, the
@@ -108,6 +121,28 @@ func OwnsAnyService(name string, labels map[string]string) bool {
 // reserved name.
 func OwnsNetwork(name string, labels map[string]string) bool {
 	return hasIngressLabel(labels) && name == NetworkName
+}
+
+// SelfNetworkLabels returns the labels the self network carries (D-02): ObjectLabels, so the janitor and the drift check
+// leave it alone, plus the self role. The map is a fresh copy on each call, so a caller may add its own labels to it.
+func SelfNetworkLabels() map[string]string {
+	labels := ObjectLabels()
+	labels[LabelIngressRole] = RoleSelfNetwork
+	return labels
+}
+
+// OwnsSelfNetwork reports whether a network is the self network: the ingress component label, the self role and the
+// exact reserved name, all three (D-02). A label alone is user-controlled, so the ingress label on tierplan-self, or the
+// role label on a network of another name, owns nothing.
+func OwnsSelfNetwork(name string, labels map[string]string) bool {
+	return hasIngressLabel(labels) && labels[LabelIngressRole] == RoleSelfNetwork && name == SelfNetworkName
+}
+
+// OwnsAnyNetwork reports whether a network is one of TierPlan's own ingress networks, the ingress network or the self
+// network. Each is paired with its own name only (D-02). Ask OwnsNetwork instead when the question is about the ingress
+// overlay the proxy and the routed services join.
+func OwnsAnyNetwork(name string, labels map[string]string) bool {
+	return OwnsNetwork(name, labels) || OwnsSelfNetwork(name, labels)
 }
 
 // OwnsVolume reports whether a volume is the proxy's certificate cache: the component label and the

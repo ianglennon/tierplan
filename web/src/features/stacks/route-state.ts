@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { HealthState } from "@/api/environments";
+import type { RouteCondition } from "@/api/ingress";
 import type { StackRouteState } from "@/api/stack-routes";
+import { keyExists } from "@/i18n/use-t";
 
 // RouteHeadlineState is every state a route can show. "unknown" is the environment routes endpoint's seventh state,
 // used only when the engine could not be read.
@@ -36,4 +38,22 @@ function dotOf(state: RouteHeadlineState, stopped: boolean): HealthState {
     case "unknown":
       return "unknown";
   }
+}
+
+// waitingCertificateDetail is the line under "Waiting for certificate", shared by the stack page's Routes card and the
+// Ingress page so the two say the same. A certificate whose last order failed says so, then the failure's hint as the
+// server sent it on the certificate condition; any other known reason has its own sentence, and an unknown one is drawn
+// as sent.
+export function waitingCertificateDetail(
+  reason: string,
+  conditions: RouteCondition[] | null | undefined,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (reason === "") return "";
+  const cert = (conditions ?? []).find((c) => c.code === "certificate_ready");
+  if (reason === "certificate_not_ready" && cert?.failed && cert.message !== "") {
+    return t("stackIngress.routes.reason.certificate_failed", { hint: cert.message });
+  }
+  const key = `stackIngress.routes.reason.${reason}`;
+  return keyExists(key) ? t(key) : reason;
 }

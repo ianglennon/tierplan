@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/stacks"
@@ -32,10 +33,11 @@ type RouteAppliedBody struct {
 
 // RouteConditionBody is one of a route's five conditions.
 type RouteConditionBody struct {
-	Code    string            `json:"code" enum:"claim_held,network_attached,backend_healthy,certificate_ready,applied" doc:"Which condition this is. claim_held: the stack holds the claim the route sits under. network_attached: the service is on the ingress network. backend_healthy: the service runs at least one replica. certificate_ready: the hostname has a certificate the bundle can carry. applied: every active ingress node applied a bundle that holds the route. A route's conditions always come in this order"`
+	Code    string            `json:"code" enum:"claim_held,network_attached,backend_healthy,certificate_ready,applied" doc:"Which condition this is. claim_held: the stack holds the claim the route sits under. network_attached: the service is on the ingress network (for TierPlan's own route, TierPlan is on the tierplan-self network). backend_healthy: the service runs at least one replica (for TierPlan's own route, the proxy can reach TierPlan). certificate_ready: the hostname has a certificate the bundle can carry. applied: every active ingress node applied a bundle that holds the route. A route's conditions always come in this order"`
 	State   string            `json:"state" enum:"ready,not_ready,unknown" doc:"ready: the condition holds. not_ready: it was read and does not hold. unknown: what it depends on was not read, for example the engine could not be reached or ingress is off; it is never reported ready"`
-	Reason  string            `json:"reason" doc:"Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle"`
-	Message string            `json:"message" doc:"A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the certificate's own failure hint"`
+	Reason  string            `json:"reason" doc:"Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network), not_observed (no check has read that since TierPlan started) or self_input_invalid (TierPlan's own route cannot be rendered from what it knows of itself)"`
+	Message string            `json:"message" doc:"A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the hint of the certificate's last failed order when failed is true"`
+	Failed  bool              `json:"failed,omitempty" doc:"On certificate_ready with reason certificate_not_ready: true when the certificate waits because its last order failed (a failed or invalid order, or the backoff after one), and message is then that failure's hint. Absent otherwise"`
 	Applied *RouteAppliedBody `json:"applied,omitempty" doc:"How many active ingress nodes applied the bundle; present on the applied condition only"`
 }
 
@@ -51,10 +53,10 @@ type IngressRouteBody struct {
 	Scheme     string               `json:"scheme" enum:"http,https," doc:"The scheme the proxy speaks to the backend; empty for a claim or a reserved name"`
 	Strip      bool                 `json:"strip" doc:"True when the proxy removes the path prefix before it forwards a request"`
 	OwnerKind  string               `json:"ownerKind" enum:"stack,system," doc:"stack: a stack owns the hostname. system: TierPlan itself does. Empty for a reserved name, which nothing owns"`
-	State      string               `json:"state" enum:"serving,pending,waiting_certificate,backend_not_running,not_attached,ingress_off,unknown," doc:"What the route is doing now, the same state the stack page reads: serving, pending, waiting_certificate, backend_not_running, not_attached or ingress_off. unknown: the engine could not be read, so what runs is not known. Empty for a claim, a reserved name and a system route. Derived when read, stored nowhere"`
-	Reason     string               `json:"reason" doc:"For waiting_certificate, why the certificate is not served: no_certificate or certificate_not_ready. Empty for every other state"`
+	State      string               `json:"state" enum:"serving,pending,waiting_certificate,backend_not_running,not_attached,ingress_off,unknown," doc:"What the route is doing now, the same state the stack page reads: serving, pending, waiting_certificate, backend_not_running, not_attached or ingress_off. unknown: the engine could not be read, so what runs is not known; for TierPlan's own route, whether TierPlan is on the tierplan-self network is not known yet. TierPlan's own route (ownerKind system) is derived the same way, and reads not_attached while TierPlan is not on the tierplan-self network. Empty for a claim and a reserved name. Derived when read, stored nowhere"`
+	Reason     string               `json:"reason" doc:"For waiting_certificate, why the certificate is not served: no_certificate or certificate_not_ready. For not_attached on TierPlan's own route, self_not_attached. Empty for every other state"`
 	Stopped    bool                 `json:"stopped" doc:"True when state is backend_not_running because the stack is stopped"`
-	Conditions []RouteConditionBody `json:"conditions" doc:"The route's five conditions in their fixed order; empty for a claim, a reserved name and a system route"`
+	Conditions []RouteConditionBody `json:"conditions" doc:"The route's five conditions in their fixed order, TierPlan's own route's included; empty for a claim and a reserved name"`
 }
 
 // IngressRoutesBody is the environment's route list.
@@ -80,7 +82,7 @@ func registerIngressRoutes(r *httpx.Router, d StacksDeps) {
 		Method:      http.MethodGet,
 		Path:        "/api/env/{envId}/ingress/routes",
 		Summary:     "List the routes of an environment and what each is doing now",
-		Description: "Answers every route the environment's stacks hold, each with its hostname, path, owner, backend and the state the stack page reads, " +
+		Description: "Answers every route the environment's stacks hold, and TierPlan's own route when it is on there (ownerKind system), each with its hostname, path, owner, backend and the state the stack page reads, " +
 			"and the five conditions behind it: claim held, network attached, backend healthy, certificate ready and applied. " +
 			"The state and the conditions are worked out when asked, by the same call as the stack page's routes, from the stored claims, the engine, the proxy's current bundle and what each active node applied; nothing is stored. " +
 			"When the engine cannot be read the state is unknown and the conditions it decides are unknown. The answer never carries a certificate, a key or a token, and never another environment's names. " +
@@ -125,12 +127,7 @@ func listIngressRoutes(ctx context.Context, d StacksDeps, _ *ListIngressRoutesIn
 	}
 
 	// What the bundle and the nodes say is environment-wide: read once, and every stack's input starts from it.
-	var shared stackops.RouteStateInput
-	shared.Enabled = snap.Settings.Enabled
-	if shared.Enabled {
-		d.readBundleState(ctx, env.ID, &shared)
-		d.readCertMessages(ctx, env.ID, &shared)
-	}
+	shared := d.envRouteInput(ctx, env.ID, snap.Settings.Enabled)
 
 	type group struct {
 		stack  stackops.Stack
@@ -232,11 +229,18 @@ func listIngressRoutes(ctx context.Context, d StacksDeps, _ *ListIngressRoutesIn
 			rows = append(rows, row)
 		}
 	}
-	for _, r := range system {
-		rows = append(rows, IngressRouteBody{
-			Kind: "route", Hostname: r.Hostname, Path: pathOrRoot(r.PathPrefix), Service: r.Service, Port: r.Port,
-			Scheme: string(r.Scheme), Strip: r.Strip, OwnerKind: string(ingress.OwnerSystem), Conditions: []RouteConditionBody{},
-		})
+	if len(system) > 0 {
+		// TierPlan's own route (A-07): its conditions come from the same input as the stacks' routes, with TierPlan's place on
+		// the tierplan-self network as its attachment.
+		facts, known := d.readSelfRoute(ctx, env.ID)
+		for _, r := range system {
+			sr := systemRouteState(shared, r.Route, facts, known)
+			rows = append(rows, IngressRouteBody{
+				Kind: "route", Hostname: r.Hostname, Path: pathOrRoot(r.PathPrefix), Service: r.Service, Port: r.Port,
+				Scheme: string(r.Scheme), Strip: r.Strip, OwnerKind: string(ingress.OwnerSystem),
+				State: sr.State, Reason: sr.Reason, Conditions: conditionBodies(sr.Conditions, r.Service),
+			})
+		}
 	}
 	slices.SortStableFunc(rows, func(a, b IngressRouteBody) int {
 		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.Path, b.Path), cmp.Compare(a.Service, b.Service))
@@ -267,7 +271,7 @@ func appendUnroutedRows(ctx context.Context, d StacksDeps, envID string, snap in
 		}
 		claims = append(claims, IngressRouteBody{
 			Kind: "claim", Hostname: c.Hostname, StackID: c.StackID, StackName: c.StackName, OwnerKind: string(c.OwnerKind),
-			Conditions: []RouteConditionBody{},
+			Conditions: noConditions(),
 		})
 	}
 	doms, err := d.Ingress.Domains(ctx, envID)
@@ -280,7 +284,7 @@ func appendUnroutedRows(ctx context.Context, d StacksDeps, envID string, snap in
 			if claimed[h] {
 				continue
 			}
-			reserved = append(reserved, IngressRouteBody{Kind: "reserved", Hostname: h, Conditions: []RouteConditionBody{}})
+			reserved = append(reserved, IngressRouteBody{Kind: "reserved", Hostname: h, Conditions: noConditions()})
 		}
 	}
 	byHost := func(a, b IngressRouteBody) int { return cmp.Compare(a.Hostname, b.Hostname) }
@@ -288,6 +292,59 @@ func appendUnroutedRows(ctx context.Context, d StacksDeps, envID string, snap in
 	slices.SortStableFunc(reserved, byHost)
 	return append(append(rows, claims...), reserved...), nil
 }
+
+// SelfRouteReader reads the facts of TierPlan's own route in an environment: where TierPlan runs, whether the route is on and
+// whether TierPlan is on the tierplan-self network. The ingress deployer is one.
+type SelfRouteReader interface {
+	SelfRouteFacts(ctx context.Context, envID string) (ingressdeploy.SelfRouteFacts, error)
+}
+
+// envRouteInput is what the bundle, the nodes and the certificates say about the environment's routes, the input every
+// route's state starts from. With ingress off nothing is read: every condition is unknown with reason ingress_off.
+func (d StacksDeps) envRouteInput(ctx context.Context, envID string, enabled bool) stackops.RouteStateInput {
+	in := stackops.RouteStateInput{Enabled: enabled}
+	if enabled {
+		d.readBundleState(ctx, envID, &in)
+		d.readCertMessages(ctx, envID, &in)
+	}
+	return in
+}
+
+// readSelfRoute reads the facts of TierPlan's own route in envID; known is false when there is no reader or the read failed,
+// which leaves TierPlan's attachment unknown.
+func (d StacksDeps) readSelfRoute(ctx context.Context, envID string) (ingressdeploy.SelfRouteFacts, bool) {
+	if d.SelfRoute == nil {
+		return ingressdeploy.SelfRouteFacts{}, false
+	}
+	f, err := d.SelfRoute.SelfRouteFacts(ctx, envID)
+	if err != nil {
+		if d.Log != nil {
+			d.Log.WarnContext(ctx, "TierPlan's own route could not be read for the environment's routes", "environment", envID, "error", err)
+		}
+		return ingressdeploy.SelfRouteFacts{}, false
+	}
+	return f, true
+}
+
+// systemRouteRead is the derived state of TierPlan's own route.
+type systemRouteRead struct {
+	Conditions    []stackops.Condition
+	State, Reason string
+}
+
+// systemRouteState derives TierPlan's own route's five conditions, its state and its reason from the environment's route input
+// and the facts of the route: the one derivation the routes list's system row and the ingress status's selfRoute share. The
+// attachment counts as read only when the facts were read and an ensure pass observed it (AttachedKnown); before that the
+// network and backend conditions are unknown, never ready.
+func systemRouteState(in stackops.RouteStateInput, r ingress.Route, f ingressdeploy.SelfRouteFacts, known bool) systemRouteRead {
+	conds := stackops.SystemRouteConditions(in, r, f.Attached, known && f.AttachedKnown)
+	state, reason := stackops.SystemRouteState(conds)
+	return systemRouteRead{Conditions: conds, State: state, Reason: reason}
+}
+
+// noConditions is the empty condition list of a claim or a reserved name, which serve nothing. A route row, TierPlan's own
+// included, always carries its five.
+func noConditions() []RouteConditionBody { return []RouteConditionBody{} }
 
 // warnEngineUnreadable logs that the engine could not be read for the route list, which then answers unknown.
 func warnEngineUnreadable(ctx context.Context, log *slog.Logger, envID string, err error) {
@@ -304,8 +361,9 @@ func conditionBodies(conds []stackops.Condition, service string) []RouteConditio
 		b := RouteConditionBody{Code: c.Code, State: c.State, Reason: c.Reason}
 		if c.State != stackops.CondReady {
 			b.Message = conditionMessage(c.Reason, service)
+			// The certificate condition carries a message only when the certificate's last order failed (readCertMessages).
 			if c.Reason == stackops.ReasonCertificateNotReady && c.Message != "" {
-				b.Message = c.Message
+				b.Message, b.Failed = c.Message, true
 			}
 		}
 		if c.Code == stackops.CondApplied {
@@ -317,8 +375,8 @@ func conditionBodies(conds []stackops.Condition, service string) []RouteConditio
 }
 
 // conditionMessage is the server's short sentence for a reason code. They are fixed sentences: never an authority's or
-// an engine's own words (T-27-22). certificate_not_ready has a default here; the certificate's own failure hint replaces
-// it when there is one.
+// an engine's own words (T-27-22). certificate_not_ready has a default here; the hint of the certificate's last failed
+// order replaces it when there is one.
 func conditionMessage(reason, service string) string {
 	switch reason {
 	case stackops.ReasonNotAttached:
@@ -343,6 +401,12 @@ func conditionMessage(reason, service string) string {
 		return "The engine could not be read, so this is not known."
 	case stackops.ReasonNoBundle:
 		return "No bundle has been published for this environment yet."
+	case stackops.ReasonSelfNotAttached:
+		return "TierPlan is not on the tierplan-self network, so the proxy cannot reach it."
+	case stackops.ReasonNotObserved:
+		return "TierPlan has not checked whether it is on the tierplan-self network since it started."
+	case stackops.ReasonSelfInputInvalid:
+		return "TierPlan cannot render its own route from what it knows of itself (a base path in the public URL, or no name on the tierplan-self network). The server log names the field."
 	}
 	return ""
 }

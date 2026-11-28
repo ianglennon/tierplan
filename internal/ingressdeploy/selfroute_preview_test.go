@@ -1,0 +1,611 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
+
+package ingressdeploy_test
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/ingress"
+	"github.com/ianglennon/tierplan/internal/ingress/ingressstore"
+	"github.com/ianglennon/tierplan/internal/ingressdeploy"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+)
+
+// The addresses of the self route tests.
+const (
+	srDomain = "apps.example.org"
+	srHost   = "tp.apps.example.org"
+	srPublic = "https://tierplan.example.org:7480"
+	srAgent  = "https://tierplan.internal:7480"
+)
+
+// selfRouteKnobs are what a self route test turns after the rig is built: the instance's URLs, the certificate manager's
+// answer and whether TierPlan's own certificate renews over HTTP-01. They start off, so the rig's own enable sees none.
+type selfRouteKnobs struct {
+	mu     sync.Mutex
+	urls   ingressdeploy.SelfURLs
+	cert   *ingressdeploy.HostCertState
+	http01 bool
+	// local, when set, is what TierPlan's own engine says of its swarm membership, and localErr a probe that fails.
+	local    *envs.SwarmMembership
+	localErr error
+}
+
+func (k *selfRouteKnobs) set(fn func(*selfRouteKnobs)) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	fn(k)
+}
+
+func (k *selfRouteKnobs) selfURLs() ingressdeploy.SelfURLs {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.urls
+}
+
+func (k *selfRouteKnobs) hostCert(context.Context, string, string) (ingressdeploy.HostCertState, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.cert == nil {
+		return ingressdeploy.HostCertState{}, nil
+	}
+	return *k.cert, nil
+}
+
+func (k *selfRouteKnobs) ownHTTP01(context.Context) (bool, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.http01, nil
+}
+
+// newSelfRouteRig is an enabled swarm rig in which TierPlan runs as tierplan_tierplan of the stack tierplan, not on the self
+// network, with apps.example.org registered, the public and agent URLs set and TierPlan's own certificate on HTTP-01.
+func newSelfRouteRig(t *testing.T, o selfRigOptions) (*rig, *selfFacts, *selfRouteKnobs, ingress.Domain) {
+	t.Helper()
+	k := &selfRouteKnobs{}
+	inner := o.deps
+	o.deps = func(d *ingressdeploy.Deps) {
+		base := d.LocalSwarm
+		d.LocalSwarm = func(ctx context.Context) (envs.SwarmMembership, error) {
+			k.mu.Lock()
+			local, localErr := k.local, k.localErr
+			k.mu.Unlock()
+			switch {
+			case localErr != nil:
+				return envs.SwarmMembership{}, localErr
+			case local != nil:
+				return *local, nil
+			}
+			return base(ctx)
+		}
+		d.SelfURLs = k.selfURLs
+		d.HostCertificate = k.hostCert
+		d.OwnHTTP01InUse = k.ownHTTP01
+		if inner != nil {
+			inner(d)
+		}
+	}
+	r, facts := newSelfRig(t, o)
+	dom, err := r.istore.CreateDomain(testsupport.Context(t), ingressstore.CreateDomainInput{EnvID: r.envID, Suffix: srDomain, Issuer: ingress.IssuerStaging, Actor: "admin"}, nil)
+	if err != nil {
+		t.Fatalf("CreateDomain: %v", err)
+	}
+	k.set(func(k *selfRouteKnobs) {
+		k.urls = ingressdeploy.SelfURLs{PublicURL: srPublic, AgentURL: srAgent, ListenPort: 7480}
+		k.http01 = true
+	})
+	return r, facts, k, dom
+}
+
+// wantItems checks the codes and states of a preview's items, in order.
+func wantItems(t *testing.T, pv ingressdeploy.SelfRoutePreview, want ...[2]string) {
+	t.Helper()
+	got := make([][2]string, 0, len(pv.Items))
+	for _, it := range pv.Items {
+		got = append(got, [2]string{it.Code, it.State})
+	}
+	if len(got) != len(want) {
+		t.Fatalf("items = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("items = %v, want %v", got, want)
+		}
+	}
+}
+
+// stackFileLines are UI-SPEC S1a's stack file lines for the service tierplan, line for line.
+var stackFileLines = []string{
+	"services:",
+	"  tierplan:",
+	"    networks:",
+	"      - tierplan-self",
+	"networks:",
+	"  tierplan-self:",
+	"    external: true",
+}
+
+// TestPreviewSelfRouteOrderedItems: a free hostname under a registered domain, with TierPlan a swarm service of a stack that
+// is not on the self network, no certificate yet and TierPlan's own certificate on HTTP-01, gives the five items in D-17's
+// order, the stack file snippet and the agent URL as the direct address.
+func TestPreviewSelfRouteOrderedItems(t *testing.T) {
+	r, _, _, _ := newSelfRouteRig(t, selfRigOptions{})
+	pv, err := r.svc.PreviewSelfRoute(testsupport.Context(t), r.envID, ingressdeploy.SelfRouteRequest{Hostname: "TP.Apps.Example.org"})
+	if err != nil {
+		t.Fatalf("PreviewSelfRoute: %v", err)
+	}
+	wantItems(t, pv,
+		[2]string{ingressdeploy.ItemSelfHostname, ingressdeploy.SelfItemOK},
+		[2]string{ingressdeploy.ItemSelfCertificate, ingressdeploy.SelfItemWarning},
+		[2]string{ingressdeploy.ItemSelfNetwork, ingressdeploy.SelfItemWarning},
+		[2]string{ingressdeploy.ItemSelfOrigin, ingressdeploy.SelfItemOK},
+		[2]string{ingressdeploy.ItemSelfCarveOut, ingressdeploy.SelfItemOK},
+	)
+	if pv.Host != srHost {
+		t.Errorf("Host = %q, want %q", pv.Host, srHost)
+	}
+	if pv.Direct != srPublic {
+		t.Errorf("Direct = %q, want %q", pv.Direct, srPublic)
+	}
+	if pv.Refused() {
+		t.Error("the preview refuses, want it to go ahead")
+	}
+	msgs := map[string]string{
+		ingressdeploy.ItemSelfHostname:    srHost + " is free and under " + srDomain + ".",
+		ingressdeploy.ItemSelfCertificate: "No certificate yet. TierPlan orders one when you turn the route on. " + srHost + " isn't served until it is ready.",
+		ingressdeploy.ItemSelfOrigin:      "TierPlan will also accept requests from https://" + srHost + ". Your public URL isn't changed. Cookies are separate, so you sign in on each address.",
+		ingressdeploy.ItemSelfCarveOut: "TierPlan's own certificate uses the HTTP-01 challenge. The ingress sends only /.well-known/acme-challenge/ requests for " +
+			"tierplan.example.org and tierplan.internal to TierPlan, over tierplan-self, so it keeps renewing.",
+	}
+	for _, it := range pv.Items {
+		if want, ok := msgs[it.Code]; ok && it.Message != want {
+			t.Errorf("%s message = %q, want %q", it.Code, it.Message, want)
+		}
+		if it.Code != ingressdeploy.ItemSelfNetwork && it.Snippet != nil {
+			t.Errorf("%s carries a snippet", it.Code)
+		}
+	}
+	net := pv.Items[2]
+	if net.Reason != ingressdeploy.CodeSelfNotAttached {
+		t.Errorf("network reason = %q, want %q", net.Reason, ingressdeploy.CodeSelfNotAttached)
+	}
+	if net.Snippet == nil || net.Snippet.Kind != ingressdeploy.SelfSnippetStackFile {
+		t.Fatalf("network snippet = %+v, want a stack_file snippet", net.Snippet)
+	}
+	if got := strings.Split(strings.TrimSuffix(net.Snippet.Text, "\n"), "\n"); strings.Join(got, "\n") != strings.Join(stackFileLines, "\n") {
+		t.Errorf("snippet lines = %q, want UI-SPEC S1a's %q", got, stackFileLines)
+	}
+	if net.Snippet.Text != ingressdeploy.StackFileSnippet("tierplan") {
+		t.Error("the snippet is not StackFileSnippet(\"tierplan\")")
+	}
+}
+
+// TestPreviewSelfRouteCreatesNothing: a preview makes no network, no claim and no route (T-28-44).
+func TestPreviewSelfRouteCreatesNothing(t *testing.T) {
+	r, _, _, _ := newSelfRouteRig(t, selfRigOptions{})
+	ctx := testsupport.Context(t)
+	before, err := r.cli.Networks(ctx)
+	if err != nil {
+		t.Fatalf("Networks: %v", err)
+	}
+	for range 2 {
+		if _, err := r.svc.PreviewSelfRoute(ctx, r.envID, ingressdeploy.SelfRouteRequest{Hostname: srHost}); err != nil {
+			t.Fatalf("PreviewSelfRoute: %v", err)
+		}
+	}
+	after, err := r.cli.Networks(ctx)
+	if err != nil {
+		t.Fatalf("Networks: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("networks went from %d to %d", len(before), len(after))
+	}
+	if _, ok := r.selfNetwork(); ok {
+		t.Error("the preview made tierplan-self")
+	}
+	if _, held, err := r.istore.SystemClaim(ctx); err != nil || held {
+		t.Errorf("SystemClaim: held %v, err %v, want none", held, err)
+	}
+	w, err := r.istore.World(ctx, r.envID, nil)
+	if err != nil {
+		t.Fatalf("World: %v", err)
+	}
+	if len(w.Claims) != 0 {
+		t.Errorf("claims = %v, want none", w.Claims)
+	}
+}
+
+// fivePlain are the item codes of a switch-on preview with the carve-out, in order.
+var fivePlain = []string{
+	ingressdeploy.ItemSelfHostname, ingressdeploy.ItemSelfCertificate, ingressdeploy.ItemSelfNetwork, ingressdeploy.ItemSelfOrigin,
+	ingressdeploy.ItemSelfCarveOut,
+}
+
+// TestPreviewSelfRouteRefusals: every reason the route cannot be switched on is told in the item it belongs to, with a stable
+// code; exactly one item refuses in each case, and the other items are still listed in their order (D-01, D-05, D-07, D-09,
+// D-10, Pitfalls 9 and 10).
+func TestPreviewSelfRouteRefusals(t *testing.T) {
+	cases := []struct {
+		name     string
+		host     string
+		setup    func(t *testing.T, r *rig, facts *selfFacts, k *selfRouteKnobs, dom ingress.Domain)
+		item     string
+		code     string
+		contains string
+	}{
+		{name: "under no registered domain", host: "tp.other.example.net",
+			item: ingressdeploy.ItemSelfHostname, code: ingress.CodeDomainNotAllowed, contains: "not under a domain registered"},
+		{name: "with a port", host: "TP.apps.example.org:443",
+			item: ingressdeploy.ItemSelfHostname, code: ingress.CodeHostInvalid, contains: "tp.apps.example.org:443” is not a valid hostname: give it without a port"},
+		{name: "reserved", setup: func(t *testing.T, r *rig, _ *selfFacts, _ *selfRouteKnobs, dom ingress.Domain) {
+			if _, _, err := r.istore.Reserve(testsupport.Context(t), ingressstore.ReserveInput{EnvID: r.envID, DomainID: dom.ID, Hostname: srHost, Actor: "admin"}, nil); err != nil {
+				t.Fatalf("Reserve: %v", err)
+			}
+		}, item: ingressdeploy.ItemSelfHostname, code: ingress.CodeHostReserved, contains: "reserved by an Admin"},
+		{name: "held by a stack", setup: func(t *testing.T, r *rig, _ *selfFacts, _ *selfRouteKnobs, _ ingress.Domain) {
+			if _, err := r.st.Write.Exec(`INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES ('st1', ?, 'web', 'swarm', 'tester', 1)`, r.envID); err != nil {
+				t.Fatalf("insert stack: %v", err)
+			}
+			decl := ingress.Declaration{Service: "web", Host: srHost, Label: "tierplan.ingress.host", Port: 80}
+			if _, err := r.istore.ReplaceStackRoutes(testsupport.Context(t), ingressstore.ReplaceInput{EnvID: r.envID, StackID: "st1", Actor: "admin", Decls: []ingress.Declaration{decl}}); err != nil {
+				t.Fatalf("ReplaceStackRoutes: %v", err)
+			}
+		}, item: ingressdeploy.ItemSelfHostname, code: ingress.CodeHostTaken, contains: "already held"},
+		{name: "the route is already on", setup: func(t *testing.T, r *rig, _ *selfFacts, _ *selfRouteKnobs, dom ingress.Domain) {
+			if err := r.istore.SetSystemClaim(testsupport.Context(t), ingressstore.SystemClaimInput{
+				EnvID: r.envID, Hostname: "old.apps.example.org", DomainID: dom.ID, Service: tpServiceName, Port: 7480, Actor: "admin",
+			}, nil); err != nil {
+				t.Fatalf("SetSystemClaim: %v", err)
+			}
+		}, item: ingressdeploy.ItemSelfHostname, code: ingressdeploy.CodeSelfRouteAlreadyOn, contains: "already on"},
+		{name: "the agent URL's host", setup: func(_ *testing.T, _ *rig, _ *selfFacts, k *selfRouteKnobs, _ ingress.Domain) {
+			k.set(func(k *selfRouteKnobs) { k.urls.AgentURL = "https://" + srHost + ":7480" })
+		}, item: ingressdeploy.ItemSelfHostname, code: ingress.CodeHostIsAgentURL, contains: "host of your agent URL"},
+		{name: "terms not accepted", setup: func(_ *testing.T, _ *rig, _ *selfFacts, k *selfRouteKnobs, _ ingress.Domain) {
+			k.set(func(k *selfRouteKnobs) { k.cert = &ingressdeploy.HostCertState{TermsNeeded: true} })
+		}, item: ingressdeploy.ItemSelfCertificate, code: ingressdeploy.CodeSelfCertificateTerms, contains: "terms are accepted"},
+		{name: "certificate work paused", setup: func(_ *testing.T, _ *rig, _ *selfFacts, k *selfRouteKnobs, _ ingress.Domain) {
+			k.set(func(k *selfRouteKnobs) { k.cert = &ingressdeploy.HostCertState{Known: true, Paused: true} })
+		}, item: ingressdeploy.ItemSelfCertificate, code: ingressdeploy.CodeSelfCertificatePaused, contains: "paused after a restore"},
+		{name: "TierPlan runs elsewhere", setup: func(_ *testing.T, _ *rig, _ *selfFacts, k *selfRouteKnobs, _ ingress.Domain) {
+			k.set(func(k *selfRouteKnobs) {
+				k.local = &envs.SwarmMembership{Known: true, Member: true, ClusterID: "cluster-other", NodeID: "node-9", EngineID: "engine-9"}
+			})
+		}, item: ingressdeploy.ItemSelfNetwork, code: ingressdeploy.CodeSelfRouteNotHere, contains: "TierPlan"},
+		{name: "where TierPlan runs cannot be told", setup: func(_ *testing.T, _ *rig, _ *selfFacts, k *selfRouteKnobs, _ ingress.Domain) {
+			k.set(func(k *selfRouteKnobs) { k.localErr = errors.New("no socket") })
+		}, item: ingressdeploy.ItemSelfNetwork, code: ingressdeploy.CodeSelfRouteNotHere, contains: "can't tell which environment"},
+		{name: "a plain container on the swarm", setup: func(_ *testing.T, _ *rig, facts *selfFacts, _ *selfRouteKnobs, _ ingress.Domain) {
+			facts.mu.Lock()
+			facts.facts = ingressdeploy.SelfFacts{ContainerID: "c2", Networks: []string{"bridge"}}
+			facts.mu.Unlock()
+		}, item: ingressdeploy.ItemSelfNetwork, code: ingressdeploy.CodeSelfRouteNeedsService, contains: "install-in-swarm.md"},
+		{name: "a public URL with a path", setup: func(_ *testing.T, _ *rig, _ *selfFacts, k *selfRouteKnobs, _ ingress.Domain) {
+			k.set(func(k *selfRouteKnobs) { k.urls.PublicURL = srPublic + "/tierplan" })
+		}, item: ingressdeploy.ItemSelfOrigin, code: ingressdeploy.CodeSelfRouteBasePath, contains: "/tierplan"},
+		{name: "no URL at all", setup: func(_ *testing.T, _ *rig, _ *selfFacts, k *selfRouteKnobs, _ ingress.Domain) {
+			k.set(func(k *selfRouteKnobs) { k.urls = ingressdeploy.SelfURLs{} })
+		}, item: ingressdeploy.ItemSelfOrigin, code: ingressdeploy.CodeSelfRouteNoURL, contains: "public URL"},
+		{name: "a locked public URL on the route host and no agent URL", setup: func(_ *testing.T, _ *rig, _ *selfFacts, k *selfRouteKnobs, _ ingress.Domain) {
+			k.set(func(k *selfRouteKnobs) {
+				k.urls = ingressdeploy.SelfURLs{PublicURL: "https://" + srHost + ":7480", PublicLocked: true, ListenPort: 7480}
+			})
+		}, item: ingressdeploy.ItemSelfOrigin, code: ingress.CodeHostIsAgentURL, contains: "TIERPLAN_PUBLIC_URL"},
+		{name: "ingress off", setup: func(t *testing.T, r *rig, _ *selfFacts, _ *selfRouteKnobs, _ ingress.Domain) {
+			if _, err := r.istore.SetEnabled(testsupport.Context(t), r.envID, false, "admin", nil); err != nil {
+				t.Fatalf("SetEnabled: %v", err)
+			}
+		}, item: ingressdeploy.ItemSelfHostname, code: ingressdeploy.CodeVIPIngressOff, contains: "Turn ingress on"},
+	}
+	if len(cases) < 14 {
+		t.Fatalf("the table has %d cases, want at least 14", len(cases))
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, facts, k, dom := newSelfRouteRig(t, selfRigOptions{})
+			if c.setup != nil {
+				c.setup(t, r, facts, k, dom)
+			}
+			host := c.host
+			if host == "" {
+				host = srHost
+			}
+			pv, err := r.svc.PreviewSelfRoute(testsupport.Context(t), r.envID, ingressdeploy.SelfRouteRequest{Hostname: host})
+			if err != nil {
+				t.Fatalf("PreviewSelfRoute: %v", err)
+			}
+			var codes []string
+			var refused []ingressdeploy.SelfRouteItem
+			for _, it := range pv.Items {
+				codes = append(codes, it.Code)
+				if it.State == ingressdeploy.SelfItemRefused {
+					refused = append(refused, it)
+				}
+			}
+			if strings.Join(codes, ",") != strings.Join(fivePlain, ",") {
+				t.Errorf("items = %v, want %v", codes, fivePlain)
+			}
+			if len(refused) != 1 {
+				t.Fatalf("refused items = %+v, want exactly one", refused)
+			}
+			got := refused[0]
+			if got.Code != c.item || got.Reason != c.code {
+				t.Errorf("refused %s with %q, want %s with %q", got.Code, got.Reason, c.item, c.code)
+			}
+			if !strings.Contains(got.Message, c.contains) {
+				t.Errorf("message %q lacks %q", got.Message, c.contains)
+			}
+			if !pv.Refused() {
+				t.Error("Refused() is false")
+			}
+		})
+	}
+}
+
+// TestPreviewSelfRouteStandaloneNote: on a standalone host TierPlan runs on, TierPlan connects its own container, so the
+// self-network item passes with the standalone sentence and no snippet (D-04).
+func TestPreviewSelfRouteStandaloneNote(t *testing.T) {
+	r := newRig(t, rigOptions{standalone: true, deps: func(d *ingressdeploy.Deps) {
+		d.Self = func(context.Context) (ingressdeploy.SelfFacts, error) {
+			return ingressdeploy.SelfFacts{ContainerID: "c9", Networks: []string{"bridge"}}, nil
+		}
+		d.SelfURLs = func() ingressdeploy.SelfURLs { return ingressdeploy.SelfURLs{PublicURL: srPublic} }
+	}})
+	r.envs.set(func(i *ingressdeploy.EnvInfo) { i.Local = true })
+	ctx := testsupport.Context(t)
+	if _, err := r.istore.SetEnabled(ctx, r.envID, true, "admin", nil); err != nil {
+		t.Fatalf("SetEnabled: %v", err)
+	}
+	if _, err := r.istore.CreateDomain(ctx, ingressstore.CreateDomainInput{EnvID: r.envID, Suffix: srDomain, Issuer: ingress.IssuerStaging, Actor: "admin"}, nil); err != nil {
+		t.Fatalf("CreateDomain: %v", err)
+	}
+	pv, err := r.svc.PreviewSelfRoute(ctx, r.envID, ingressdeploy.SelfRouteRequest{Hostname: srHost})
+	if err != nil {
+		t.Fatalf("PreviewSelfRoute: %v", err)
+	}
+	wantItems(t, pv,
+		[2]string{ingressdeploy.ItemSelfHostname, ingressdeploy.SelfItemOK},
+		[2]string{ingressdeploy.ItemSelfCertificate, ingressdeploy.SelfItemWarning},
+		[2]string{ingressdeploy.ItemSelfNetwork, ingressdeploy.SelfItemOK},
+		[2]string{ingressdeploy.ItemSelfOrigin, ingressdeploy.SelfItemOK},
+	)
+	net := pv.Items[2]
+	if net.Message != "TierPlan connects its own container to tierplan-self." || net.Snippet != nil {
+		t.Errorf("network item = %+v, want the standalone sentence and no snippet", net)
+	}
+	if pv.Direct != srPublic {
+		t.Errorf("Direct = %q, want the public URL's origin %q", pv.Direct, srPublic)
+	}
+}
+
+// TestPreviewSelfRouteServiceUpdateSnippet: a swarm service with no stack namespace gets the service update command with its
+// full name (D-03, UI-SPEC A-04).
+func TestPreviewSelfRouteServiceUpdateSnippet(t *testing.T) {
+	r, facts, _, _ := newSelfRouteRig(t, selfRigOptions{})
+	facts.mu.Lock()
+	facts.facts.StackNamespace = ""
+	facts.facts.ServiceName = "tierplan-svc"
+	facts.mu.Unlock()
+	pv, err := r.svc.PreviewSelfRoute(testsupport.Context(t), r.envID, ingressdeploy.SelfRouteRequest{Hostname: srHost})
+	if err != nil {
+		t.Fatalf("PreviewSelfRoute: %v", err)
+	}
+	net := pv.Items[2]
+	want := ingressdeploy.SelfSnippet{Kind: ingressdeploy.SelfSnippetServiceUpdate, Text: "docker service update --network-add tierplan-self tierplan-svc"}
+	if net.Code != ingressdeploy.ItemSelfNetwork || net.Snippet == nil || *net.Snippet != want {
+		t.Errorf("network item = %+v, want the snippet %+v", net, want)
+	}
+	if got := ingressdeploy.ServiceUpdateCommand("odd name;rm"); got != "docker service update --network-add tierplan-self 'odd name;rm'" {
+		t.Errorf("an odd name is not quoted: %q", got)
+	}
+}
+
+// claimSelfRoute switches TierPlan's own route on for srHost in the rig's environment.
+func claimSelfRoute(t *testing.T, r *rig, dom ingress.Domain) {
+	t.Helper()
+	if err := r.istore.SetSystemClaim(testsupport.Context(t), ingressstore.SystemClaimInput{
+		EnvID: r.envID, Hostname: srHost, DomainID: dom.ID, Service: tpServiceName, Port: 7480, Actor: "admin",
+	}, nil); err != nil {
+		t.Fatalf("SetSystemClaim: %v", err)
+	}
+}
+
+// TestPreviewSelfRouteOff: the switch-off preview lists the origin that goes, then what becomes of the self network: kept
+// while the port-80 carve-out uses it, removed otherwise. It never refuses, and with no route on it says so (D-11, S1c).
+func TestPreviewSelfRouteOff(t *testing.T) {
+	t.Run("the carve-out keeps the network", func(t *testing.T) {
+		r, _, _, dom := newSelfRouteRig(t, selfRigOptions{})
+		claimSelfRoute(t, r, dom)
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		wantItems(t, pv,
+			[2]string{ingressdeploy.ItemSelfOriginRemoved, ingressdeploy.SelfItemOK},
+			[2]string{ingressdeploy.ItemSelfNetworkRemoved, ingressdeploy.SelfItemOK},
+		)
+		if got, want := pv.Items[0].Message, "TierPlan stops accepting requests from https://"+srHost+"."; got != want {
+			t.Errorf("origin message = %q, want %q", got, want)
+		}
+		if got, want := pv.Items[1].Message, "The tierplan-self network stays, because the port-80 carve-out uses it."; got != want {
+			t.Errorf("network message = %q, want %q", got, want)
+		}
+		if pv.Host != srHost || pv.Direct != srPublic {
+			t.Errorf("Host %q Direct %q, want %q and %q", pv.Host, pv.Direct, srHost, srPublic)
+		}
+	})
+	t.Run("no carve-out removes the network", func(t *testing.T) {
+		r, _, k, dom := newSelfRouteRig(t, selfRigOptions{})
+		k.set(func(k *selfRouteKnobs) { k.http01 = false })
+		claimSelfRoute(t, r, dom)
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		if got, want := pv.Items[1].Message, "The tierplan-self network is removed, because the port-80 carve-out doesn't need it."; got != want {
+			t.Errorf("network message = %q, want %q", got, want)
+		}
+	})
+	// 28-UAT step 7 and tear-down: on a swarm the switch-off keeps tierplan-self while TierPlan's own service is on it (A-06),
+	// so the preview says so, and how to take it off, rather than that it is removed.
+	t.Run("TierPlan's service on the network keeps it", func(t *testing.T) {
+		r, facts, k, dom := newSelfRouteRig(t, selfRigOptions{})
+		k.set(func(k *selfRouteKnobs) { k.http01 = false })
+		facts.setAttached(true)
+		claimSelfRoute(t, r, dom)
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		want := "The tierplan-self network stays while TierPlan's service is on it. Take the tierplan-self lines out of " +
+			"TierPlan's stack file and run docker stack deploy again; a later pass then removes the network."
+		if got := pv.Items[1].Message; got != want {
+			t.Errorf("network message = %q, want %q", got, want)
+		}
+		if pv.Items[1].State != ingressdeploy.SelfItemOK {
+			t.Errorf("network state = %q, want ok: the release goes ahead", pv.Items[1].State)
+		}
+	})
+	t.Run("TierPlan's service outside a stack keeps it", func(t *testing.T) {
+		r, facts, k, dom := newSelfRouteRig(t, selfRigOptions{})
+		k.set(func(k *selfRouteKnobs) { k.http01 = false })
+		facts.setAttached(true)
+		facts.mu.Lock()
+		facts.facts.StackNamespace = ""
+		service := facts.facts.ServiceName
+		facts.mu.Unlock()
+		claimSelfRoute(t, r, dom)
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		want := "The tierplan-self network stays while TierPlan's service is on it. Run docker service update --network-rm " +
+			"tierplan-self " + service + " on a manager; a later pass then removes the network."
+		if got := pv.Items[1].Message; got != want {
+			t.Errorf("network message = %q, want %q", got, want)
+		}
+	})
+	t.Run("the carve-out still says why when TierPlan is on it", func(t *testing.T) {
+		r, facts, _, dom := newSelfRouteRig(t, selfRigOptions{})
+		facts.setAttached(true)
+		claimSelfRoute(t, r, dom)
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		if got, want := pv.Items[1].Message, "The tierplan-self network stays, because the port-80 carve-out uses it."; got != want {
+			t.Errorf("network message = %q, want %q", got, want)
+		}
+	})
+	t.Run("never refused, even when nothing can be told", func(t *testing.T) {
+		r, _, k, dom := newSelfRouteRig(t, selfRigOptions{})
+		claimSelfRoute(t, r, dom)
+		k.set(func(k *selfRouteKnobs) {
+			k.localErr = errors.New("no socket")
+			k.urls = ingressdeploy.SelfURLs{}
+		})
+		if _, err := r.istore.SetEnabled(testsupport.Context(t), r.envID, false, "admin", nil); err != nil {
+			t.Fatalf("SetEnabled: %v", err)
+		}
+		pv, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("PreviewSelfRouteOff: %v", err)
+		}
+		if len(pv.Items) != 2 || pv.Refused() {
+			t.Errorf("items = %+v, want two that do not refuse", pv.Items)
+		}
+	})
+	t.Run("no route on", func(t *testing.T) {
+		r, _, _, _ := newSelfRouteRig(t, selfRigOptions{})
+		if _, err := r.svc.PreviewSelfRouteOff(testsupport.Context(t), r.envID); !errors.Is(err, ingressdeploy.ErrSelfRouteNotEnabled) {
+			t.Errorf("err = %v, want ErrSelfRouteNotEnabled", err)
+		}
+	})
+}
+
+// TestSelfRouteFacts: the card's facts from one call (UI-SPEC A-01, A-03, A-04): where TierPlan runs, whether the route is on
+// and on which host, whether TierPlan is on the self network and whether an ensure pass has said so, the direct address, the
+// refusal known before the switch, the snippet and the carve-out.
+func TestSelfRouteFacts(t *testing.T) {
+	t.Run("on and attached", func(t *testing.T) {
+		r, facts, _, dom := newSelfRouteRig(t, selfRigOptions{})
+		claimSelfRoute(t, r, dom)
+		facts.setAttached(true)
+		r.round()
+		f, err := r.svc.SelfRouteFacts(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("SelfRouteFacts: %v", err)
+		}
+		if f.Here != ingressdeploy.SelfHereYes || !f.On || f.Host != srHost || !f.Attached || !f.AttachedKnown || f.Direct != srPublic ||
+			f.Kind != ingressdeploy.SelfKindSwarmService || f.Refusal != nil || f.Snippet != nil || !f.CarveOut {
+			t.Errorf("facts = %+v", f)
+		}
+	})
+	t.Run("on and not attached", func(t *testing.T) {
+		r, _, _, dom := newSelfRouteRig(t, selfRigOptions{})
+		claimSelfRoute(t, r, dom)
+		r.round()
+		f, err := r.svc.SelfRouteFacts(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("SelfRouteFacts: %v", err)
+		}
+		if f.Attached || !f.AttachedKnown || f.Snippet == nil || f.Snippet.Kind != ingressdeploy.SelfSnippetStackFile ||
+			f.Snippet.Text != ingressdeploy.StackFileSnippet("tierplan") {
+			t.Errorf("facts = %+v, snippet %+v", f, f.Snippet)
+		}
+	})
+	t.Run("before any ensure pass", func(t *testing.T) {
+		r, facts, _, dom := newSelfRouteRig(t, selfRigOptions{})
+		claimSelfRoute(t, r, dom)
+		facts.setAttached(true)
+		f, err := r.svc.SelfRouteFacts(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("SelfRouteFacts: %v", err)
+		}
+		if f.AttachedKnown || !f.Attached || !f.On {
+			t.Errorf("facts = %+v, want the location's attachment, not known from a pass", f)
+		}
+	})
+	t.Run("off", func(t *testing.T) {
+		r, _, k, _ := newSelfRouteRig(t, selfRigOptions{})
+		k.set(func(k *selfRouteKnobs) { k.http01 = false })
+		f, err := r.svc.SelfRouteFacts(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("SelfRouteFacts: %v", err)
+		}
+		if f.On || f.Host != "" || f.Direct != srPublic || f.CarveOut || f.Here != ingressdeploy.SelfHereYes {
+			t.Errorf("facts = %+v", f)
+		}
+	})
+	t.Run("elsewhere", func(t *testing.T) {
+		r, _, k, _ := newSelfRouteRig(t, selfRigOptions{})
+		k.set(func(k *selfRouteKnobs) {
+			k.local = &envs.SwarmMembership{Known: true, Member: true, ClusterID: "cluster-other", NodeID: "node-9", EngineID: "engine-9"}
+		})
+		f, err := r.svc.SelfRouteFacts(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("SelfRouteFacts: %v", err)
+		}
+		if f.Here != ingressdeploy.SelfHereNo {
+			t.Errorf("Here = %q, want no", f.Here)
+		}
+	})
+	t.Run("cannot tell", func(t *testing.T) {
+		r, _, k, _ := newSelfRouteRig(t, selfRigOptions{})
+		k.set(func(k *selfRouteKnobs) { k.localErr = errors.New("no socket") })
+		f, err := r.svc.SelfRouteFacts(testsupport.Context(t), r.envID)
+		if err != nil {
+			t.Fatalf("SelfRouteFacts: %v", err)
+		}
+		if f.Here != ingressdeploy.SelfHereUnknown || f.Refusal == nil || f.Refusal.Code != ingressdeploy.CodeSelfRouteNotHere ||
+			!strings.Contains(f.Refusal.Message, "can't tell") {
+			t.Errorf("facts = %+v, refusal %+v", f, f.Refusal)
+		}
+	})
+}

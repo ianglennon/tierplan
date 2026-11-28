@@ -105,7 +105,7 @@ func (s *Service) vipProxyReady(ctx context.Context, envID string) (map[string]b
 		current, have = s.d.CurrentBundle(envID)
 	}
 	for _, n := range rows {
-		if n.SwarmNodeID != "" && proxyReady(n, current, have) {
+		if n.SwarmNodeID != "" && s.proxyReady(n, current, have) {
 			ready[n.SwarmNodeID] = true
 		}
 	}

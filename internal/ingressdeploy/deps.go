@@ -165,6 +165,9 @@ type Deps struct {
 	// CurrentBundle is the environment's current ingress bundle ID and whether it has one, for the status; nil
 	// reads none, so no node counts as ready.
 	CurrentBundle func(envID string) (string, bool)
+	// Live says whether a proxy node has a live session now (ingresshub.Hub.Live). A node that is not live is not ready,
+	// whatever health it last reported. Nil does not check.
+	Live func(nodeID string) bool
 	// Kicker closes an environment's proxy sessions when ingress is switched off; nil closes none.
 	Kicker Kicker
 	// NodeRows removes the environment's proxy node rows at the end of a switch-off; nil removes none.
@@ -188,12 +191,32 @@ type Deps struct {
 	AddressSpaces Addressing
 	// AllocationWait is how the read-back of the new network waits on the swarm.
 	AllocationWait dockerx.AllocationWait
+	// SelfReleaseLockWait bounds how long the switch-off of TierPlan's own route waits for the environment's operation lock
+	// before it releases the route without it (D-11, WR-04). Zero is DefaultSelfReleaseLockWait.
+	SelfReleaseLockWait time.Duration
 	// LocalSwarm is the swarm membership of the server's own engine (envs.Service.LocalSwarmMembership): the cluster for a
 	// manager, the node for a manager or a worker, and whether it can be told at all. The preflight compares it with the
 	// environment's and says so when it cannot tell.
 	LocalSwarm func(ctx context.Context) (envs.SwarmMembership, error)
-	// OwnChallenge reads the HTTP-01 challenge answer of the server's own address, for the preflight.
-	OwnChallenge func(ctx context.Context) (string, error)
+	// OwnHTTP01InUse is whether TierPlan's own certificate really renews over HTTP-01 (acme.HTTP01InUse), for the HTTP-01
+	// preflight checks (A-04): only an active Let's Encrypt configuration using HTTP-01 counts, never a self-signed install
+	// whose challenge merely reads HTTP-01 by default. Nil skips the checks; an error makes them warn.
+	OwnHTTP01InUse func(ctx context.Context) (bool, error)
+	// Self reads TierPlan's own container on the local engine: its swarm service, stack and networks (D-01, D-03). Nil answers
+	// unknown, so SelfLocation refuses rather than guesses.
+	Self func(ctx context.Context) (SelfFacts, error)
+	// SelfURLs reads the instance's own addresses, their environment locks and TIERPLAN_LISTEN's port, for the route's
+	// backend (D-07); nil means none are set.
+	SelfURLs func() SelfURLs
+	// SelfConnect connects TierPlan's own container to the self network on the local engine, under the given alias, and
+	// SelfDisconnect takes it off again. They are for a standalone host only (D-04): on a swarm TierPlan's service joins the
+	// network through its own stack file and is never updated by TierPlan (D-03). Nil means TierPlan cannot connect itself
+	// (no local socket), so the standalone pass reports TierPlan as not attached and never tries.
+	SelfConnect    func(ctx context.Context, networkID, alias string) error
+	SelfDisconnect func(ctx context.Context, networkID string) error
+	// HostCertificate is the ingress certificate manager's view of one hostname of an environment, for the self route's
+	// preview (D-09). Nil means unknown, which the preview shows as a warning and never as a valid certificate.
+	HostCertificate func(ctx context.Context, envID, host string) (HostCertState, error)
 	// ServerVersion decides the proxy image's tag (IngressImage).
 	ServerVersion string
 	// URL is the full address of the ingress channel the proxy dials, wss://host:port/ingress/connect.
@@ -202,6 +225,19 @@ type Deps struct {
 	Pins  func() []string
 	Clock stackops.Clock
 	Log   *slog.Logger
+}
+
+// HostCertState is what the ingress certificate manager knows of one hostname's certificate (Deps.HostCertificate).
+type HostCertState struct {
+	// Valid is a certificate for the hostname that is in force now.
+	Valid bool
+	// Known is false when the manager holds nothing about the hostname yet: no certificate has been ordered.
+	Known bool
+	// TermsNeeded is the CA's terms not accepted, and Paused certificate work paused, for the environment: no certificate
+	// is ordered while either holds.
+	TermsNeeded, Paused bool
+	// Reason is the manager's short code for a certificate that is not valid, "" for none.
+	Reason string
 }
 
 // Service deploys the objects of an environment's ingress.
@@ -229,6 +265,18 @@ type Service struct {
 	// vipNodeTimeout and vipPassTimeout bound one node's read and one environment's pass of the virtual IP reader. A test
 	// shortens them (export_test.go).
 	vipNodeTimeout, vipPassTimeout time.Duration
+	// selfObs is, by environment, the last SelfObservation of its self network, and selfCb the function each one is handed
+	// to (OnSelfObserved); selfMu guards both.
+	selfMu  sync.Mutex
+	selfObs map[string]SelfObservation
+	selfCb  func(SelfObservation)
+	// selfSeq counts, by environment, the observations published since start, and selfTick is closed by the next one (and
+	// then made again by a waiter), so a switch job can wait for an observation newer than its write; selfMu guards both.
+	selfSeq  map[string]uint64
+	selfTick chan struct{}
+	// selfWaitBound, when set, replaces the bound of a self route job's wait for the next observation: it is called once as
+	// the wait starts and its channel ends the wait. Only a test sets it (export_test.go).
+	selfWaitBound func() <-chan time.Time
 }
 
 // New builds the deployer.

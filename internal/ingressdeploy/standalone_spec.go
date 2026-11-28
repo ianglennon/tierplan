@@ -28,9 +28,12 @@ const TokenLabel = "tierplan.ingress.token" //nolint:gosec // G101: a label name
 // ingress.VolumeName), so these keys never reach the engine.
 const (
 	standaloneNetworkKey = "ingress"
-	standaloneVolumeKey  = "cache"
-	standaloneSecretKey  = "token"
-	standaloneSecretEnv  = "TIERPLAN_SECRET_token" //nolint:gosec // G101: the name of a variable, not a credential
+	// standaloneSelfNetworkKey is the project's key of TierPlan's self network, which the project names as external: the
+	// ensure loop makes it and removes it, never the Compose SDK.
+	standaloneSelfNetworkKey = "self"
+	standaloneVolumeKey      = "cache"
+	standaloneSecretKey      = "token"
+	standaloneSecretEnv      = "TIERPLAN_SECRET_token" //nolint:gosec // G101: the name of a variable, not a credential
 )
 
 // StandaloneToken is the join token a standalone proxy is created with.
@@ -56,13 +59,17 @@ type StandaloneInput struct {
 	Subnet string
 	// Token is the join token; nil builds the project without a secret and without the token label.
 	Token *StandaloneToken
+	// SelfNetwork puts the proxy on TierPlan's self network as well (D-04), an external network of the project: the bridge
+	// the ensure loop made, which TierPlan's own container is connected to.
+	SelfNetwork bool
 }
 
 // StandaloneProject is the standalone host's system project (D-06, D-07): the compose project
 // ingress.ProjectName with the one service ingress.ProxyComposeService, the bridge network ingress.NetworkName
-// and the cache volume ingress.VolumeName. It is built from typed compose-go values and never from text, so
-// nothing a user wrote can reach it, and from the swarm builder's constants (ProxyUser, StateDir, TokenFile,
-// the ports and the log bounds), so the two cannot drift.
+// (and, when in.SelfNetwork, the external self network ingress.SelfNetworkName) and the cache volume
+// ingress.VolumeName. It is built from typed compose-go values and never from text, so nothing a user wrote can
+// reach it, and from the swarm builder's constants (ProxyUser, StateDir, TokenFile, the ports and the log bounds),
+// so the two cannot drift.
 //
 // The container it makes is a plain one: no Docker socket, no privileged mode, no capability, no device, no
 // host network, PID or IPC mode and no host path; the host ports 80 and 443 are the only host-facing setting
@@ -134,10 +141,16 @@ func StandaloneProject(in StandaloneInput) *types.Project {
 		network.Ipam = types.IPAMConfig{Config: []*types.IPAMPool{{Subnet: in.Subnet}}}
 	}
 
+	networks := types.Networks{standaloneNetworkKey: network}
+	if in.SelfNetwork {
+		svc.Networks[standaloneSelfNetworkKey] = &types.ServiceNetworkConfig{}
+		networks[standaloneSelfNetworkKey] = types.NetworkConfig{Name: ingress.SelfNetworkName, External: true}
+	}
+
 	p := &types.Project{
 		Name:     ingress.ProjectName,
 		Services: types.Services{ingress.ProxyComposeService: svc},
-		Networks: types.Networks{standaloneNetworkKey: network},
+		Networks: networks,
 		Volumes: types.Volumes{standaloneVolumeKey: types.VolumeConfig{
 			Name:   ingress.VolumeName,
 			Labels: types.Labels(ingress.ObjectLabels()),

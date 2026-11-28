@@ -4,6 +4,8 @@ TierPlan serves HTTPS only: it listens on port 7480 and answers with its own cer
 
 The configurations on this page are the files in [`docs/proxy/`](proxy/). `make proxy-smoke` runs the built image behind all three, at both places, and checks what is listed under [Checking a setup](#checking-a-setup).
 
+**Using TierPlan's managed ingress?** When ingress is on in the environment TierPlan runs in, the ingress can serve TierPlan itself on a host name you choose, with a certificate of its own. That replaces a hand-written proxy file such as the Traefik one below. See [TierPlan's own route](ingress.md#tierplans-own-route). Direct access on port 7480 keeps working either way.
+
 ## Proxy or TierPlan's own HTTPS?
 
 You do not always need a proxy. TierPlan can get a free certificate that browsers trust from Let's Encrypt and serve it itself, over HTTP-01 or, with Cloudflare DNS, DNS-01. [HTTPS and Let's Encrypt](https.md) says how.
@@ -39,9 +41,9 @@ TierPlan serves HTTPS and nothing else, on its own port, with its own certificat
 
 ## The public URL decides everything
 
-TierPlan takes its host name, its base path and the origin it accepts changes from, from the public URL and from nothing else. Whatever a proxy or a client puts in a header cannot change them. This is deliberate: a header that could widen the set of accepted origins would let any page on the internet change things as an admin.
+TierPlan takes its host name, its base path and the origin it accepts changes from, from the public URL and from nothing else. The additions are the agent URL's origin whenever an agent URL is set, since it is TierPlan's own direct address, and the origin of [TierPlan's own route](ingress.md#tierplans-own-route) while that route is on. They too come from TierPlan's own settings. Whatever a proxy or a client puts in a header cannot change them. This is deliberate: a header that could widen the set of accepted origins would let any page on the internet change things as an admin.
 
-- **Origin and CSRF.** Every change a browser makes must come from the public URL's origin. A request from another origin is refused.
+- **Origin and CSRF.** Every change a browser makes must come from the public URL's origin, or, while TierPlan's own route is on, from the route's origin and, when the public URL is the route host, the agent URL's. A request from another origin is refused.
 - **Base path.** The path of the public URL (`/tierplan` in `https://example.com/tierplan`) is the base path. TierPlan serves the app, the API, the event streams and the agent endpoint under it.
 - **Cookies.** The session cookie is scoped to that host and path. See [Root or subpath](#root-or-subpath).
 
@@ -57,6 +59,8 @@ TierPlan believes forwarded headers only from the addresses in `TIERPLAN_TRUSTED
 | `X-Forwarded-Proto` | The scheme the client used, for the links and cookies TierPlan builds. It never makes a plain connection count as secure: the connection from the proxy to TierPlan must itself be TLS. With several values, the last one counts. |
 
 TierPlan **ignores** `X-Forwarded-Host`, `X-Forwarded-Prefix` and the standard `Forwarded` header, from every peer. It also ignores `X-Forwarded-For` and `X-Forwarded-Proto` from any peer that is not trusted. Traefik adds `X-Forwarded-Prefix` when it strips a prefix; that is harmless.
+
+TierPlan's own ingress route does not change these rules. The extra origin it accepts while the route is on, `https://` and the route's host name, is added from the route TierPlan stores, and the agent URL's origin, accepted whenever an agent URL is set so the direct address keeps working with the route on or off, from TierPlan's stored settings; never from a header, so a header still cannot widen the accepted origins. The route's proxies reach TierPlan over the `tierplan-self` network, and TierPlan believes their forwarded headers from that network's own range, read from Docker without its gateway, only while TierPlan is on it. You add nothing to `TIERPLAN_TRUSTED_PROXIES` for the route.
 
 Keep the list short. Everything in it can choose the client address of every request. For a proxy in a Docker network, use the network's range (`docker network inspect <name>` shows it as `Subnet`) or the proxy container's address. Do not list a whole private range that other machines can reach.
 
@@ -93,7 +97,7 @@ TierPlan's live feeds are Server-Sent Events streams, and the agent tunnel and t
 
 Phase 4 adds two kinds of long-lived connection to this list. Both pass through the same proxy settings and need nothing extra:
 
-- **The browser shell** is a WebSocket at `/api/env/<environment>/shell-sessions/<session>/ws` (under your base path, if you use one). It is opened from the page after a normal `POST`, and TierPlan accepts the upgrade only from your public URL's origin (or the request's own host), so the proxy must pass the `Origin` and `Host` headers unchanged. A shell can sit open for hours, so a proxy idle or read timeout must not be shorter than the 20 second ping. TierPlan closes a shell that nobody uses after 30 minutes by default.
+- **The browser shell** is a WebSocket at `/api/env/<environment>/shell-sessions/<session>/ws` (under your base path, if you use one). It is opened from the page after a normal `POST`, and TierPlan accepts the upgrade only from your public URL's origin, the origins TierPlan's own route adds (see Origin and CSRF above), or the request's own host, so the proxy must pass the `Origin` and `Host` headers unchanged. A shell can sit open for hours, so a proxy idle or read timeout must not be shorter than the 20 second ping. TierPlan closes a shell that nobody uses after 30 minutes by default.
 - **Log streams** are Server-Sent Events at `/api/env/<environment>/containers/<container>/logs/stream`, and a log download (`.../logs/download`) is one long response that is written as it is read. Neither may be buffered or compressed, or the log appears in bursts, or only when the download ends. A service's log (Phase 6) is the same at `/api/env/<environment>/services/<service>/logs/stream` and `.../logs/download`, with the same rules.
 - **Stats streams** (Phase 6) are Server-Sent Events at `/api/env/<environment>/containers/<container>/stats/stream`, one sample about every two seconds. Like a log stream, one may not be buffered or compressed, or the charts update in bursts. A stats stream takes one of the browser's connections for as long as the Stats tab is open and visible, and the page closes it after a minute in a hidden tab. The Stats tab of a service, a list with the Live stats switch on and the placement page with it on each open one more such stream (`.../services/<service>/stats/stream`, `.../services/stats/stream`, `.../containers/stats/stream` and `.../nodes/stats/stream`) that must not be buffered either.
 
@@ -316,7 +320,7 @@ TierPlan watches the requests that reach it and tells admins (anyone with the `s
 | Warning | What it means | What to do |
 |---------|---------------|------------|
 | **Forwarded headers from an untrusted address** | A peer that is not in `TIERPLAN_TRUSTED_PROXIES` sent `X-Forwarded-…` headers. TierPlan ignored them. | If the address in the warning is your proxy, add it to `TIERPLAN_TRUSTED_PROXIES`. If it is not, something is sending forged headers; they did no harm. |
-| **Requests don't match the public URL** | Requests arrive for a host, or over a scheme, that is not the public URL's. | Make the proxy pass the original `Host` (nginx: `proxy_set_header Host $http_host;`) and send `X-Forwarded-Proto`, and check that `TIERPLAN_PUBLIC_URL` is the address people type. Reaching TierPlan by another address, such as its IP and port, shows this warning too. |
+| **Requests don't match the public URL** | Requests arrive for a host, or over a scheme, that is not the public URL's. | Make the proxy pass the original `Host` (nginx: `proxy_set_header Host $http_host;`) and send `X-Forwarded-Proto`, and check that `TIERPLAN_PUBLIC_URL` is the address people type. Reaching TierPlan by another address, such as its IP and port, shows this warning too. Requests for the host of TierPlan's own ingress route, while the route is on, do not (see [ingress.md](ingress.md#tierplans-own-route)). |
 | **WebSocket connections are failing** | A request to `/agent/connect` arrived without the WebSocket upgrade headers. | Pass `Upgrade` and `Connection` (nginx: the two `proxy_set_header` lines and the `map`). |
 
 Other symptoms:

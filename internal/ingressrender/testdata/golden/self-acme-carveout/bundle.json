@@ -1,0 +1,49 @@
+{
+  "id": "f40703ae5b2760e02980345ff195481edb821ad198aadee210604fb24ae52f83",
+  "schema": 2,
+  "version": {
+    "config": 12,
+    "certs": 3,
+    "own": 1
+  },
+  "manifest": {
+    "schema": 2,
+    "files": [
+      {
+        "path": "certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key",
+        "sha256": "50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d",
+        "mode": 384,
+        "step": 1
+      },
+      {
+        "path": "certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt",
+        "sha256": "6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98",
+        "mode": 420,
+        "step": 1
+      },
+      {
+        "path": "certs/b83c95d23fc3e00707abef47edbc75b8fe107c83deb98b88a7100ae67227658f.crt",
+        "sha256": "b83c95d23fc3e00707abef47edbc75b8fe107c83deb98b88a7100ae67227658f",
+        "mode": 420,
+        "step": 1
+      },
+      {
+        "path": "dynamic/tierplan.yml",
+        "sha256": "c1e170a37f5937538ff09a16d998bbb7cee4e607217f2d3d6d2820f47bd84962",
+        "mode": 420,
+        "step": 2
+      }
+    ],
+    "routes": [
+      {
+        "router": "tierplan-self",
+        "hostname": "tp.apps.example.org",
+        "pathPrefix": "/",
+        "stack": "",
+        "service": "tierplan",
+        "hash": "84ccc5581f7454d16c47d290b4841bc828891f242945d1f613aeece17b36fe7f"
+      }
+    ]
+  },
+  "skipped": []
+}

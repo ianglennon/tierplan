@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -346,5 +347,82 @@ func TestOneRequestCanRecordSeveralKinds(t *testing.T) {
 	slices.Sort(got)
 	if !slices.Equal(got, []string{SignalUntrustedForwarded, SignalURLMismatch}) {
 		t.Fatalf("kinds = %v, want url_mismatch and untrusted_forwarded", got)
+	}
+}
+
+func TestProxyObserverHeldUntilReady(t *testing.T) {
+	t.Parallel()
+	var ready atomic.Bool
+	r := newObserverRig(observedTrusted, observedPublicURL)
+	r.obs.HoldUntil(ready.Load)
+	// An untrusted peer carrying a forwarded header, and a request for another host: both are
+	// things the observer would raise a signal for.
+	untrusted := probe{peer: "198.51.100.7:4000", host: "tierplan.example.com", tls: true, headers: map[string]string{"X-Forwarded-For": "203.0.113.9"}}
+	otherHost := probe{peer: "198.51.100.7:4000", host: "elsewhere.example.com", tls: true}
+
+	r.send(untrusted)
+	r.send(otherHost)
+	if got := r.appeared(); len(got) != 0 {
+		t.Fatalf("callbacks while held = %v, want none", got)
+	}
+	if got := r.obs.Signals(); len(got) != 0 {
+		t.Fatalf("signals while held = %v, want none", kinds(got))
+	}
+
+	ready.Store(true)
+	r.send(untrusted)
+	if got := r.appeared(); !slices.Equal(got, []string{SignalUntrustedForwarded}) {
+		t.Errorf("callbacks once ready = %v, want [%s]", got, SignalUntrustedForwarded)
+	}
+	if got := kinds(r.obs.Signals()); !slices.Equal(got, []string{SignalUntrustedForwarded}) {
+		t.Errorf("signals once ready = %v, want [%s]", got, SignalUntrustedForwarded)
+	}
+}
+
+func TestProxyObserverNilGateIsAlwaysReady(t *testing.T) {
+	t.Parallel()
+	r := newObserverRig(observedTrusted, observedPublicURL)
+	r.obs.HoldUntil(nil)
+	r.send(probe{peer: "198.51.100.7:4000", host: "tierplan.example.com", tls: true, headers: map[string]string{"X-Forwarded-For": "203.0.113.9"}})
+	if got := r.appeared(); !slices.Equal(got, []string{SignalUntrustedForwarded}) {
+		t.Errorf("callbacks with a nil gate = %v, want [%s]", got, SignalUntrustedForwarded)
+	}
+}
+
+// TestTheSelfRouteHostIsNotAMismatch (28-UAT 9f): while TierPlan's own route is on, requests arrive through it for the route
+// host, an address TierPlan serves on purpose (D-07). They are no url_mismatch; a request for the route host over another
+// scheme, or for any other host, still is, and once the route is off its host is a mismatch again.
+func TestTheSelfRouteHostIsNotAMismatch(t *testing.T) {
+	rig := newObserverRig(observedTrusted, observedPublicURL)
+	var mu sync.Mutex
+	route := []string{"https://tp.apps.example.com"}
+	rig.obs.AlsoMatch(func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(route)
+	})
+	p := goodViaProxy(nil)
+	p.host = "TP.apps.example.com"
+	rig.send(p)
+	p.host = "tp.apps.example.com:443"
+	rig.send(p)
+	if sigs := rig.obs.Signals(); len(sigs) != 0 {
+		t.Fatalf("signals = %+v, want none for the route host while the route is on", sigs)
+	}
+
+	plain := probe{peer: "10.1.2.3:4000", host: "tp.apps.example.com", headers: map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "http"}}
+	rig.send(plain)
+	sigs := rig.obs.Signals()
+	if len(sigs) != 1 || sigs[0].Kind != SignalURLMismatch || sigs[0].Scheme != "http" {
+		t.Fatalf("signals = %+v, want one url_mismatch for the route host over http", sigs)
+	}
+
+	mu.Lock()
+	route = nil
+	mu.Unlock()
+	rig.send(p)
+	sigs = rig.obs.Signals()
+	if len(sigs) != 2 {
+		t.Fatalf("signals = %+v, want the route host over https to be a mismatch once the route is off", sigs)
 	}
 }

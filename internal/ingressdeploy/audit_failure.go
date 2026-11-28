@@ -24,11 +24,23 @@ const (
 // case it records; it writes nothing when no audit writer is wired; and a write that fails is logged and never fails the job,
 // which has already ended its items.
 func (s *Service) auditJobFailed(ctx context.Context, actor audit.Actor, action, envID, step, code string) {
+	s.auditJobFailedBy(ctx, actor, Requester{}, action, envID, step, code)
+}
+
+// Requester is the client a switch came from: its address (httpx.ClientIP) and user agent. A job writes its audit rows after
+// the request has ended, so the request's values travel with the job (28-UAT 7). The zero value records neither.
+type Requester struct {
+	IP, UserAgent string
+}
+
+// auditJobFailedBy is auditJobFailed for a job that knows the client it was started by.
+func (s *Service) auditJobFailedBy(ctx context.Context, actor audit.Actor, by Requester, action, envID, step, code string) {
 	if s.d.Audit == nil {
 		return
 	}
 	err := s.d.Audit.Record(context.WithoutCancel(ctx), audit.Entry{
 		Actor: actor, Action: action, TargetType: "environment", TargetID: envID, EnvID: envID,
+		IP: by.IP, UserAgent: by.UserAgent,
 		Result: audit.ResultFailure, Reason: code,
 		Details: map[string]string{"step": step, "code": code},
 	})

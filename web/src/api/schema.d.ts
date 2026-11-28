@@ -1563,7 +1563,7 @@ export interface paths {
         put?: never;
         /**
          * Switch ingress off for a swarm or standalone environment
-         * @description Refused while routes are live; otherwise answers 202 with a job's ID at once. On a swarm the job runs in this order: remove the virtual IP when the environment has one (its keepalived service, the wait for every node to release the address, its key secret and its row), which is the first item, virtual_ip, and ends vip_remove_failed with every later item not run when it fails, so the proxies are never removed under a running keepalived and ingress stays on; then stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; On a standalone host the job removes the proxy container, the ingress network and the cache volume through the host's one node; a network another container still uses fails the job, naming it. 409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).
+         * @description Refused while routes are live; otherwise answers 202 with a job's ID at once. Every switch-off first releases TierPlan's own route when it is on in the environment (the first item, self_route; it ends self_route_release_failed with every later item not run when it fails, and ingress stays on). On a swarm the job then runs in this order: remove the virtual IP when the environment has one (its keepalived service, the wait for every node to release the address, its key secret and its row), which is the first item, virtual_ip, and ends vip_remove_failed with every later item not run when it fails, so the proxies are never removed under a running keepalived and ingress stays on; then stop serving routes (ingress is switched off and the proxies' sessions are closed), remove the proxy service and wait for its tasks to be gone, wipe the certificate cache volume on every node through that node's agent, remove the ingress network, remove the tierplan-self network unless TierPlan is still on it (self_network; a failure ends disable_self_network_failed), remove the join token secrets, disable the join token (its hash and audit stay) and remove the proxy node rows. A node whose agent is not connected, or whose volume could not be removed, is named in the volumes step's result and is wiped when its agent reconnects. Claims and certificates are not touched. Running it again after a failure finishes what is left. 409 ingress_routes_live while a claim with routes exists, listing each hostname and path with its stack in errors; 409 ingress_paused while a restore's pause stands; On a standalone host the job removes the proxy container, the ingress network, the tierplan-self network (after TierPlan's own container leaves it) and the cache volume through the host's one node; a network another container still uses fails the job, naming it. 409 ingress_host_unreachable on a standalone host whose agent is not connected; 409 ingress_foreign_container on a standalone host whose proxy project holds a container that is not the proxy; 409 operation_locked while another operation holds the environment. Nothing is written when it is refused. Audited as ingress.disabled, ingress.join_token_disabled, ingress.node_removed, ingress.wipe_queued and ingress.wipe_done. Needs ingress.manage on the environment (its Admin).
          */
         post: operations["disableIngress"];
         delete?: never;
@@ -1583,7 +1583,7 @@ export interface paths {
         put?: never;
         /**
          * Preview switching ingress off for a swarm or standalone environment
-         * @description Says what switching ingress off would remove (the virtual IP, when the environment has one, with the address and the name of its key secret in removes.virtualIP; the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         * @description Says what switching ingress off would remove (the virtual IP, when the environment has one, with the address and the name of its key secret in removes.virtualIP; the proxy service, the ingress network, the join token secrets and the certificate cache volume on each node) and what would stop it, and writes nothing. A finding is an error that refuses the switch-off: ingress_paused while a restore's pause stands, and ingress_routes_live while any claim with routes exists in the environment, a stopped stack's included, which lists each hostname and path with its stack ordered by hostname then path. A stack in an environment the caller cannot see is not named. Remove the labels and redeploy, or remove the stack, to clear it. unreachable lists the nodes whose agent is not connected: their cache volume, which holds the private keys, is wiped when the agent connects. On a standalone host removes.container names the proxy container, a host whose agent is not connected is the finding ingress_host_unreachable, and a container in the tierplan-ingress compose project that is not the proxy is the finding ingress_foreign_container, since the project's removal would take it too. When TierPlan's own route is on in the environment, notice says it is released first and where TierPlan stays reachable, and selfRouteHost names its hostname. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
          */
         post: operations["previewIngressDisable"];
         delete?: never;
@@ -1628,7 +1628,7 @@ export interface paths {
         post?: never;
         /**
          * Delete a domain
-         * @description Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 ingress_domain_in_use names every holding stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. While TierPlan still holds DNS records it made with the domain's token, 409 ingress_domain_cleanup_pending and nothing changes: the removal is started at once and the detail says how many records are left. When the DNS provider refuses the domain's token for them, the detail says so: replace the token with one that can edit the zone, and the records are then removed. 404 ingress_domain_not_found for a domain that is gone or belongs to another environment, with no audit row. Answers 200 with certificatesLeft when live certificates under the domain are left to expire (they stop renewing), and 204 with no body when none are. Audited as ingress.domain_deleted, with the certificate count. Needs ingress.manage on the environment (its Admin).
+         * @description Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 ingress_domain_in_use names every holding stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes; TierPlan's own route is named "TierPlan itself in <environment>" and the detail then says to turn that route off first. While TierPlan still holds DNS records it made with the domain's token, 409 ingress_domain_cleanup_pending and nothing changes: the removal is started at once and the detail says how many records are left. When the DNS provider refuses the domain's token for them, the detail says so: replace the token with one that can edit the zone, and the records are then removed. 404 ingress_domain_not_found for a domain that is gone or belongs to another environment, with no audit row. Answers 200 with certificatesLeft when live certificates under the domain are left to expire (they stop renewing), and 204 with no body when none are. Audited as ingress.domain_deleted, with the certificate count. Needs ingress.manage on the environment (its Admin).
          */
         delete: operations["deleteIngressDomain"];
         options?: never;
@@ -1751,7 +1751,7 @@ export interface paths {
         put?: never;
         /**
          * Preview switching ingress on for a swarm or standalone environment
-         * @description Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. On a standalone host creates.standalone is true: the proxy is one container of the compose project tierplan-ingress with a bridge network and a cache volume, and the host is read only when its agent is connected. A standalone host whose agent is not connected is a finding, ingress_host_unreachable. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
+         * @description Says what switching ingress on would create (the ingress network and its subnet, the global proxy service and its image, the swarm secret that carries the join token, the proxy's volume) and what would stop it, and writes nothing. Findings of severity error refuse the enable; warnings do not. redeploy lists the stacks that hold routes and must be redeployed to join the ingress network: switching ingress on never changes a stack. On a standalone host creates.standalone is true: the proxy is one container of the compose project tierplan-ingress with a bridge network and a cache volume, and the host is read only when its agent is connected. A standalone host whose agent is not connected is a finding, ingress_host_unreachable. notice is a neutral note to show as sent, such as the HTTP-01 carve-out that keeps TierPlan's own certificate renewing. Answered with Cache-Control no-store. Needs ingress.manage on the environment (its Admin).
          */
         post: operations["previewIngressEnable"];
         delete?: never;
@@ -1877,11 +1877,75 @@ export interface paths {
         };
         /**
          * List the routes of an environment and what each is doing now
-         * @description Answers every route the environment's stacks hold, each with its hostname, path, owner, backend and the state the stack page reads, and the five conditions behind it: claim held, network attached, backend healthy, certificate ready and applied. The state and the conditions are worked out when asked, by the same call as the stack page's routes, from the stored claims, the engine, the proxy's current bundle and what each active node applied; nothing is stored. When the engine cannot be read the state is unknown and the conditions it decides are unknown. The answer never carries a certificate, a key or a token, and never another environment's names. Needs ingress.read on the environment (Viewer).
+         * @description Answers every route the environment's stacks hold, and TierPlan's own route when it is on there (ownerKind system), each with its hostname, path, owner, backend and the state the stack page reads, and the five conditions behind it: claim held, network attached, backend healthy, certificate ready and applied. The state and the conditions are worked out when asked, by the same call as the stack page's routes, from the stored claims, the engine, the proxy's current bundle and what each active node applied; nothing is stored. When the engine cannot be read the state is unknown and the conditions it decides are unknown. The answer never carries a certificate, a key or a token, and never another environment's names. Needs ingress.read on the environment (Viewer).
          */
         get: operations["listIngressRoutes"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/self": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch TierPlan's own route on
+         * @description Takes the environment's operation lock and answers 202 with a job's ID at once. The job (ingress_self_route_enable) runs the preview's checks again as its first item, self_check, and a refusal ends it there with the refusing item's reason as the code (for example host_taken, vip_ingress_off, self_route_already_on or self_route_not_here) before anything is written. Otherwise self_claim stores the hostname for TierPlan with its audit entry (ingress.self_route_enabled), and self_network waits for the ingress to report the tierplan-self network. The job ends done once the claim is stored, even when the route is not served yet. Follow it at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 409 operation_locked while another operation holds the environment, naming it. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
+         */
+        post: operations["enableIngressSelfRoute"];
+        /**
+         * Switch TierPlan's own route off
+         * @description Answers 202 with a job's ID at once. The job (ingress_self_route_disable) waits up to 30 seconds for the environment's operation lock, which a stack operation may hold, then releases the hostname, with the lock or without it, with its audit entry (ingress.self_route_disabled) as self_release, then reports from the ingress's next pass whether the tierplan-self network was removed or kept (self_network). No state of the route, the engine, the certificate or the environment stops it: TierPlan stays reachable on its direct address. Follow the job at GET /api/env/{envId}/ingress/jobs/{jobId} or its stream. 409 self_route_not_on when TierPlan's own route is not on in this environment; another operation holding the environment never refuses it. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
+         */
+        delete: operations["disableIngressSelfRoute"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/self/off/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching TierPlan's own route off
+         * @description Says what switching TierPlan's own route off in this environment would do, and writes nothing. items are self_origin_removed (the origin TierPlan stops accepting) and self_network_removed (whether the tierplan-self network goes, or stays for TierPlan's own HTTP-01 challenges), each with state ok and the server's sentence; host is the route's hostname and directAddress the address that keeps reaching TierPlan, empty for the page's own origin. It never refuses because of the route's state or the environment's health: an environment that cannot be read only leaves where TierPlan runs unknown. 409 self_route_not_on when TierPlan's own route is not on in this environment. Answered with Cache-Control no-store. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
+         */
+        post: operations["previewIngressSelfRouteOff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/ingress/self/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview switching TierPlan's own route on
+         * @description Says what serving TierPlan itself on the hostname through this environment's ingress would do, and what would stop it, and writes nothing: no claim, no network, no certificate. The answer is 200 whether or not anything refuses. items are, in order, self_hostname (the name, judged by the rules every claim is judged by), self_certificate, self_network (whether TierPlan is, or will be, on the tierplan-self network, with the next step as snippet for a swarm service that is not), self_origin (the origin TierPlan will also accept) and, when TierPlan's own certificate renews over HTTP-01, self_carve_out. Each item has a state (ok, warning or refused), the server's sentence and, for a warning or a refusal, its stable reason. Any refused item stops the switch-on. directAddress is the address that keeps reaching TierPlan whatever the route does, empty for the page's own origin. Answered with Cache-Control no-store. Needs ingress.manage on the environment and an instance admin. A caller who holds ingress.manage but is not an instance admin is refused 403 instance_admin_required and the refusal is audited as permission.denied.
+         */
+        post: operations["previewIngressSelfRoute"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1897,7 +1961,7 @@ export interface paths {
         };
         /**
          * Read the ingress status of a swarm or standalone environment
-         * @description Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds, or on a standalone host which of the network, proxy container and cache volume it holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).
+         * @description Says whether ingress is on, paused after a restore, and logging access; which of the ingress network, proxy service and join token secret the swarm holds, or on a standalone host which of the network, proxy container and cache volume it holds; how many proxy nodes are expected, enrolled and ready (ready means healthy on the current bundle); when the objects were last checked and how that ended; how many certificate cache wipes are pending; whether switching off left an object behind; whether the join token is disabled; and the stacks to redeploy. selfRoute is TierPlan's own route here, present when TierPlan runs in this environment or cannot tell whether it does: whether it is on, its hostname and state (derived like its row on the routes list), the direct address, whether TierPlan is on the tierplan-self network, a refusal known before the switch and the next step while TierPlan's swarm service is not attached. It carries no token and no secret. Answered with Cache-Control no-store. Needs ingress.read on the environment (Viewer).
          */
         get: operations["getIngressStatus"];
         put?: never;
@@ -4997,7 +5061,7 @@ export interface paths {
         };
         /**
          * Get the certificate the server serves
-         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity, and a trust verdict: whether a client that knows only the system roots trusts it for the public URL's host, or why not. When certificate files fix the certificate the answer also carries their two paths and the verdict, never their contents. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. 503 https_unavailable when no certificate can be read. Needs settings.read.
+         * @description The certificate the listener serves right now, read from the live listener and never from a stored copy: its source (self_signed, cert_files or lets_encrypt), issuer, every name it covers and its validity, and a trust verdict: whether a client that knows only the system roots trusts it for the public URL's host, or why not. When certificate files fix the certificate the answer also carries their two paths and the verdict, never their contents. Only public certificate fields are returned. The acme block holds the whole Let's Encrypt state the Settings page shows: the directory, account, names and the refusals that stop an order, the stored certificate, the next renewal, the last failure and the runs. It is read from local state, makes no request to the CA and never carries a key. selfRoute, present only while TierPlan's own ingress route is on, names the environment, the hostname and the route's state, derived like its card on that environment's ingress page. 503 https_unavailable when no certificate can be read. Needs settings.read.
          */
         get: operations["getHTTPSStatus"];
         put?: never;
@@ -5621,7 +5685,7 @@ export interface paths {
         head?: never;
         /**
          * Change the instance name, the public URL or the agent URL
-         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). An http public URL answers 422 invalid_public_url and an http agent URL answers 422 invalid_agent_url, each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the session cookie's name and Path use the new public URL from the next request; the cookie is always Secure. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
+         * @description Only the fields sent are changed. Invalid fields answer 422 with a stable code per field (instance_name_required, instance_name_too_long, invalid_public_url, invalid_agent_url). An agent URL whose host the ingress serves (the self route's or a stack's) answers 422 agent_url_is_ingress_host, and a public URL whose host the ingress serves answers 422 public_url_is_ingress_host unless the same save or the stored settings keep an agent URL the ingress does not serve; both change nothing. A public URL with a base path while TierPlan's own route is on answers 422 public_url_path_with_self_route: the route serves TierPlan at the root of its hostname, so switch it off first. An http public URL answers 422 invalid_public_url and an http agent URL answers 422 invalid_agent_url, each with the reason in the problem detail: TierPlan serves HTTPS only and agents connect only over wss://. An https agent URL, an https public URL and clearing the agent URL are accepted. A different public URL while TIERPLAN_PUBLIC_URL is set answers 409 public_url_locked, and a different agent URL while TIERPLAN_AGENT_URL is set answers 409 agent_url_locked; both change nothing. An empty agentUrl clears it. A change takes effect at once: the Origin check and the session cookie's name and Path use the new public URL from the next request; the cookie is always Secure. When the address agents dial changes, every agent connected over a TLS-verified session is sent the new address and the server's pins over its tunnel and dials that address from its next connection; an agent takes only a wss:// address this way. From then on the server accepts agent handshakes only for the new host and port, with no fallback period: an agent that was offline or on plain ws:// at the time is refused auth_rejected until it is reinstalled with the new address or the change is reverted. Each change is audited as settings.updated with the old and new value of every changed field.
          */
         patch: operations["updateSettings"];
         trace?: never;
@@ -10041,6 +10105,17 @@ export interface components {
             /** @description The propagation-check resolvers, fixed by TIERPLAN_DNS_RESOLVERS. Value and stored are the lists as host:port joined by commas; value is empty when the variable fixes the zone's own name servers */
             resolvers?: components["schemas"]["HTTPSLockBody"];
         };
+        HTTPSSelfRouteBody: {
+            /** @description The environment whose ingress serves TierPlan's own route. The page links its ingress page when the reader holds ingress.read there */
+            envId: string;
+            /** @description The route's hostname */
+            host: string;
+            /**
+             * @description serving: every active ingress node applied a bundle that holds the route. pending: the proxies are still picking it up. waiting_certificate: its hostname has no certificate the bundle can carry yet. self_not_attached: TierPlan is not on the tierplan-self network, so nothing is served on the hostname. unknown: what it depends on could not be read just now. Derived like the route's card on the ingress page
+             * @enum {string}
+             */
+            state: "serving" | "pending" | "waiting_certificate" | "self_not_attached" | "unknown";
+        };
         HTTPSStatusBody: {
             /** @description The Let's Encrypt state; left out when this build has no Let's Encrypt support */
             acme?: components["schemas"]["HTTPSACMEBody"];
@@ -10057,6 +10132,8 @@ export interface components {
             certificate: components["schemas"]["HTTPSCertificateBody"];
             /** @description The HSTS state: the switch, the ramp step and when the next one comes, why it is on but not sent, the withdrawal date, when browsers will have forgotten it, and the environment lock. Left out when this build has no HSTS policy */
             hsts?: components["schemas"]["HTTPSHSTSBody"];
+            /** @description Where else TierPlan is served: its own route through an environment's ingress. Present only while that route is on */
+            selfRoute?: components["schemas"]["HTTPSSelfRouteBody"];
         };
         HTTPSTrustBody: {
             /** @description False when nothing was judged, because no certificate could be read */
@@ -10708,8 +10785,12 @@ export interface components {
         IngressDisablePreviewBody: {
             /** @description What stands in the way, each an error: ingress_paused first, then ingress_routes_live listing every hostname and path with its stack. Empty when nothing does */
             findings: components["schemas"]["IngressFindingBody"][] | null;
+            /** @description A neutral note to show as sent: when TierPlan's own route is on in this environment, that it is released first and where TierPlan stays reachable. Absent when there is none */
+            notice?: string;
             /** @description What the switch-off would remove */
             removes: components["schemas"]["IngressDisableRemovesBody"];
+            /** @description The hostname of TierPlan's own route when it is on in this environment, so a person reaching TierPlan through it can be warned; absent otherwise */
+            selfRouteHost?: string;
             /** @description The nodes whose agent is not connected now: their certificate cache volume is wiped when the agent connects */
             unreachable: string[] | null;
         };
@@ -10792,6 +10873,8 @@ export interface components {
             creates: components["schemas"]["IngressPlanBody"];
             /** @description Everything the preflight found, errors and warnings, in order */
             findings: components["schemas"]["IngressFindingBody"][] | null;
+            /** @description A neutral note to show as sent, for example that the ingress carries TierPlan's own HTTP-01 challenge to it so its certificate keeps renewing. Not a warning: nothing is wrong. Absent when there is none */
+            notice?: string;
             /** @description The stacks that hold routes and must be redeployed to be attached to the ingress network; the enable does not change them */
             redeploy: components["schemas"]["IngressRedeployBody"][] | null;
         };
@@ -10842,7 +10925,7 @@ export interface components {
             finishedAt: string;
             /** @description The job ID */
             id: string;
-            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; virtual_ip (which removes the virtual IP first, and is done with nothing removed when there is none), switch_off, service, volumes, network, secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and switch_off, proxy, network, volumes, token and nodes make ingress_disable; vip_key, vip_secret, vip_service and vip_switch for ingress_vip_enable; vip_change_service, vip_change_wait and vip_change_save for ingress_vip_change; vip_remove_service, vip_wait_tasks, vip_remove_secret and vip_forget for ingress_vip_disable */
+            /** @description The steps, in the order they run: token, network, service and switch for ingress_enable on a swarm; self_route (which releases TierPlan's own route first, and is done with nothing removed when it is not on here), virtual_ip (which removes the virtual IP, and is done with nothing removed when there is none), switch_off, service, volumes, network, self_network (which removes the tierplan-self network unless TierPlan is still on it), secret, token and nodes for ingress_disable on a swarm; on a standalone host the steps of the proxy project's bring-up come between the token and the switch for ingress_enable and for ingress_ensure, and self_route, switch_off, proxy, network, self_network, volumes, token and nodes make ingress_disable; self_check, self_claim and self_network for ingress_self_route_enable; self_release and self_network for ingress_self_route_disable; vip_key, vip_secret, vip_service and vip_switch for ingress_vip_enable; vip_change_service, vip_change_wait and vip_change_save for ingress_vip_change; vip_remove_service, vip_wait_tasks, vip_remove_secret and vip_forget for ingress_vip_disable */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
              * @description What the job does: ingress_enable, ingress_disable, ingress_ensure (the pass that keeps a standalone host's proxy project as wanted, run by the server and not by a person), or, for the virtual IP, ingress_vip_enable, ingress_vip_change or ingress_vip_disable
@@ -11014,7 +11097,7 @@ export interface components {
             resumed: boolean;
         };
         IngressRouteBody: {
-            /** @description The route's five conditions in their fixed order; empty for a claim, a reserved name and a system route */
+            /** @description The route's five conditions in their fixed order, TierPlan's own route's included; empty for a claim and a reserved name */
             conditions: components["schemas"]["RouteConditionBody"][] | null;
             /** @description The row's hostname */
             hostname: string;
@@ -11035,7 +11118,7 @@ export interface components {
              * @description The port the proxy sends the route's requests to; 0 for a claim or a reserved name
              */
             port: number;
-            /** @description For waiting_certificate, why the certificate is not served: no_certificate or certificate_not_ready. Empty for every other state */
+            /** @description For waiting_certificate, why the certificate is not served: no_certificate or certificate_not_ready. For not_attached on TierPlan's own route, self_not_attached. Empty for every other state */
             reason: string;
             /**
              * @description The scheme the proxy speaks to the backend; empty for a claim or a reserved name
@@ -11049,7 +11132,7 @@ export interface components {
             /** @description The name of that stack; empty when stackId is */
             stackName: string;
             /**
-             * @description What the route is doing now, the same state the stack page reads: serving, pending, waiting_certificate, backend_not_running, not_attached or ingress_off. unknown: the engine could not be read, so what runs is not known. Empty for a claim, a reserved name and a system route. Derived when read, stored nowhere
+             * @description What the route is doing now, the same state the stack page reads: serving, pending, waiting_certificate, backend_not_running, not_attached or ingress_off. unknown: the engine could not be read, so what runs is not known; for TierPlan's own route, whether TierPlan is on the tierplan-self network is not known yet. TierPlan's own route (ownerKind system) is derived the same way, and reads not_attached while TierPlan is not on the tierplan-self network. Empty for a claim and a reserved name. Derived when read, stored nowhere
              * @enum {string}
              */
             state: "serving" | "pending" | "waiting_certificate" | "backend_not_running" | "not_attached" | "ingress_off" | "unknown" | "";
@@ -11063,6 +11146,92 @@ export interface components {
             enabled: boolean;
             /** @description The rows of the environment, never another environment's: the routes in hostname, path then service order, then the claims with no route in hostname order, then the reserved names in hostname order; empty when there are none */
             routes: components["schemas"]["IngressRouteBody"][] | null;
+        };
+        IngressSelfRefusalBody: {
+            /** @description The stable code of the refusal: self_route_not_here when TierPlan cannot tell whether it runs here, self_route_needs_service when it runs as a plain container on a swarm node */
+            code: string;
+            /** @description The server's sentence. Show it as sent */
+            message: string;
+        };
+        IngressSelfRouteBody: {
+            /** @description True when TierPlan is on the tierplan-self network */
+            attached: boolean;
+            /** @description True when TierPlan's own certificate renews over the HTTP-01 challenge here, so the proxies carry the challenge to TierPlan */
+            carveOut: boolean;
+            /** @description The address that keeps reaching TierPlan whatever the route does, a full URL with the port; empty when that is the page's own origin */
+            directAddress: string;
+            /** @description The services (on a swarm) or containers (on a standalone host) the last pass found on tierplan-self besides the ingress proxy and TierPlan itself, by name. While there is one, TierPlan believes no client address forwarded over that network (self_network_foreign_member): remove them from it. Absent when there are none */
+            foreignMembers?: string[] | null;
+            /**
+             * @description yes: TierPlan runs in this environment. unknown: TierPlan cannot tell, so it refuses to switch its route on here (refusal says so)
+             * @enum {string}
+             */
+            here: "yes" | "unknown";
+            /** @description The route's hostname; empty while it is off */
+            host: string;
+            /**
+             * @description How TierPlan runs here: a swarm service, a plain container on a swarm node, or a container on a standalone host. Empty when here is unknown
+             * @enum {string}
+             */
+            kind: "swarm_service" | "swarm_container" | "standalone" | "";
+            /**
+             * @description The network the proxies reach TierPlan over, always tierplan-self
+             * @enum {string}
+             */
+            network: "tierplan-self";
+            /** @description True while TierPlan's own route is on in this environment */
+            on: boolean;
+            /** @description For waiting_certificate, no_certificate or certificate_not_ready; for self_not_attached, self_not_attached. Empty for every other state */
+            reason: string;
+            /** @description Why the route cannot be switched on here, known before the switch is pressed; absent when nothing stands in the way */
+            refusal?: components["schemas"]["IngressSelfRefusalBody"];
+            /** @description In state self_not_attached on a swarm, the next step that puts TierPlan's service on the tierplan-self network; absent otherwise */
+            snippet?: components["schemas"]["IngressSelfSnippetBody"];
+            /**
+             * @description off: the route is not on here. serving: every active ingress node applied a bundle that holds it. pending: the proxies are still picking it up. waiting_certificate: its hostname has no certificate the bundle can carry yet, and reason says why. self_not_attached: TierPlan is not on the tierplan-self network, so nothing is served on the hostname. unknown: what it depends on could not be read just now. Derived by the same call as the route's row on the routes list
+             * @enum {string}
+             */
+            state: "off" | "serving" | "pending" | "waiting_certificate" | "self_not_attached" | "unknown";
+        };
+        IngressSelfRouteItemBody: {
+            /** @description The item: self_hostname, self_certificate, self_network, self_origin and self_carve_out for a switch-on; self_origin_removed and self_network_removed for a switch-off */
+            code: string;
+            /** @description The server's sentence. Show it as sent */
+            message: string;
+            /** @description The stable code of a warning or a refusal, for example host_taken, vip_ingress_off, self_route_not_here or self_not_attached; absent when the item passed */
+            reason?: string;
+            /** @description On the self_network item of a swarm service that is not on the tierplan-self network: the next step that puts it there */
+            snippet?: components["schemas"]["IngressSelfSnippetBody"];
+            /**
+             * @description ok passes; warning tells you something and lets the switch go on; refused stops the switch-on
+             * @enum {string}
+             */
+            state: "ok" | "warning" | "refused";
+        };
+        IngressSelfRoutePreviewBody: {
+            /** @description The address that keeps reaching TierPlan whatever the route does; empty when that is the page's own origin */
+            directAddress: string;
+            /** @description The hostname as judged, lower-cased; for a switch-off, the hostname of the route that is on */
+            host: string;
+            /** @description The items in order. Any item whose state is refused stops the switch-on; the switch-off has none */
+            items: components["schemas"]["IngressSelfRouteItemBody"][] | null;
+        };
+        IngressSelfRouteRequest: {
+            /** @description The hostname TierPlan is to be served on, under one of the environment's registered domains, for example tierplan.apps.example.org */
+            hostname: string;
+        };
+        IngressSelfRouteStartBody: {
+            /** @description The job: read it at GET /api/env/{envId}/ingress/jobs/{jobId} or follow its stream */
+            jobId: string;
+        };
+        IngressSelfSnippetBody: {
+            /**
+             * @description stack_file is lines to add to TierPlan's stack file; service_update is a docker service update command
+             * @enum {string}
+             */
+            kind: "stack_file" | "service_update";
+            /** @description The lines or the command, with TierPlan's service name filled in. Show it as sent */
+            text: string;
         };
         IngressStatusBody: {
             /** @description True while the proxy writes an access log */
@@ -11090,6 +11259,8 @@ export interface components {
             pendingWipes: number;
             /** @description The stacks that must be redeployed to be attached to the ingress network */
             redeploy: components["schemas"]["IngressRedeployBody"][] | null;
+            /** @description TierPlan's own route in this environment, for its card. Present when TierPlan runs in this environment or cannot tell whether it does; absent when it runs in another one */
+            selfRoute?: components["schemas"]["IngressSelfRouteBody"];
             /** @description True when the join token is disabled, so no further node can enrol */
             tokenDisabled: boolean;
         };
@@ -11112,7 +11283,7 @@ export interface components {
             expected: number;
             /**
              * Format: int64
-             * @description The enrolled proxies whose health is ok and whose applied bundle is the current one
+             * @description The enrolled proxies that are connected now, whose health is ok and whose applied bundle is the current one. None while the environment is read and holds no proxy service (or proxy container on a standalone host)
              */
             ready: number;
         };
@@ -13910,13 +14081,15 @@ export interface components {
             /** @description How many active ingress nodes applied the bundle; present on the applied condition only */
             applied?: components["schemas"]["RouteAppliedBody"];
             /**
-             * @description Which condition this is. claim_held: the stack holds the claim the route sits under. network_attached: the service is on the ingress network. backend_healthy: the service runs at least one replica. certificate_ready: the hostname has a certificate the bundle can carry. applied: every active ingress node applied a bundle that holds the route. A route's conditions always come in this order
+             * @description Which condition this is. claim_held: the stack holds the claim the route sits under. network_attached: the service is on the ingress network (for TierPlan's own route, TierPlan is on the tierplan-self network). backend_healthy: the service runs at least one replica (for TierPlan's own route, the proxy can reach TierPlan). certificate_ready: the hostname has a certificate the bundle can carry. applied: every active ingress node applied a bundle that holds the route. A route's conditions always come in this order
              * @enum {string}
              */
             code: "claim_held" | "network_attached" | "backend_healthy" | "certificate_ready" | "applied";
-            /** @description A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the certificate's own failure hint */
+            /** @description On certificate_ready with reason certificate_not_ready: true when the certificate waits because its last order failed (a failed or invalid order, or the backoff after one), and message is then that failure's hint. Absent otherwise */
+            failed?: boolean;
+            /** @description A short sentence from the server saying why, for a person; empty when the condition is ready. For certificate_not_ready it is the hint of the certificate's last failed order when failed is true */
             message: string;
-            /** @description Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle */
+            /** @description Why the condition is not ready or unknown; empty when it is ready. One of not_attached, stack_stopped, no_running_task, no_certificate, certificate_not_ready, not_in_bundle, no_nodes, nodes_behind, ingress_off, engine_unreadable or no_bundle; for TierPlan's own route also self_not_attached (TierPlan is not on the tierplan-self network), not_observed (no check has read that since TierPlan started) or self_input_invalid (TierPlan's own route cannot be rendered from what it knows of itself) */
             reason: string;
             /**
              * @description ready: the condition holds. not_ready: it was read and does not hold. unknown: what it depends on was not read, for example the engine could not be reached or ingress is off; it is never reported ready
@@ -22393,6 +22566,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngressRoutesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    enableIngressSelfRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressSelfRouteRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressSelfRouteStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    disableIngressSelfRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressSelfRouteStartBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressSelfRouteOff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressSelfRoutePreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewIngressSelfRoute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngressSelfRouteRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngressSelfRoutePreviewBody"];
                 };
             };
             /** @description Error */

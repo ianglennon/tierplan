@@ -45,7 +45,7 @@ func bundleOf(t *testing.T, config int64, leaves ...leaf) ingressbundle.Bundle {
 			ingressbundle.File{Path: l.keyPath, Data: l.key})
 	}
 	files = append(files, ingressbundle.File{Path: ingressbundle.DynamicFile, Data: dynamicFor(nil, leaves)})
-	b, err := ingressbundle.Build(ingressbundle.Schema1, ingressbundle.Version{Config: config}, files, nil)
+	b, err := ingressbundle.Build(ingressbundle.Schema2, ingressbundle.Version{Config: config}, files, nil)
 	if err != nil {
 		t.Fatalf("build a bundle: %v", err)
 	}

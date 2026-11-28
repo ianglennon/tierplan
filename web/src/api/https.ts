@@ -11,6 +11,7 @@ export type HTTPSStatus = components["schemas"]["HTTPSStatusBody"];
 export type HTTPSCertificate = components["schemas"]["HTTPSCertificateBody"];
 // The HSTS block of the status, and the answer of the HSTS save (the same body).
 export type HTTPSHSTS = components["schemas"]["HTTPSHSTSBody"];
+export type HTTPSSelfRoute = components["schemas"]["HTTPSSelfRouteBody"];
 
 // The ["https", "status"] query: the certificate the listener serves now, whatever its source.
 // It is read again every minute and when the window gets focus back, so a renewal shows up.

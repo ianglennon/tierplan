@@ -217,3 +217,64 @@ func TestKeepalivedOwnership(t *testing.T) {
 		t.Error("the keepalived label does not own the standalone proxy container")
 	}
 }
+
+// TestSelfNetworkOwnershipPairs pins D-02: the self network is owned only with the ingress label, the self role and its
+// exact name, and OwnsNetwork, which asks about the ingress overlay, never takes it.
+func TestSelfNetworkOwnershipPairs(t *testing.T) {
+	self := SelfNetworkLabels()
+	ing := ObjectLabels()
+
+	if SelfNetworkName != "tierplan-self" || LabelIngressRole != "tierplan.ingress.role" || RoleSelfNetwork != "self" {
+		t.Errorf("reserved names changed: %q, %q, %q", SelfNetworkName, LabelIngressRole, RoleSelfNetwork)
+	}
+	want := map[string]string{
+		"tierplan.component":    "ingress",
+		"tierplan.keep":         "true",
+		"tierplan.updates":      "ignore",
+		"tierplan.ingress.role": "self",
+	}
+	if !maps.Equal(self, want) {
+		t.Fatalf("SelfNetworkLabels() = %v, want %v", self, want)
+	}
+	self["extra"] = "x"
+	delete(self, LabelIngressRole)
+	if again := SelfNetworkLabels(); !maps.Equal(again, want) {
+		t.Fatalf("SelfNetworkLabels() after a caller edited the first result = %v, want %v", again, want)
+	}
+	self = SelfNetworkLabels()
+	if !maps.Equal(ObjectLabels(), ing) || len(ing) != 3 {
+		t.Fatalf("ObjectLabels() changed: %v", ing)
+	}
+
+	cases := []struct {
+		name   string
+		objN   string
+		labels map[string]string
+		self   bool // OwnsSelfNetwork
+		proxy  bool // OwnsNetwork
+		anyW   bool // OwnsAnyNetwork
+	}{
+		{"self labels and name", SelfNetworkName, self, true, false, true},
+		{"ingress labels and name", NetworkName, ing, false, true, true},
+		{"ingress label alone on the self name", SelfNetworkName, ing, false, false, false},
+		{"self labels on another name", "web", self, false, false, false},
+		{"role label alone on the self name", SelfNetworkName, map[string]string{LabelIngressRole: RoleSelfNetwork}, false, false, false},
+		{"self name without labels", SelfNetworkName, nil, false, false, false},
+		{"keepalived label with the role on the self name", SelfNetworkName,
+			map[string]string{LabelComponent: ComponentKeepalived, LabelIngressRole: RoleSelfNetwork}, false, false, false},
+		{"another role on the self name", SelfNetworkName,
+			map[string]string{LabelComponent: ComponentIngress, LabelIngressRole: "other"}, false, false, false},
+		{"a user network", "app-net", nil, false, false, false},
+	}
+	for _, c := range cases {
+		if got := OwnsSelfNetwork(c.objN, c.labels); got != c.self {
+			t.Errorf("%s: OwnsSelfNetwork = %v, want %v", c.name, got, c.self)
+		}
+		if got := OwnsNetwork(c.objN, c.labels); got != c.proxy {
+			t.Errorf("%s: OwnsNetwork = %v, want %v", c.name, got, c.proxy)
+		}
+		if got := OwnsAnyNetwork(c.objN, c.labels); got != c.anyW {
+			t.Errorf("%s: OwnsAnyNetwork = %v, want %v", c.name, got, c.anyW)
+		}
+	}
+}

@@ -30,8 +30,14 @@ import (
 
 const (
 	// Schema1 is the first bundle schema. A bundle carries its schema as an
-	// integer and ComputeID includes it.
+	// integer and ComputeID includes it. No node applies it any more (SupportedSchemas is [Schema2]):
+	// it stays defined as the name of the old schema a node may still report or a test may offer.
 	Schema1 = 1
+	// Schema2 is the schema of Phase 28. The static file's redirect runs at priority 1, and the dynamic
+	// file may carry a web-entry router for TierPlan's own challenge and a t-self transport whose rootCAs
+	// name a bundle file. A proxy image that knows only Schema1 must not apply it, so it freezes on its
+	// cache instead (A-01, D-13).
+	Schema2 = 2
 
 	// NodeRoot is the directory on each node that holds everything the
 	// supervisor writes. It is mounted into the Traefik container at the same

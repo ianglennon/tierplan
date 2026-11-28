@@ -3,6 +3,11 @@
     "tabTitle": "HTTPS",
     "title": "HTTPS",
     "description": "TierPlan always serves HTTPS. See the certificate it is using, or get a free one from Let's Encrypt that browsers trust.",
+    "selfRoute": {
+      "label": "TierPlan's own route",
+      "line": "TierPlan is also served at <host>{{host}}</host> through ingress.",
+      "link": "See the route settings"
+    },
     "certificate": {
       "title": "Certificate in use",
       "rows": {

@@ -65,6 +65,10 @@ type ProxyObserver struct {
 	mu    sync.Mutex
 	sigs  map[signalKey]*Signal
 	onNew func(kind string)
+	// ready gates Observe: nil is always ready (A-08).
+	ready func() bool
+	// also are origins besides the public URL's that a request may be for without a mismatch; nil is none.
+	also func() []string
 }
 
 // NewProxyObserver returns an observer that compares requests with publicURL,
@@ -90,6 +94,24 @@ func (o *ProxyObserver) OnNew(f func(kind string)) *ProxyObserver {
 	return o
 }
 
+// HoldUntil makes the observer look at no request while ready reports false (A-08). The trusted set
+// has a live part, the self network's subnet, that the server reads some time after it starts; until
+// it has, a proxy on that network would be seen as an untrusted peer and raise a warning that is
+// not true. Nil is always ready. Call it before the observer serves.
+func (o *ProxyObserver) HoldUntil(ready func() bool) *ProxyObserver {
+	o.ready = ready
+	return o
+}
+
+// AlsoMatch sets the origins, besides the public URL's, that a request may be for without being a URL mismatch: TierPlan's
+// own route host while the route is on (D-07). They are read on every request and come from TierPlan's stored settings,
+// never from a request. A request for one of them over another scheme is still a mismatch. Call it before the observer
+// serves.
+func (o *ProxyObserver) AlsoMatch(origins func() []string) *ProxyObserver {
+	o.also = origins
+	return o
+}
+
 // Observe is the middleware. It belongs right after the client-address
 // middleware, which says whether the TCP peer is a trusted proxy and which scheme
 // the request effectively used. It never changes the request or the response.
@@ -102,6 +124,9 @@ func (o *ProxyObserver) Observe(next http.Handler) http.Handler {
 
 // look applies the two checks that need a request.
 func (o *ProxyObserver) look(req *http.Request) {
+	if o.ready != nil && !o.ready() {
+		return
+	}
 	peer := peerOf(req.RemoteAddr)
 	ctx := req.Context()
 	if !peerTrusted(ctx) && hasForwardedHeader(req.Header) {
@@ -109,10 +134,27 @@ func (o *ProxyObserver) look(req *http.Request) {
 	}
 	scheme := EffectiveScheme(ctx)
 	if want := o.publicURL(); want != "" && !isProbe(req, peer) {
-		if mismatch(want, req.Host, scheme) {
+		if mismatch(want, req.Host, scheme) && !o.alsoMatches(req.Host, scheme) {
 			o.record(signalKey{kind: SignalURLMismatch, host: clipHost(strings.ToLower(req.Host)), scheme: scheme})
 		}
 	}
+}
+
+// alsoMatches is whether a request for host over scheme is for one of the AlsoMatch origins.
+func (o *ProxyObserver) alsoMatches(host, scheme string) bool {
+	if o.also == nil {
+		return false
+	}
+	got := canonicalOrigin(scheme, host)
+	if got == "" {
+		return false
+	}
+	for _, raw := range o.also() {
+		if OriginOf(raw) == got {
+			return true
+		}
+	}
+	return false
 }
 
 // RecordUpgradeFailure notes a request to the agent or ingress endpoint that

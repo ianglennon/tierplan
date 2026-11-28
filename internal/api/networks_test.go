@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/ingress"
 	"github.com/ianglennon/tierplan/proto/wire"
 )
 
@@ -2093,5 +2094,82 @@ func TestCreateNetworkEngineOverlapRefusal(t *testing.T) {
 	rows := f.networkAudits(t)
 	if len(rows) != 1 || rows[0].Action != audit.ActionNetworkCreated || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "subnet_refused" || rows[0].Details["code"] != "subnet_refused" {
 		t.Fatalf("audit rows = %+v, want one failed create named subnet_refused", rows)
+	}
+}
+
+// selfNetEngine is a node with the self network, labelled as the ensure loop writes it or, when labelled is
+// false, a user's own network of the same name, and a user network of another name.
+func selfNetEngine(labelled bool) dockertest.FakeConfig {
+	var labels map[string]string
+	if labelled {
+		labels = ingress.SelfNetworkLabels()
+	}
+	return dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "self0", Name: ingress.SelfNetworkName, Driver: "bridge", Scope: "local", Subnets: []string{"10.31.0.0/24"}, Labels: labels},
+			{ID: "mine0", Name: "mine", Driver: "bridge", Scope: "local", Subnets: []string{"10.32.0.0/24"}},
+		},
+		Containers: []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/web"}, State: "running"},
+			{ID: "c2", Names: []string{"/db"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{
+				ingress.SelfNetworkName: {NetworkID: "self0", IPv4: "10.31.0.3"}}},
+		},
+	}
+}
+
+// TestTierPlanSelfNetworkIsReadOnly pins D-02 and T-28-13: the self network is refused for a delete, a connect and a
+// disconnect exactly as the ingress network is, before the engine is touched, and is flagged read-only on its detail
+// and in the list. A user network of another name is not refused by this rule.
+func TestTierPlanSelfNetworkIsReadOnly(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, selfNetEngine(true))
+	awaitOnline(t, f.mon, e.ID)
+
+	if d := decode[ingressFlag](t, f.get(t, e, "networks/self0")); !d.Ingress {
+		t.Errorf("detail = %+v, want the read-only flag on", d)
+	}
+	if d := decode[ingressFlag](t, f.get(t, e, "networks/mine0")); d.Ingress {
+		t.Errorf("detail of a user network = %+v, want the flag off", d)
+	}
+	list := decode[listBody[ingressFlag]](t, f.get(t, e, "networks"))
+	flags := map[string]bool{}
+	for _, it := range list.Items {
+		flags[it.Name] = it.Ingress
+	}
+	if !flags[ingress.SelfNetworkName] || flags["bridge"] || flags["mine"] {
+		t.Errorf("list flags = %v, want the flag on for %s only", flags, ingress.SelfNetworkName)
+	}
+
+	wantIngressOwnedRec(t, "delete", f.deleteNet(t, e, "self0"))
+	wantIngressOwnedRec(t, "connect", f.connectNet(t, e, "self0", `{"containerId":"c1"}`))
+	wantIngressOwnedRec(t, "disconnect", f.disconnectNet(t, e, "self0", `{"containerId":"c2"}`))
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none: every refusal comes before the engine is touched", w)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) == 0 || rows[0].Reason != "ingress_owned" {
+		t.Errorf("audit rows = %+v, want failures with the code ingress_owned", rows)
+	}
+
+	if rec := f.deleteNet(t, e, "mine0"); rec.code != http.StatusNoContent {
+		t.Errorf("delete of a user network = %d %s (%s), want 204", rec.code, rec.body, rec.ptyp)
+	}
+}
+
+// TestSelfNetworkNameWithoutTheLabelsIsNotRefused is T-28-15's other half: a network that merely has the name has no
+// pair, so TierPlan does not claim it.
+func TestSelfNetworkNameWithoutTheLabelsIsNotRefused(t *testing.T) {
+	t.Parallel()
+	cfg := selfNetEngine(false)
+	cfg.Containers = nil // nothing on the network, so the only thing that could refuse the delete is the ownership rule
+	f, e := dashEnv(t, cfg)
+	awaitOnline(t, f.mon, e.ID)
+	if d := decode[ingressFlag](t, f.get(t, e, "networks/self0")); d.Ingress {
+		t.Errorf("detail = %+v, want the flag off without the labels", d)
+	}
+	if rec := f.deleteNet(t, e, "self0"); rec.code != http.StatusNoContent {
+		t.Errorf("delete = %d %s (%s), want 204 for a network with the name and no labels", rec.code, rec.body, rec.ptyp)
 	}
 }

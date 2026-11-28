@@ -33,12 +33,12 @@ func sampleFiles() []File {
 
 func TestBuildVerifiesAndDerivesTheID(t *testing.T) {
 	files := sampleFiles()
-	b, err := Build(Schema1, Version{Config: 3, Certs: 2}, files, nil)
+	b, err := Build(Schema2, Version{Config: 3, Certs: 2}, files, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if b.Schema != Schema1 || b.Manifest.Schema != Schema1 {
-		t.Fatalf("schema = %d / %d, want %d", b.Schema, b.Manifest.Schema, Schema1)
+	if b.Schema != Schema2 || b.Manifest.Schema != Schema2 {
+		t.Fatalf("schema = %d / %d, want %d", b.Schema, b.Manifest.Schema, Schema2)
 	}
 	if b.Version != (Version{Config: 3, Certs: 2}) {
 		t.Fatalf("version = %+v", b.Version)
@@ -51,7 +51,7 @@ func TestBuildVerifiesAndDerivesTheID(t *testing.T) {
 	if !slices.Equal(b.Manifest.Files, want) {
 		t.Fatalf("manifest files = %+v\nwant %+v", b.Manifest.Files, want)
 	}
-	if got := b.ID; got != ComputeID(Schema1, b.Manifest.Files) {
+	if got := b.ID; got != ComputeID(Schema2, b.Manifest.Files) {
 		t.Fatalf("ID = %s, want ComputeID over the entries", got)
 	}
 	if len(b.Files) != 3 {
@@ -76,10 +76,10 @@ func mustBuild(t *testing.T, schema int, v Version, files []File) Bundle {
 }
 
 func TestIDChangesExactlyWithContent(t *testing.T) {
-	base := mustBuild(t, Schema1, Version{Config: 1}, sampleFiles())
+	base := mustBuild(t, Schema2, Version{Config: 1}, sampleFiles())
 
 	t.Run("the same files twice give the same ID", func(t *testing.T) {
-		again := mustBuild(t, Schema1, Version{Config: 1}, sampleFiles())
+		again := mustBuild(t, Schema2, Version{Config: 1}, sampleFiles())
 		if again.ID != base.ID {
 			t.Fatalf("IDs differ: %s vs %s", base.ID, again.ID)
 		}
@@ -88,7 +88,7 @@ func TestIDChangesExactlyWithContent(t *testing.T) {
 	t.Run("the input order does not matter", func(t *testing.T) {
 		files := sampleFiles()
 		slices.Reverse(files)
-		if got := mustBuild(t, Schema1, Version{Config: 1}, files).ID; got != base.ID {
+		if got := mustBuild(t, Schema2, Version{Config: 1}, files).ID; got != base.ID {
 			t.Fatalf("reversed input gave %s, want %s", got, base.ID)
 		}
 	})
@@ -99,14 +99,14 @@ func TestIDChangesExactlyWithContent(t *testing.T) {
 			// Replace, never edit in place: the fixtures share nothing, but the
 			// copy keeps the intent plain.
 			files[i].Data = append([]byte("x"), files[i].Data[1:]...)
-			if got := mustBuild(t, Schema1, Version{Config: 1}, files).ID; got == base.ID {
+			if got := mustBuild(t, Schema2, Version{Config: 1}, files).ID; got == base.ID {
 				t.Fatalf("ID did not change when one byte of %s changed", name)
 			}
 		})
 	}
 
 	t.Run("the version alone does not change the ID", func(t *testing.T) {
-		got := mustBuild(t, Schema1, Version{Config: 9, Certs: 4, Own: 2}, sampleFiles())
+		got := mustBuild(t, Schema2, Version{Config: 9, Certs: 4, Own: 2}, sampleFiles())
 		if got.ID != base.ID {
 			t.Fatalf("ID changed with the version: %s vs %s", got.ID, base.ID)
 		}
@@ -130,13 +130,14 @@ func TestIDChangesExactlyWithContent(t *testing.T) {
 	t.Run("a renamed file gives another ID", func(t *testing.T) {
 		files := sampleFiles()
 		files[2].Path = CertsDir + "/bbbb.crt"
-		if got := mustBuild(t, Schema1, Version{Config: 1}, files).ID; got == base.ID {
+		if got := mustBuild(t, Schema2, Version{Config: 1}, files).ID; got == base.ID {
 			t.Fatal("ID did not change when a file was renamed")
 		}
 	})
 }
 
-// idVector is the bundle ID of schema 1 over certs/a.crt holding "a" and
+// idVector is the bundle ID of schema 1 (the old schema, kept as a historic vector: the ID encoding did
+// not change when schema 2 was added) over certs/a.crt holding "a" and
 // dynamic/tierplan.yml holding "b". It is the SHA-256 of the literal bytes in
 // TestComputeIDVector, computed outside this program with sha256sum. If this
 // constant has to change, the ID encoding changed and that needs schema 2 (D-05).
@@ -194,7 +195,7 @@ func rename(b Bundle, from, to string) Bundle {
 }
 
 func TestVerifyRefuses(t *testing.T) {
-	valid := mustBuild(t, Schema1, Version{Config: 1}, sampleFiles())
+	valid := mustBuild(t, Schema2, Version{Config: 1}, sampleFiles())
 	if err := valid.Verify(); err != nil {
 		t.Fatalf("the base bundle must verify: %v", err)
 	}
@@ -255,7 +256,7 @@ func TestVerifyRefuses(t *testing.T) {
 			return b
 		}, "", ReasonSchema},
 		{"a manifest that disagrees about the schema", func(b Bundle) Bundle {
-			b.Manifest.Schema = 2
+			b.Manifest.Schema = Schema1 // the old schema: the manifest disagrees with the bundle's schema 2
 			return b
 		}, "", ReasonSchema},
 		{"a key with the mode of a certificate", func(b Bundle) Bundle {
@@ -299,9 +300,9 @@ func TestVerifyRefuses(t *testing.T) {
 			reason string
 		}{
 			"a schema below 1": {0, sampleFiles(), ReasonSchema},
-			"a path outside":   {Schema1, []File{{Path: "other/a", Data: []byte("x")}}, ReasonPath},
-			"an absolute path": {Schema1, []File{{Path: "/etc/passwd", Data: []byte("x")}}, ReasonPath},
-			"a duplicate path": {Schema1, []File{{Path: chainPath}, {Path: chainPath}}, ReasonDuplicate},
+			"a path outside":   {Schema2, []File{{Path: "other/a", Data: []byte("x")}}, ReasonPath},
+			"an absolute path": {Schema2, []File{{Path: "/etc/passwd", Data: []byte("x")}}, ReasonPath},
+			"a duplicate path": {Schema2, []File{{Path: chainPath}, {Path: chainPath}}, ReasonDuplicate},
 		} {
 			_, err := Build(tc.schema, Version{}, tc.files, nil)
 			var ve *VerifyError
@@ -320,7 +321,7 @@ func TestBundleRedactsFileContents(t *testing.T) {
 		{Path: keyPath, Data: []byte(pem)},
 		{Path: DynamicFile, Data: []byte("http: {}\n")},
 	}
-	b := mustBuild(t, Schema1, Version{Config: 7, Certs: 5, Own: 3}, files)
+	b := mustBuild(t, Schema2, Version{Config: 7, Certs: 5, Own: 3}, files)
 	// Guard the guard: the data really is in the bundle.
 	if !strings.Contains(string(b.Files[1].Data), "PRIVATE KEY") {
 		t.Fatal("the fixture has no key data")
@@ -347,7 +348,7 @@ func TestBundleRedactsFileContents(t *testing.T) {
 				t.Errorf("%s of a Bundle lacks the path %s: %s", verb, f.Path, out)
 			}
 		}
-		if !strings.Contains(out, "7/5/3") || !strings.Contains(out, "schema 1") {
+		if !strings.Contains(out, "7/5/3") || !strings.Contains(out, fmt.Sprintf("schema %d", Schema2)) {
 			t.Errorf("%s of a Bundle lacks the schema or version: %s", verb, out)
 		}
 	}
@@ -379,7 +380,7 @@ func TestBundleRedactsFileContents(t *testing.T) {
 		t.Fatalf("the slog record is not JSON: %v", err)
 	}
 	group, ok := first["bundle"].(map[string]any)
-	if !ok || group["id"] != b.ID || group["schema"] != float64(Schema1) {
+	if !ok || group["id"] != b.ID || group["schema"] != float64(Schema2) {
 		t.Fatalf("the bundle attribute is not a group of id and schema: %v", first["bundle"])
 	}
 }

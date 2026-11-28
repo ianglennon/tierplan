@@ -103,13 +103,17 @@ type hostEnv struct {
 
 	ops  *hostStackOps
 	deps stackops.Deps
+
+	// depOpts add to the deployer's dependencies when startDeploy builds it (TierPlan's own container, Phase 28).
+	depOpts []func(*hostEnv, *ingressdeploy.Deps)
 }
 
 // startHostEnv starts the host and everything around it. It does not enable ingress. With local set the environment is
 // TierPlan's own local socket, pointed at the host's engine; otherwise it is an agent environment whose one agent proxies to it.
-func startHostEnv(t *testing.T, local bool) *hostEnv {
+// Each opt adds to the deployer's dependencies before it is built.
+func startHostEnv(t *testing.T, local bool, opts ...func(*hostEnv, *ingressdeploy.Deps)) *hostEnv {
 	t.Helper()
-	e := &hostEnv{t: t, local: local, now: time.Now, log: slog.New(slog.DiscardHandler), ca: traefiktest.NewCA(t)}
+	e := &hostEnv{t: t, local: local, now: time.Now, log: slog.New(slog.DiscardHandler), ca: traefiktest.NewCA(t), depOpts: opts}
 	// The Compose SDK's process-wide state: its private configuration directory and its logging.
 	if err := dockerx.InitCompose(t.TempDir(), e.log); err != nil {
 		t.Fatalf("InitCompose: %v", err)
@@ -358,7 +362,7 @@ func (e *hostEnv) connectAgent() {
 // startDeploy builds the ingress deployer and runs its two loops.
 func (e *hostEnv) startDeploy() {
 	t := e.t
-	e.deploy = ingressdeploy.New(ingressdeploy.Deps{
+	d := ingressdeploy.Deps{
 		Engine: swarmEngine{agg: e.agg, clusters: e.clus}, Envs: hostEnvReader{st: e.st, svc: e.esvc},
 		Store: e.istore, Notifier: e.notifier, Tokens: e.srv.Service, NodeRows: e.srv.Service, Nodes: e.srv.Service, Kicker: e.srv.Hub,
 		CurrentBundle: func(envID string) (string, bool) {
@@ -373,7 +377,11 @@ func (e *hostEnv) startDeploy() {
 		// The deployer's own stack pipeline for the proxy's project: no Ingress, so the project is never attached or claimed.
 		System:        stackops.Deps{Aggregator: e.agg, AddressSpaces: e.addr, Log: e.log},
 		ServerVersion: "dev", URL: e.srv.URL, Pins: func() []string { return []string{e.srv.Pin()} }, Log: e.log,
-	})
+	}
+	for _, opt := range e.depOpts {
+		opt(e, &d)
+	}
+	e.deploy = ingressdeploy.New(d)
 	ctx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(2)

@@ -24,19 +24,21 @@ const CodeDisableProxyFailed = "disable_proxy_failed"
 // container that is not the proxy: the project's down would remove it too, and it is not TierPlan's to remove (WR-A3).
 const CodeForeignContainer = "ingress_foreign_container"
 
-// standaloneDisableItems are the items of the standalone disable job in the order they run. The proxy goes before the
-// network, which an attached container would keep, and the network before the volume, which holds every private key and so
-// is the last thing of the host's to go (PROH-25-06).
-var standaloneDisableItems = []string{ItemSwitchOff, ItemProxy, ItemNetwork, ItemVolumes, ItemToken, ItemNodes}
+// standaloneDisableItems are the items of the standalone disable job in the order they run. TierPlan's own route is released
+// first (D-11). The proxy goes before the network, which an attached container would keep, and the network before the volume,
+// which holds every private key and so is the last thing of the host's to go (PROH-25-06).
+var standaloneDisableItems = []string{ItemSelfRoute, ItemSwitchOff, ItemProxy, ItemNetwork, ItemSelfNetwork, ItemVolumes, ItemToken, ItemNodes}
 
 // standaloneDisableLabels are the lines of the standalone job's steps.
 var standaloneDisableLabels = map[string]string{
-	ItemSwitchOff: "Stop serving routes",
-	ItemProxy:     "Remove the proxy container",
-	ItemNetwork:   "Remove the ingress network",
-	ItemVolumes:   "Remove the certificate cache volume",
-	ItemToken:     "Disable the join token",
-	ItemNodes:     "Remove the proxy node",
+	ItemSelfRoute:   "Release TierPlan's own route",
+	ItemSwitchOff:   "Stop serving routes",
+	ItemProxy:       "Remove the proxy container",
+	ItemNetwork:     "Remove the ingress network",
+	ItemSelfNetwork: "Remove the " + ingress.SelfNetworkName + " network",
+	ItemVolumes:     "Remove the certificate cache volume",
+	ItemToken:       "Disable the join token",
+	ItemNodes:       "Remove the proxy node",
 }
 
 // checkDisableStandalone is the refusals of a switch-off of a standalone host: a paused environment alone (D-42), then a host
@@ -102,6 +104,7 @@ func (s *Service) previewDisableStandalone(ctx context.Context, info EnvInfo, ca
 		return DisablePreview{}, err
 	}
 	res := DisablePreview{Findings: findings, Removes: DisableRemoves{Secrets: []string{}, Volumes: []NodeName{}}, Unreachable: []string{}}
+	res.Notice, res.SelfRouteHost = s.selfReleaseNotice(ctx, info.ID)
 	for _, n := range info.Nodes {
 		res.Removes.Volumes = append(res.Removes.Volumes, NodeName{ID: n.AgentID, Name: n.Name})
 	}
@@ -227,6 +230,48 @@ func (e *disableRun) networkStandalone(ctx context.Context) error {
 		return fail(CodeDisableNetworkFailed, err, dockerx.DaemonText(err))
 	}
 	e.done(ItemNetwork, map[string]string{"removed": "true"})
+	return nil
+}
+
+// selfNetworkStandalone removes the tierplan-self bridge of a standalone host after the ingress network (A-06). The proxy's
+// project names it as an external network, so the project's down never removes it: TierPlan first takes its own container off
+// it (SelfDisconnect), then removes it (removeStandaloneSelf, the ensure loop's removal). A container TierPlan cannot take off,
+// or an engine that answers the network is still in use, keeps it, and the item is done with the reason tierplan_attached,
+// never a failure. One that is not TierPlan's is left alone.
+func (e *disableRun) selfNetworkStandalone(ctx context.Context) error {
+	s := e.s
+	info, err := e.hostNode(ctx)
+	switch {
+	case errors.Is(err, errHostGone):
+		return fail(CodeDisableSelfNetworkFailed, err, hostGoneDetail)
+	case err != nil:
+		return fail(CodeDisableSelfNetworkFailed, err)
+	}
+	l, err := s.readStandaloneLive(ctx, info)
+	if err != nil {
+		return fail(CodeDisableSelfNetworkFailed, err)
+	}
+	if l.selfForeign {
+		e.r.Output("Left the network " + ingress.SelfNetworkName + " in place: it is not TierPlan's.")
+		e.done(ItemSelfNetwork, map[string]string{"removed": "false"})
+		return nil
+	}
+	if l.self == nil {
+		e.done(ItemSelfNetwork, map[string]string{"removed": "false"})
+		return nil
+	}
+	sp := &selfPass{info: info, place: e.selfPlace(ctx, info), known: true, net: selfNet{id: l.self.ID}}
+	if sp.place.Attached && !s.disconnectSelf(ctx, sp, sp.net.id) {
+		sp.net.keptInUse = true
+	}
+	if err := s.removeStandaloneSelf(ctx, sp, true); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fail(CodeDisableSelfNetworkFailed, err, dockerx.DaemonText(err))
+	}
+	s.observeStandaloneSelf(ctx, sp)
+	e.selfNetworkDone(sp, true)
 	return nil
 }
 

@@ -241,61 +241,87 @@ func TestStandalonePreflightSubnet(t *testing.T) {
 }
 
 // TestStandalonePreflightHTTP01: TierPlan's own certificate on HTTP-01 needs port 80 on the host it runs on, which is the
-// local-socket environment, or an agent host with the local engine's ID (D-04).
+// local-socket environment, or an agent host with the local engine's ID (D-04). Where TierPlan's own container is found, it
+// connects that container to the self network and the carve-out keeps the renewal working, which is a notice; where it is not
+// found, the switch is refused with the S4 sentence (D-12).
 func TestStandalonePreflightHTTP01(t *testing.T) {
 	type want int
 	const (
 		nothing want = iota
+		notice
 		refused
 		warned
 	)
+	found := ingressdeploy.SelfFacts{ContainerID: "c1", Networks: []string{"bridge"}}
 	cases := []struct {
 		name      string
-		challenge string
-		chErr     error
+		inUse     bool
+		inUseErr  error
 		local     bool
 		envEngine string
 		member    envs.SwarmMembership
+		selfErr   error
+		facts     ingressdeploy.SelfFacts
 		want      want
 	}{
-		{name: "http-01, the local environment", challenge: "http-01", local: true, want: refused},
-		{name: "http-01, the local environment whatever the probe says", challenge: "http-01", local: true, member: envs.SwarmMembership{Known: true, EngineID: "other"}, want: refused},
-		{name: "http-01, an agent host with the local engine", challenge: "http-01", envEngine: "e1", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, want: refused},
-		{name: "http-01, an agent host of another engine", challenge: "http-01", envEngine: "e2", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, want: nothing},
-		{name: "http-01, the host's engine ID not known", challenge: "http-01", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, want: warned},
-		{name: "http-01, the local engine cannot be read", challenge: "http-01", envEngine: "e1", member: envs.SwarmMembership{}, want: warned},
-		{name: "http-01, the local engine has no ID", challenge: "http-01", envEngine: "e1", member: envs.SwarmMembership{Known: true}, want: warned},
-		{name: "the own challenge cannot be read", chErr: errors.New("no settings"), envEngine: "e1", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, want: warned},
-		{name: "the own challenge cannot be read, the local environment", chErr: errors.New("no settings"), local: true, want: warned},
-		{name: "dns-01, the local environment", challenge: "dns-01", local: true, want: nothing},
-		{name: "dns-01, the same engine", challenge: "dns-01", envEngine: "e1", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, want: nothing},
+		{name: "http-01, the local environment, its container found", inUse: true, local: true, facts: found, want: notice},
+		{name: "http-01, the local environment whatever the probe says", inUse: true, local: true, member: envs.SwarmMembership{Known: true, EngineID: "other"}, facts: found, want: notice},
+		{name: "http-01, an agent host with the local engine, its container found", inUse: true, envEngine: "e1", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, facts: found, want: notice},
+		{name: "http-01, the local environment, its container not found", inUse: true, local: true, selfErr: errors.New("not in a container"), want: refused},
+		{name: "http-01, an agent host with the local engine, an empty container ID", inUse: true, envEngine: "e1", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, want: refused},
+		{name: "http-01, an agent host of another engine", inUse: true, envEngine: "e2", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, facts: found, want: nothing},
+		{name: "http-01, the host's engine ID not known", inUse: true, member: envs.SwarmMembership{Known: true, EngineID: "e1"}, facts: found, want: warned},
+		{name: "http-01, the local engine cannot be read", inUse: true, envEngine: "e1", member: envs.SwarmMembership{}, facts: found, want: warned},
+		{name: "http-01, the local engine has no ID", inUse: true, envEngine: "e1", member: envs.SwarmMembership{Known: true}, facts: found, want: warned},
+		{name: "the own certificate cannot be read", inUseErr: errors.New("no settings"), envEngine: "e1", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, facts: found, want: warned},
+		{name: "the own certificate cannot be read, the local environment", inUseErr: errors.New("no settings"), local: true, facts: found, want: warned},
+		{name: "not http-01, the local environment", local: true, facts: found, want: nothing},
+		{name: "not http-01, the same engine", envEngine: "e1", member: envs.SwarmMembership{Known: true, EngineID: "e1"}, facts: found, want: nothing},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newStandaloneRig(t, standaloneRigOptions{deps: func(d *ingressdeploy.Deps) {
-				d.OwnChallenge = func(context.Context) (string, error) { return tc.challenge, tc.chErr }
+				d.OwnHTTP01InUse = func(context.Context) (bool, error) { return tc.inUse, tc.inUseErr }
 				d.LocalSwarm = func(context.Context) (envs.SwarmMembership, error) { return tc.member, nil }
+				d.Self = func(context.Context) (ingressdeploy.SelfFacts, error) { return tc.facts, tc.selfErr }
+				d.SelfURLs = func() ingressdeploy.SelfURLs {
+					return ingressdeploy.SelfURLs{PublicURL: "https://box.example.org", AgentURL: "https://box.lan:7480"}
+				}
 			}})
 			r.envs.set(func(i *ingressdeploy.EnvInfo) { i.Local, i.EngineID = tc.local, tc.envEngine })
 			res := previewStandalone(t, r, ingressdeploy.EnableRequest{})
 			conflict, isRefused := findingOf(res.Findings, ingressdeploy.CodeHTTP01Conflict)
 			unknown, isWarned := findingOf(res.Findings, ingressdeploy.CodeHTTP01Unknown)
+			// The carve-out is the preview's notice, never one of its findings (UI-SPEC S4).
+			if f, ok := findingOf(res.Findings, ingressdeploy.CodeHTTP01CarveOut); ok {
+				t.Errorf("the carve-out is a finding %+v; it belongs in the notice", f)
+			}
+			isNotice := res.Notice != ""
 			switch tc.want {
+			case notice:
+				if isRefused || isWarned || !isNotice {
+					t.Fatalf("findings = %+v, notice %q, want only the carve-out notice", res.Findings, res.Notice)
+				}
+				if !strings.Contains(res.Notice, "requests for box.example.org and box.lan to TierPlan, over the tierplan-self network") {
+					t.Errorf("notice = %q, want the notice naming both hosts", res.Notice)
+				}
 			case refused:
-				if !isRefused || isWarned || conflict.Severity != ingressdeploy.SeverityError {
+				if !isRefused || isWarned || isNotice || conflict.Severity != ingressdeploy.SeverityError {
 					t.Fatalf("findings = %+v, want ingress_http01_conflict as an error", res.Findings)
 				}
-				if !strings.Contains(conflict.Message, "DNS-01") || !strings.Contains(conflict.Message, "later version") {
-					t.Errorf("message = %q, want it to say to switch to DNS-01 and that a later version lifts the limit", conflict.Message)
+				wantMsg := "TierPlan runs on this host and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes. " +
+					"TierPlan couldn't find its own container to connect it to tierplan-self. Switch TierPlan's own certificate to DNS-01 first."
+				if conflict.Message != wantMsg {
+					t.Errorf("message = %q, want %q", conflict.Message, wantMsg)
 				}
 				wantRefusal(t, r.rig, ingressdeploy.EnableRequest{}, ingressdeploy.CodeHTTP01Conflict)
 			case warned:
-				if isRefused || !isWarned || unknown.Severity != ingressdeploy.SeverityWarning {
+				if isRefused || isNotice || !isWarned || unknown.Severity != ingressdeploy.SeverityWarning {
 					t.Fatalf("findings = %+v, want ingress_http01_unknown as a warning and no refusal", res.Findings)
 				}
 			default:
-				if isRefused || isWarned {
-					t.Fatalf("findings = %+v, want neither", res.Findings)
+				if isRefused || isWarned || isNotice {
+					t.Fatalf("findings = %+v, want none of the HTTP-01 findings", res.Findings)
 				}
 			}
 		})

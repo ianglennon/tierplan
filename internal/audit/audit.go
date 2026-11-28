@@ -421,6 +421,18 @@ const (
 	ActionIngressWipeDone          = "ingress.wipe_done"
 	ActionIngressDeployPaused      = "ingress.deploy_paused"
 	ActionIngressDeployResumed     = "ingress.deploy_resumed"
+	// TierPlan's own ingress route (Phase 28, D-18). self_network_attached: the ensure loop connected TierPlan's own
+	// container to the tierplan-self bridge of a standalone host (D-04), written by system:ingress after each connect
+	// (details network, container: the short container ID).
+	ActionIngressSelfNetworkAttached = "ingress.self_network_attached"
+	// self_route_enabled: an instance admin switched TierPlan's own route on, written in the claim's transaction (D-17;
+	// details host, environment: the environment's name). A switch-on that failed is a failure row of the same action
+	// holding only the step and its code.
+	ActionIngressSelfRouteEnabled = "ingress.self_route_enabled"
+	// self_route_disabled: an instance admin switched TierPlan's own route off, alone or as the first step of switching
+	// ingress off, written in the release's transaction (D-11; details host, environment). A release that failed is a
+	// failure row of the same action holding only the step and its code.
+	ActionIngressSelfRouteDisabled = "ingress.self_route_disabled"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

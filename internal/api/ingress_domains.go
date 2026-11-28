@@ -302,16 +302,20 @@ func ingressInternal(log *slog.Logger, what string, err error) error {
 	return huma.Error500InternalServerError("internal error")
 }
 
-// holdersProblem is the 409 for a domain that stacks still serve names under. The sentence and the errors list name every
-// holder: a domain is registered in one environment and its holders are stacks of that environment, which the Admin
-// manages.
+// holdersProblem is the 409 for a domain that stacks or TierPlan's own route still serve names under. The sentence and the
+// errors list name every holder: a domain is registered in one environment and its holders are stacks of that environment,
+// which the Admin manages, or TierPlan itself. The sentence ends with what to do: remove the hostnames from the stacks when a
+// stack holds one, and turn off TierPlan's own route when it does (D-09).
 func holdersProblem(suffix string, holders []ingressstore.Holder) error {
 	m := &huma.ErrorModel{Type: problemIngressDomainInUse, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict}
 	var seen []string
+	stack, system := false, false
 	for i, h := range holders {
 		name := h.StackName
-		if name == "" {
-			name = "TierPlan itself"
+		if h.StackID == "" && name == "" {
+			name, system = "TierPlan itself", true
+		} else {
+			stack = true
 		}
 		label := name + " in " + h.EnvName
 		m.Errors = append(m.Errors, &huma.ErrorDetail{Location: "holders[" + strconv.Itoa(i) + "]", Message: label})
@@ -326,7 +330,13 @@ func holdersProblem(suffix string, holders []ingressstore.Holder) error {
 			seen = append(seen, label)
 		}
 	}
-	m.Detail = "“" + suffix + "” cannot be deleted while hostnames under it are claimed by: " + strings.Join(seen, ", ") + ". Remove those hostnames from the stacks first."
+	m.Detail = "“" + suffix + "” cannot be deleted while hostnames under it are claimed by: " + strings.Join(seen, ", ") + "."
+	if stack || !system {
+		m.Detail += " Remove those hostnames from the stacks first."
+	}
+	if system {
+		m.Detail += " Turn off TierPlan's own route first."
+	}
 	return m
 }
 
@@ -550,7 +560,8 @@ func RegisterIngress(r *httpx.Router, d IngressDeps) {
 		DefaultStatus: http.StatusOK,
 		Summary:       "Delete a domain",
 		Description: "Deletes a domain and the hostnames reserved under it, when no hostname claims it. While one does, 409 " + problemIngressDomainInUse + " names every holding " +
-			"stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes. While TierPlan still holds DNS records it made " +
+			"stack and its environment in the detail and in the errors list (locations holders[0], holders[1], ...), and nothing changes; TierPlan's own route is named \"TierPlan itself in <environment>\" " +
+			"and the detail then says to turn that route off first. While TierPlan still holds DNS records it made " +
 			"with the domain's token, 409 " + problemIngressDomainCleanupPending + " and nothing changes: the removal is started at once and the detail says how many records are left. " +
 			"When the DNS provider refuses the domain's token for them, the detail says so: replace the token with one that can edit the zone, and the records are then removed. " +
 			"404 " + problemIngressDomainNotFound + " for a domain that is gone or belongs to another environment, with no audit row. " +

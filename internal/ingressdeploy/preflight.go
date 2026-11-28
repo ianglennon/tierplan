@@ -35,10 +35,13 @@ const (
 	// CodeSubnetOverlaps is the refusal of a typed subnet that overlaps an existing network.
 	CodeSubnetOverlaps = "ingress_subnet_overlaps"
 	// CodeHTTP01Conflict is the refusal of an environment that carries TierPlan itself, whose own certificate uses the
-	// HTTP-01 challenge on port 80 (D-09).
+	// HTTP-01 challenge on port 80, where the carve-out cannot reach TierPlan (D-09, D-12).
 	CodeHTTP01Conflict = "ingress_http01_conflict"
 	// CodeHTTP01Unknown is the warning that TierPlan could not tell whether the conflict applies.
 	CodeHTTP01Unknown = "ingress_http01_unknown"
+	// CodeHTTP01CarveOut is the notice that TierPlan's own certificate uses HTTP-01 and keeps renewing through the ingress's
+	// challenge carve-out over the self network (D-12).
+	CodeHTTP01CarveOut = "ingress_http01_carve_out"
 	// CodeNameTaken is the refusal of a swarm that holds an object under a name the ingress reserves that is not
 	// TierPlan's (Pitfall 11).
 	CodeNameTaken = "ingress_name_taken"
@@ -52,9 +55,6 @@ const (
 	// CodePaused is the refusal of an environment whose ingress a restore paused (D-42).
 	CodePaused = "ingress_paused"
 )
-
-// challengeHTTP01 is the name of the challenge that needs port 80 (acme.ChallengeHTTP01).
-const challengeHTTP01 = "http-01"
 
 // The host ports the swarm proxy takes on every node: HTTP, HTTPS and the readiness endpoint (D-13).
 var swarmProxyPorts = []uint32{HTTPPublished, HTTPSPublished, ReadyPublished}
@@ -81,6 +81,8 @@ const (
 	SeverityError = "error"
 	// SeverityWarning tells the person something and lets the operation go on.
 	SeverityWarning = "warning"
+	// SeverityNotice is a neutral note: nothing is wrong, the person is told how something will work.
+	SeverityNotice = "notice"
 )
 
 // Finding is one thing the preflight found: a refusal, or a warning.
@@ -109,6 +111,25 @@ func (e *PreflightError) Error() string {
 		}
 	}
 	return "ingress was not enabled: " + strings.Join(codes, ", ")
+}
+
+// splitNotices takes the findings of severity notice out of fs and returns the rest, in order, and the notices' sentences
+// joined with a space, "" when there are none. A preview carries them as its Notice, a neutral note beside the findings
+// (UI-SPEC S4): nothing is wrong, the person is told how something will work.
+func splitNotices(fs []Finding) ([]Finding, string) {
+	var notices []string
+	rest := make([]Finding, 0, len(fs))
+	for _, f := range fs {
+		if f.Severity == SeverityNotice {
+			notices = append(notices, f.Message)
+			continue
+		}
+		rest = append(rest, f)
+	}
+	if fs == nil {
+		rest = nil
+	}
+	return rest, strings.Join(notices, " ")
 }
 
 // hasErrors reports whether any finding refuses.
@@ -479,63 +500,103 @@ func checkTypedSubnet(ctx context.Context, s *Service, in checkInput, networks [
 	}}, nil
 }
 
-// checkHTTP01 refuses when TierPlan's own certificate uses the HTTP-01 challenge and TierPlan runs on this swarm: the
-// proxies take port 80 on every node, so the renewal would break silently (D-09). TierPlan is on this swarm when its own
-// engine's cluster is the environment's, or, for a worker (which does not learn the cluster) or a manager the environment
-// does not know the cluster of, when its node is one of the environment's. What cannot be told is a warning, never a
-// silent pass: no Docker socket, an engine that does not answer, or a worker whose node the environment does not list.
-func checkHTTP01(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
-	if s.d.OwnChallenge == nil || s.d.LocalSwarm == nil {
-		return nil, nil
-	}
-	unknown := func() []Finding {
-		return []Finding{{
-			Code:     CodeHTTP01Unknown,
-			Message:  "TierPlan could not tell whether its own certificate needs port 80, which the ingress takes. If it uses the HTTP-01 challenge on this swarm, switch it to DNS-01 first.",
-			Severity: SeverityWarning,
-		}}
-	}
-	challenge, err := s.d.OwnChallenge(ctx)
-	if err != nil {
-		s.log().Warn("could not read TierPlan's own challenge type for the ingress preflight", "error", err)
-		return unknown(), nil
-	}
-	if challenge != challengeHTTP01 {
-		return nil, nil
-	}
-	local, err := s.d.LocalSwarm(ctx)
-	if err != nil {
-		s.log().Warn("could not read TierPlan's own swarm for the ingress preflight", "error", err)
-		return unknown(), nil
+// The sentences of the HTTP-01 checks (UI-SPEC S4). The swarm refusal is the one where TierPlan runs on this swarm as a
+// service that is not on the self network, or its own container could not be read; the plain-container refusal drops the
+// self network, which a plain container cannot be given; the notice names the hosts the carve-out serves.
+const (
+	http01SwarmConflict     = "TierPlan runs on this swarm and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes on every node. Add the tierplan-self network to TierPlan's service, or switch TierPlan's own certificate to DNS-01. Then turn ingress on again."
+	http01PlainContainer    = "TierPlan runs on this swarm and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes on every node. Switch TierPlan's own certificate to DNS-01. Then turn ingress on again."
+	http01SwarmUnknown      = "TierPlan could not tell whether its own certificate needs port 80, which the ingress takes. If it uses the HTTP-01 challenge on this swarm, switch it to DNS-01 first."
+	http01CarveOutNotice    = "TierPlan's own certificate uses the HTTP-01 challenge. The ingress sends only /.well-known/acme-challenge/ requests for %s to TierPlan, over the tierplan-self network, so the certificate keeps renewing."
+	http01CarveOutNoHostsAs = "TierPlan's own hostnames"
+)
+
+// http01Place is what the HTTP-01 checks need to tell the person once SelfLocation has said where TierPlan runs and its own
+// certificate is known to renew over HTTP-01 (D-12). Elsewhere is nothing. Where the carve-out reaches TierPlan, a swarm service
+// on the self network or a standalone container TierPlan connects itself (D-04), it is a notice. Where TierPlan runs here and the
+// carve-out cannot reach it, it is a refusal with the fix, so the ingress never takes port 80 from the renewal silently
+// (SELF-04). What cannot be told is a warning.
+func (s *Service) http01Place(place SelfPlace, conflict, unknown string) []Finding {
+	refuse := func(msg string) []Finding {
+		return []Finding{{Code: CodeHTTP01Conflict, Message: msg, Severity: SeverityError}}
 	}
 	switch {
-	case !local.Known:
-		return unknown(), nil
-	case !local.Member:
-		// A standalone engine: TierPlan is on no swarm node of its own.
-		return nil, nil
+	case place.Here == SelfHereNo:
+		return nil
+	case place.Here == SelfHereYes && (place.Kind == SelfKindStandalone || (place.Kind == SelfKindSwarmService && place.Attached)):
+		return []Finding{s.http01CarveOut()}
+	case place.Here == SelfHereYes && place.Kind == SelfKindSwarmContainer:
+		return refuse(http01PlainContainer)
+	case place.Here == SelfHereYes || place.EnvHere:
+		// A swarm service not on the self network, or an environment TierPlan runs in whose own container could not be read.
+		return refuse(conflict)
 	}
-	sameCluster := local.ClusterID != "" && in.Info.ClusterID != "" && local.ClusterID == in.Info.ClusterID
-	otherCluster := local.ClusterID != "" && in.Info.ClusterID != "" && local.ClusterID != in.Info.ClusterID
-	ownNode := false
-	for _, n := range in.Info.Nodes {
-		if local.NodeID != "" && n.SwarmNodeID == local.NodeID {
-			ownNode = true
+	return []Finding{{Code: CodeHTTP01Unknown, Message: unknown, Severity: SeverityWarning}}
+}
+
+// http01CarveOut is the notice that the carve-out keeps TierPlan's own renewal working, naming the hosts of the public URL and
+// of the agent URL, deduplicated and sorted; they are the finding's items too.
+func (s *Service) http01CarveOut() Finding {
+	hosts := s.ownHosts()
+	named := http01CarveOutNoHostsAs
+	if len(hosts) > 0 {
+		named = joinAnd(hosts)
+	}
+	return Finding{Code: CodeHTTP01CarveOut, Message: fmt.Sprintf(http01CarveOutNotice, named), Items: hosts, Severity: SeverityNotice}
+}
+
+// ownHosts are the hosts of the instance's public URL and agent URL, deduplicated and sorted, empty when neither is set.
+func (s *Service) ownHosts() []string {
+	if s.d.SelfURLs == nil {
+		return nil
+	}
+	urls := s.d.SelfURLs()
+	var hosts []string
+	for _, raw := range []string{urls.PublicURL, urls.AgentURL} {
+		if raw == "" {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if h := ingress.NormalizeHost(u.Hostname()); h != "" {
+			hosts = append(hosts, h)
 		}
 	}
-	switch {
-	case sameCluster || ownNode:
-		return []Finding{{
-			Code:     CodeHTTP01Conflict,
-			Message:  "TierPlan runs on this swarm and its own certificate uses the HTTP-01 challenge, which needs port 80 that the ingress takes on every node. Switch TierPlan's own certificate to DNS-01 first. A later version lifts this limit.",
-			Severity: SeverityError,
-		}}, nil
-	case otherCluster:
+	slices.Sort(hosts)
+	return slices.Compact(hosts)
+}
+
+// joinAnd writes names as a sentence does: "a", "a and b", "a, b and c".
+func joinAnd(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+// checkHTTP01 tells the person what the ingress taking port 80 on every node does to TierPlan's own certificate, when that
+// certificate really renews over HTTP-01 (A-04, D-12). SelfLocation says where TierPlan runs; http01Place turns that into
+// nothing, the carve-out notice, a refusal with the fix, or a warning when it cannot be told.
+func checkHTTP01(ctx context.Context, s *Service, in checkInput) ([]Finding, error) {
+	if s.d.OwnHTTP01InUse == nil {
 		return nil, nil
 	}
-	// A worker of some swarm whose node the environment does not list, or a manager of an environment whose cluster is not known:
-	// it may be this swarm and it may not.
-	return unknown(), nil
+	inUse, err := s.d.OwnHTTP01InUse(ctx)
+	if err != nil {
+		s.log().Warn("could not read whether TierPlan's own certificate uses HTTP-01 for the ingress preflight", "error", err)
+		return []Finding{{Code: CodeHTTP01Unknown, Message: http01SwarmUnknown, Severity: SeverityWarning}}, nil
+	}
+	if !inUse {
+		// A self-signed install, certificate files, or Let's Encrypt on DNS-01: nothing of TierPlan's needs port 80 (A-04).
+		return nil, nil
+	}
+	place, _, err := s.SelfLocation(ctx, in.Info)
+	if err != nil {
+		return nil, err
+	}
+	return s.http01Place(place, http01SwarmConflict, http01SwarmUnknown), nil
 }
 
 // checkURL refuses an install that does not know its own address, and an address whose host the ingress routes: the

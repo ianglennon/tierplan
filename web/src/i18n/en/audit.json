@@ -434,7 +434,10 @@
         "wipe_queued": "Queued an ingress cache wipe for an unreachable node",
         "wipe_done": "Wiped ingress cache from a node",
         "deploy_paused": "Paused ingress management after a restore",
-        "deploy_resumed": "Resumed ingress management after a restore"
+        "deploy_resumed": "Resumed ingress management after a restore",
+        "self_network_attached": "Connected TierPlan to its own ingress network",
+        "self_route_enabled": "Turned on TierPlan's own ingress route",
+        "self_route_disabled": "Turned off TierPlan's own ingress route"
       }
     },
     "coalesced": {

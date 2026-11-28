@@ -1,0 +1,38 @@
+tls:
+  options:
+    default:
+      sniStrict: true
+      minVersion: VersionTLS12
+  certificates:
+    - certFile: /var/lib/tierplan-ingress/certs/6f2c2eda78bf0e784a0ad335a9f45e1ab59efbdfe36787e7dd9196dd849a2f98.crt
+      keyFile: /var/lib/tierplan-ingress/certs/50d1cd7e2757dd571931f72ffd84537c3d975fa2054a662221121e4156f1796d.key
+http:
+  routers:
+    tierplan-acme:
+      rule: (Host(`tierplan.example.org`) || Host(`tierplan.internal`)) && PathPrefix(`/.well-known/acme-challenge/`)
+      entryPoints:
+        - web
+      service: svc-tierplan-plain
+      priority: 10000
+    tierplan-self:
+      rule: Host(`tp.apps.example.org`) && !PathPrefix(`/agent/connect`) && !PathPrefix(`/ingress/connect`)
+      entryPoints:
+        - websecure
+      service: svc-tierplan-self
+      priority: 1
+      tls: {}
+  services:
+    svc-tierplan-plain:
+      loadBalancer:
+        servers:
+          - url: http://tierplan_tierplan:7480
+    svc-tierplan-self:
+      loadBalancer:
+        servers:
+          - url: https://tierplan_tierplan:7480
+        serversTransport: t-self
+  serversTransports:
+    t-self:
+      serverName: tierplan.example.org
+      rootCAs:
+        - /var/lib/tierplan-ingress/certs/b83c95d23fc3e00707abef47edbc75b8fe107c83deb98b88a7100ae67227658f.crt

@@ -22,10 +22,13 @@ import (
 // Quiet view, exactly as wireIngressCerts does: the reconciler's own timers (the poll, the safety tick and the
 // debounce) would otherwise be counted by a test that waits for another manager's timer and move the clock early.
 // The clock may be nil, which is the wall clock.
+//
+// The self-route holder gives TierPlan's own route and trust (D-14) through its SelfInput; a nil holder renders none.
 func wireIngressRecon(log *slog.Logger, model *ingressstore.Store, certs *ingresscert.Store, notifier *ingress.Notifier,
-	clock stackops.Clock) *ingressrecon.Reconciler {
+	clock stackops.Clock, holder *selfRoute) *ingressrecon.Reconciler {
 	if q, ok := clock.(quietable); ok {
 		clock = q.Quiet()
 	}
-	return ingressrecon.New(ingressrecon.Deps{Model: model, Certs: certs, Notifier: notifier, Clock: clock, Log: log})
+	return ingressrecon.New(ingressrecon.Deps{Model: model, Certs: certs, Notifier: notifier, Clock: clock, Log: log, Self: holder.SelfInput,
+		HoldFirstRender: holder.HoldFirstRender})
 }

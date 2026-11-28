@@ -32,6 +32,9 @@ const maxCertBytes = 8 << 10
 // refused one, to say where the refusal happened.
 const joinTokenPrefix = "tpjt_"
 
+// detailSelfNetworkPeer is what an agent that reached TierPlan through its own ingress route is told.
+const detailSelfNetworkPeer = "Agents connect to TierPlan directly, never through its ingress route. Point the agent at the agent URL."
+
 // peerInfo is what the handler knows about the connection that the signed
 // handshake must agree with.
 type peerInfo struct {
@@ -105,9 +108,18 @@ func (h *Hub) handshake(ctx context.Context, c *websocket.Conn, r *http.Request,
 		return accepted{}, false
 	}
 
-	acc, err := h.verifyAuth(ctx, a, serverNonce, peerInfo{
-		ip: ip, tls: r.TLS, trusted: httpx.PeerTrusted(r.Context()), aud: aud, sentAt: sentAt, recvAt: recvAt,
-	})
+	// A peer on TierPlan's own self network is the ingress proxy relaying a connect that came in through
+	// TierPlan's own route. It is refused before verifyAuth: the live trusted set would otherwise let it
+	// skip the channel binding, and an agent must reach TierPlan directly (SELF-05, D-10 point 3, A-05). A
+	// peer trusted only through TIERPLAN_TRUSTED_PROXIES is not on the self network and goes on as before.
+	var acc accepted
+	if httpx.PeerOnSelfNetwork(r.Context()) {
+		err = &RefuseError{Code: wire.ReasonSelfNetworkPeer, Detail: detailSelfNetworkPeer, AuditReason: wire.ReasonSelfNetworkPeer}
+	} else {
+		acc, err = h.verifyAuth(ctx, a, serverNonce, peerInfo{
+			ip: ip, tls: r.TLS, trusted: httpx.PeerTrusted(r.Context()), aud: aud, sentAt: sentAt, recvAt: recvAt,
+		})
+	}
 	if err != nil {
 		var re *RefuseError
 		if errors.As(err, &re) {

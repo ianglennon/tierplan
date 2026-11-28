@@ -100,6 +100,29 @@ func goldenScenarios() map[string]Input {
 		// The root and a path under it with strip: the /api router lists its own stripPrefix middleware
 		// and the root router lists none (LBL-07, D-17).
 		"strip": stripInput(),
+		// TierPlan's own route (D-09, D-14): router tierplan-self minus the two connect paths, service
+		// svc-tierplan-self to TierPlan on the self network through t-self, which verifies by name against
+		// the trust file. No middleware (D-15) and no skip key.
+		"self-route": selfRouteInput(true),
+		// The same claim while TierPlan is not on the self network (D-03): no router, no service, no
+		// transport, and the route is skipped as self_not_attached.
+		"self-not-attached": selfRouteInput(false),
+		// The self route with TierPlan's own HTTP-01 carve-out (D-12): router tierplan-acme on web only,
+		// for the two ACME hosts on the challenge path, at CarveOutPriority with no tls, to
+		// svc-tierplan-plain, TierPlan's plain listener. Everything else is the self-route golden's.
+		"self-acme-carveout": selfACMEInput(),
+		// The carve-out with no system claim (D-12): TierPlan is on the self network for its own
+		// certificate only. The file is the empty golden's strict-SNI defaults plus tierplan-acme and
+		// svc-tierplan-plain.
+		"self-carveout-only": {
+			Snapshot: ingress.Snapshot{Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 13}},
+			Self: &SelfInput{
+				BackendHost: "tierplan_tierplan",
+				BackendPort: 7480,
+				ACMEHosts:   []string{"tierplan.example.org"},
+				Attached:    true,
+			},
+		},
 		// One https route on port 8443: its service names the user transport and the bundle holds it (D-13).
 		"https-backend": {
 			Snapshot: ingress.Snapshot{
@@ -111,6 +134,60 @@ func goldenScenarios() map[string]Input {
 			CertsVersion: 2,
 		},
 	}
+}
+
+// trustSelf is the fixture trust bundle of TierPlan's own certificate: one PEM CERTIFICATE block. The
+// renderer checks only that a certificate block is there.
+var trustSelf = []byte("-----BEGIN CERTIFICATE-----\nU0VMRg==\n-----END CERTIFICATE-----\n")
+
+// systemRoute is the one route row of TierPlan's system claim, as the store writes it: prefix /,
+// service tierplan, port 7480, https, no stack.
+func systemRoute(host string) ingress.SnapshotRoute {
+	return ingress.SnapshotRoute{
+		Route: ingress.Route{
+			Hostname: host, Name: "tierplan", PathPrefix: "/", Service: "tierplan", Port: 7480, Scheme: ingress.SchemeHTTPS,
+		},
+		OwnerKind: ingress.OwnerSystem,
+	}
+}
+
+func systemClaim(host string) ingress.SnapshotClaim {
+	return ingress.SnapshotClaim{Claim: ingress.Claim{Hostname: host, OwnerKind: ingress.OwnerSystem}}
+}
+
+// selfInput is TierPlan on a swarm as the service tierplan_tierplan, listening on 7480, verified as
+// tierplan.example.org.
+func selfInput(attached bool) *SelfInput {
+	return &SelfInput{
+		Host:        "tp.apps.example.org",
+		BackendHost: "tierplan_tierplan",
+		BackendPort: 7480,
+		ServerName:  "tierplan.example.org",
+		TrustPEM:    trustSelf,
+		Attached:    attached,
+	}
+}
+
+// selfRouteInput is the system claim tp.apps.example.org with a ready certificate and the self input.
+func selfRouteInput(attached bool) Input {
+	return Input{
+		Snapshot: ingress.Snapshot{
+			Settings: ingress.Settings{EnvID: "env-1", Exists: true, Enabled: true, ConfigVersion: 12},
+			Claims:   []ingress.SnapshotClaim{systemClaim("tp.apps.example.org")},
+			Routes:   []ingress.SnapshotRoute{systemRoute("tp.apps.example.org")},
+		},
+		Certs:        []HostCert{{Hostname: "tp.apps.example.org", ChainPEM: chainA, KeyPEM: keyA}},
+		CertsVersion: 3,
+		OwnVersion:   1,
+		Self:         selfInput(attached),
+	}
+}
+
+// selfACMEInput is the self-route scenario with the hosts of the public and agent URLs as ACME hosts.
+func selfACMEInput() Input {
+	in := selfRouteInput(true)
+	in.Self.ACMEHosts = []string{"tierplan.internal", "tierplan.example.org"}
+	return in
 }
 
 // goldenBundle is the JSON a bundle.json holds: everything of a Result but file data.
