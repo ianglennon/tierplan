@@ -274,6 +274,11 @@ type Service struct {
 	// then made again by a waiter), so a switch job can wait for an observation newer than its write; selfMu guards both.
 	selfSeq  map[string]uint64
 	selfTick chan struct{}
+	// selfTickets is, by environment, the tickets handed out to reads of the self network (a counter that starts at 1, taken
+	// before the read), and selfPublished the ticket of the observation now in selfObs; selfMu guards both. A pass publishes
+	// after it has released the operation lock, so without this order a read that began before another pass's publish (a
+	// switch-off's or a loop pass's removal) could put back a stale Exists:true over it.
+	selfTickets, selfPublished map[string]uint64
 	// selfWaitBound, when set, replaces the bound of a self route job's wait for the next observation: it is called once as
 	// the wait starts and its channel ends the wait. Only a test sets it (export_test.go).
 	selfWaitBound func() <-chan time.Time
