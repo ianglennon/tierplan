@@ -171,8 +171,10 @@ type WarningBody struct {
 }
 
 // WarningIngressRenderBody is the facts of the ingress_render_failed warning: a route, a code from a fixed list and a
-// count. It never holds an error text, a certificate or any of an environment's secrets.
+// count, plus the environment ID of the failure, an identifier and not an error text. It never holds an error text,
+// a certificate or any of an environment's secrets.
 type WarningIngressRenderBody struct {
+	EnvID    string `json:"envId,omitempty" doc:"The environment of the named failure, so the bell can open that environment's Routes tab"`
 	Hostname string `json:"hostname,omitempty" doc:"The hostname of the route that could not be rendered; absent when the failure is not about one route"`
 	Path     string `json:"path,omitempty" doc:"The path prefix of that route; absent when the failure is not about one route"`
 	Code     string `json:"code" enum:"ingress_render_unsafe_value,ingress_render_strip_root,ingress_render_template_delimiter,ingress_render_name_collision,ingress_render_read_failed,ingress_render_failed,ingress_schema_unsupported" doc:"Why the render failed"`
@@ -182,6 +184,7 @@ type WarningIngressRenderBody struct {
 // WarningIngressCertBody is the facts of one ingress_ warning: closed-vocabulary names, times, a failure
 // class and a count. The certificate authority's own problem text is never part of it.
 type WarningIngressCertBody struct {
+	EnvID         string     `json:"envId,omitempty" doc:"For ingress_cert_expiring and ingress_cert_renewal_failed: the environment of the named certificate, so the bell can open its Certificates tab; absent for ingress_certs_paused"`
 	Hostname      string     `json:"hostname,omitempty" doc:"For ingress_cert_expiring and ingress_cert_renewal_failed: the most urgent hostname"`
 	Issuer        string     `json:"issuer,omitempty" enum:",staging,production" doc:"For ingress_cert_expiring and ingress_cert_renewal_failed: the issuer of an ACME certificate; absent for an uploaded one"`
 	Source        string     `json:"source,omitempty" enum:",acme,upload" doc:"For ingress_cert_expiring and ingress_cert_renewal_failed: where the certificate comes from"`
@@ -694,7 +697,7 @@ func ingressItems(ctx context.Context, d AccountDeps) ([]WarningBody, error) {
 			continue
 		}
 		out = append(out, WarningBody{ID: id, Ingress: &WarningIngressCertBody{
-			Hostname: al.Hostname, Issuer: al.Issuer, Source: al.Source, NotAfter: timePtr(al.NotAfter), Days: al.Days,
+			EnvID: al.EnvID, Hostname: al.Hostname, Issuer: al.Issuer, Source: al.Source, NotAfter: timePtr(al.NotAfter), Days: al.Days,
 			Class: al.Class, NextAttemptAt: timePtr(al.NextAttemptAt), Reason: al.Reason, More: al.More,
 		}})
 	}
@@ -727,7 +730,7 @@ func ingressRenderItems(ctx context.Context, d AccountDeps) ([]WarningBody, erro
 		}
 	}
 	return []WarningBody{{ID: warningIngressRenderFailed, IngressRender: &WarningIngressRenderBody{
-		Hostname: oldest.Hostname, Path: oldest.PathPrefix, Code: oldest.Code, More: len(failures) - 1,
+		EnvID: oldest.EnvID, Hostname: oldest.Hostname, Path: oldest.PathPrefix, Code: oldest.Code, More: len(failures) - 1,
 	}}}, nil
 }
 

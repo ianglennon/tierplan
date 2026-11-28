@@ -368,7 +368,9 @@ func (s *Service) observeSelf(ctx context.Context, sp *selfPass) {
 }
 
 // observeSelfOn is observeSelf through read, which runs a read-only function on the engine that holds the self network: a
-// swarm's manager, or a standalone host's one engine. It returns whether it published.
+// swarm's manager, or a standalone host's one engine. It returns whether it published: it does not when the read failed, when
+// TierPlan's place is unknown, or when a read that began after this one has already published (the observation would be
+// older than the one held).
 func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(func(*dockerx.Client) error) error) (SelfObservation, bool) {
 	envID := sp.info.ID
 	if sp.place.Here == SelfHereUnknown && !sp.net.removed {
@@ -377,6 +379,8 @@ func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(fun
 		s.log().Debug("the ingress ensure loop could not tell where TierPlan runs; the last observation of its own network stands", "environment", envID)
 		return SelfObservation{}, false
 	}
+	// The ticket is taken before the read: the observation is ordered by when its read began, not by when it is published.
+	ticket := s.selfTicket(envID)
 	o := SelfObservation{EnvID: envID, Wanted: sp.known && sp.wanted, Kind: sp.place.Kind, Observed: true}
 	switch sp.place.Kind {
 	case SelfKindSwarmService:
@@ -439,12 +443,17 @@ func (s *Service) observeSelfOn(ctx context.Context, sp *selfPass, read func(fun
 		// This pass removed the network: its subnet is free for the engine to hand out again, so it must not stay trusted on
 		// the strength of the last observation. Only the removal is published; the rest waits for the next read.
 		gone := SelfObservation{EnvID: envID, Wanted: o.Wanted, Kind: o.Kind, Namespace: o.Namespace, BackendHost: o.BackendHost, Observed: true}
-		s.publishSelf(gone)
+		if !s.publishSelf(gone, ticket) {
+			// A read that began later started after this pass's removal, so it already reflects it.
+			return SelfObservation{}, false
+		}
 		return gone, true
 	}
 	o.Attached = o.Exists && sp.place.Attached
 	o.KeptInUse = o.Exists && sp.known && !sp.wanted && (sp.place.Attached || sp.net.keptInUse)
-	s.publishSelf(o)
+	if !s.publishSelf(o, ticket) {
+		return SelfObservation{}, false
+	}
 	return o, true
 }
 
@@ -508,10 +517,32 @@ func firstIPAM(rows []dockerx.IPAMRow) (netip.Prefix, netip.Addr) {
 	return netip.Prefix{}, netip.Addr{}
 }
 
-// publishSelf keeps the observation and hands it to the registered function. A foreign network is logged when it is first
-// seen while the self network is wanted, not on every pass.
-func (s *Service) publishSelf(o SelfObservation) {
+// selfTicket is the next ticket of the environment's reads of the self network, taken before a read begins.
+func (s *Service) selfTicket(envID string) uint64 {
 	s.selfMu.Lock()
+	defer s.selfMu.Unlock()
+	if s.selfTickets == nil {
+		s.selfTickets = map[string]uint64{}
+	}
+	s.selfTickets[envID]++
+	return s.selfTickets[envID]
+}
+
+// publishSelf keeps the observation and hands it to the registered function, and reports whether it did. An observation
+// whose read began (ticket) before the read of the one last published is dropped, and nothing is touched, so the held
+// observation only moves forward in read order. A foreign network is logged when it is first seen while the self network is
+// wanted, not on every pass.
+func (s *Service) publishSelf(o SelfObservation, ticket uint64) bool {
+	s.selfMu.Lock()
+	if ticket < s.selfPublished[o.EnvID] {
+		s.selfMu.Unlock()
+		s.log().Debug("an observation of TierPlan's own network from a read that began before the current one was dropped", "environment", o.EnvID)
+		return false
+	}
+	if s.selfPublished == nil {
+		s.selfPublished = map[string]uint64{}
+	}
+	s.selfPublished[o.EnvID] = ticket
 	prev, had := s.selfObs[o.EnvID]
 	if s.selfObs == nil {
 		s.selfObs = map[string]SelfObservation{}
@@ -543,4 +574,5 @@ func (s *Service) publishSelf(o SelfObservation) {
 	if cb != nil {
 		cb(o)
 	}
+	return true
 }
